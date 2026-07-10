@@ -36,6 +36,24 @@ cd ravel
 go install ./cmd/reporavel
 ```
 
+Register the bundled skill with your AI coding assistant:
+
+```sh
+# Codex user-wide install
+reporavel install --platform codex
+
+# Or keep the skill and integration files inside the current project
+reporavel install --project --platform codex
+```
+
+Then invoke the skill in Codex:
+
+```text
+$reporavel .
+```
+
+Assistants that use slash commands accept `/reporavel .` instead. The installer also supports `claude`, `codebuddy`, `opencode`, `kilo`, `copilot`, `vscode`, `aider`, `openclaw`, `droid`, `trae`, `trae-cn`, `gemini`, `hermes`, `kimi`, `amp`, `agents`, `kiro`, `pi`, `cursor`, `devin`, and `antigravity` skill locations. Use `--project` for a repository-scoped installation.
+
 Then run it from a repository:
 
 ```sh
@@ -143,6 +161,27 @@ The intended loop is:
 3. Read `.reporavel/report.md`.
 4. Use `query`, `explain`, and `path` for focused questions.
 5. Open source files only when graph evidence is not enough.
+
+### Always-on integration and hooks
+
+Skill installation and hooks are separate. A project-scoped Codex install writes the skill, a marked section in `AGENTS.md`, and a `PreToolUse` entry in `.codex/hooks.json`. The hook reminds Codex to query an existing graph before broad source searches. It does not build a graph by itself. Codex may ask you to review and trust the new hook before it runs.
+
+These equivalent commands manage only the Codex always-on files:
+
+```sh
+reporavel codex install
+reporavel codex uninstall
+```
+
+Automatic graph refresh is opt-in. Install Git `post-commit` and `post-checkout` hooks from the repository:
+
+```sh
+reporavel hook install
+reporavel hook status
+reporavel hook uninstall
+```
+
+The Git hooks launch `reporavel build .` in the background and write failures to the temporary `reporavel-hook.log` file. Existing hook content is preserved.
 
 ## Current scope
 
