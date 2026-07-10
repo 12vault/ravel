@@ -1,6 +1,6 @@
 # RepoRavel
 
-<img src="hatch-pet-runs/ravel/references/canonical-base.png" alt="Ravel, the RepoRavel mascot" width="180" align="right">
+![RepoRavel repository topology](assets/reporavel-hero.png)
 
 **Untangle your codebase.**
 
