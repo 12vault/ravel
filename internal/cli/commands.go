@@ -133,7 +133,7 @@ func runBuild(ctx context.Context, args []string, stdout io.Writer) error {
 		out = filepath.Join(result.Scan.Root, out)
 	}
 	md := report.Markdown(result.Graph)
-	if err := store.WriteArtifacts(out, result.Graph, result.Scan, md); err != nil {
+	if err := store.WriteArtifacts(out, result.Graph, result.Scan, md, cfg.Output); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Wrote %s\n", out)

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/12ya/reporavel/internal/config"
 	"github.com/12ya/reporavel/internal/graph"
 	"github.com/12ya/reporavel/internal/scan"
 )
@@ -15,23 +16,41 @@ type SymbolsFile struct {
 	Symbols []graph.Node `json:"symbols"`
 }
 
-func WriteArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report string) error {
+func WriteArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report string, output config.OutputConfig) error {
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
-	if err := WriteJSON(filepath.Join(outDir, "graph.json"), g); err != nil {
+	jsonFiles := []string{"graph.json", "files.json", "symbols.json"}
+	if output.JSON {
+		if err := WriteJSON(filepath.Join(outDir, "graph.json"), g); err != nil {
+			return err
+		}
+		if err := WriteJSON(filepath.Join(outDir, "files.json"), scanResult); err != nil {
+			return err
+		}
+		if err := WriteJSON(filepath.Join(outDir, "symbols.json"), SymbolsFile{Symbols: symbols(g)}); err != nil {
+			return err
+		}
+	} else if err := removeArtifacts(outDir, jsonFiles); err != nil {
 		return err
 	}
-	if err := WriteJSON(filepath.Join(outDir, "files.json"), scanResult); err != nil {
+	if output.MarkdownReport {
+		if err := os.WriteFile(filepath.Join(outDir, "report.md"), []byte(report), 0644); err != nil {
+			return err
+		}
+	} else if err := removeArtifacts(outDir, []string{"report.md"}); err != nil {
 		return err
 	}
-	if err := WriteJSON(filepath.Join(outDir, "symbols.json"), SymbolsFile{Symbols: symbols(g)}); err != nil {
-		return err
+	return removeArtifacts(outDir, []string{"index.db"})
+}
+
+func removeArtifacts(outDir string, names []string) error {
+	for _, name := range names {
+		if err := os.Remove(filepath.Join(outDir, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
-	if err := os.WriteFile(filepath.Join(outDir, "report.md"), []byte(report), 0644); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(outDir, "index.db"), []byte("RepoRavel v0.1 placeholder index\nJSON artifacts are authoritative in this MVP.\n"), 0644)
+	return nil
 }
 
 func WriteJSON(path string, value any) error {
