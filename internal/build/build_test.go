@@ -33,6 +33,21 @@ func TestRunBuildsGoGraph(t *testing.T) {
 	}
 }
 
+func TestRunCanDisableGoAnalysis(t *testing.T) {
+	root := filepath.Join("..", "..", "testdata", "simple-go-service")
+	cfg := config.Default()
+	cfg.Analysis.Go = false
+	result, err := Run(context.Background(), root, cfg)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, node := range result.Graph.Nodes {
+		if node.Kind == graph.NodePackage || graph.SymbolKind(node.Kind) {
+			t.Fatalf("found semantic node %s with Go analysis disabled", node.ID)
+		}
+	}
+}
+
 func hasNode(g graph.Graph, id string) bool {
 	for _, n := range g.Nodes {
 		if n.ID == id {
