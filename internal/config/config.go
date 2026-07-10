@@ -66,53 +66,207 @@ func Load(path string) (Config, error) {
 	}
 
 	section := ""
-	for _, raw := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") {
+	for index, raw := range strings.Split(string(data), "\n") {
+		lineNumber := index + 1
+		if strings.Contains(raw, "\t") {
+			return cfg, configError(path, lineNumber, "tabs are not supported")
+		}
+		line := strings.TrimSpace(stripInlineComment(raw))
+		if line == "" {
 			continue
 		}
-		if strings.HasSuffix(line, ":") && !strings.Contains(line, " ") {
-			section = strings.TrimSuffix(line, ":")
+		indented := len(raw) > 0 && (raw[0] == ' ' || raw[0] == '\t')
+		if strings.HasSuffix(line, ":") && !strings.Contains(strings.TrimSuffix(line, ":"), ":") {
+			if indented {
+				return cfg, configError(path, lineNumber, "nested sections are not supported")
+			}
+			section = strings.TrimSpace(strings.TrimSuffix(line, ":"))
+			if !knownSection(section) {
+				return cfg, configError(path, lineNumber, fmt.Sprintf("unknown section %q", section))
+			}
 			continue
 		}
+
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
-			continue
+			return cfg, configError(path, lineNumber, "expected key: value")
 		}
 		key = strings.TrimSpace(key)
-		value = strings.Trim(strings.TrimSpace(value), `"`)
-		switch section + "." + key {
-		case ".version":
-			if v, err := strconv.Atoi(value); err == nil {
-				cfg.Version = v
-			}
-		case ".mode":
-			cfg.Mode = value
-		case "scan.maxFileSize", "scan.maxFileSizeBytes":
-			if v, err := strconv.ParseInt(value, 10, 64); err == nil {
-				cfg.Scan.MaxFileSizeBytes = v
-			}
-		case "scan.maxTotalSize", "scan.maxTotalBytes":
-			if v, err := strconv.ParseInt(value, 10, 64); err == nil {
-				cfg.Scan.MaxTotalBytes = v
-			}
-		case "analysis.callGraph":
-			cfg.Analysis.CallGraph = parseBool(value, cfg.Analysis.CallGraph)
-		case "analysis.typeResolution":
-			cfg.Analysis.TypeResolution = parseBool(value, cfg.Analysis.TypeResolution)
-		case "output.dir":
-			if value != "" {
-				cfg.Output.Dir = value
-			}
-		case "output.json":
-			cfg.Output.JSON = parseBool(value, cfg.Output.JSON)
-		case "output.sqlite":
-			cfg.Output.SQLite = parseBool(value, cfg.Output.SQLite)
-		case "output.markdownReport":
-			cfg.Output.MarkdownReport = parseBool(value, cfg.Output.MarkdownReport)
+		value = unquote(strings.TrimSpace(value))
+		if key == "" || value == "" {
+			return cfg, configError(path, lineNumber, "key and value must not be empty")
+		}
+		if !indented {
+			section = ""
+		}
+		fullKey := key
+		if section != "" {
+			fullKey = section + "." + key
+		}
+		if err := applyValue(&cfg, fullKey, value); err != nil {
+			return cfg, configError(path, lineNumber, err.Error())
 		}
 	}
+	if err := validate(cfg); err != nil {
+		return cfg, fmt.Errorf("config %s: %w", path, err)
+	}
 	return cfg, nil
+}
+
+func applyValue(cfg *Config, key, value string) error {
+	switch key {
+	case "version":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("version: %w", err)
+		}
+		cfg.Version = int(parsed)
+	case "mode":
+		cfg.Mode = value
+	case "permissions.network", "permissions.shell", "permissions.llm", "permissions.subagents", "permissions.writeOutsideOutputDir", "permissions.readSecrets":
+		enabled, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		if enabled {
+			return fmt.Errorf("%s cannot be enabled", key)
+		}
+	case "scan.maxFileSize", "scan.maxFileSizeBytes":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Scan.MaxFileSizeBytes = parsed
+	case "scan.maxTotalSize", "scan.maxTotalBytes":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Scan.MaxTotalBytes = parsed
+	case "analysis.go":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Analysis.Go = parsed
+	case "analysis.callGraph":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Analysis.CallGraph = parsed
+	case "analysis.typeResolution":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Analysis.TypeResolution = parsed
+	case "output.dir":
+		cfg.Output.Dir = value
+	case "output.json":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Output.JSON = parsed
+	case "output.sqlite":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Output.SQLite = parsed
+	case "output.markdownReport":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Output.MarkdownReport = parsed
+	default:
+		return fmt.Errorf("unknown setting %q", key)
+	}
+	return nil
+}
+
+func validate(cfg Config) error {
+	if cfg.Version != 1 {
+		return fmt.Errorf("unsupported version %d", cfg.Version)
+	}
+	if cfg.Mode != "offline" {
+		return fmt.Errorf("unsupported mode %q", cfg.Mode)
+	}
+	if cfg.Scan.MaxFileSizeBytes <= 0 {
+		return fmt.Errorf("scan.maxFileSize must be greater than zero")
+	}
+	if cfg.Scan.MaxTotalBytes <= 0 {
+		return fmt.Errorf("scan.maxTotalSize must be greater than zero")
+	}
+	if cfg.Output.Dir == "" {
+		return fmt.Errorf("output.dir must not be empty")
+	}
+	if cfg.Analysis.TypeResolution {
+		return fmt.Errorf("analysis.typeResolution is not implemented")
+	}
+	if cfg.Output.SQLite {
+		return fmt.Errorf("output.sqlite is not implemented")
+	}
+	if !cfg.Output.JSON && !cfg.Output.MarkdownReport {
+		return fmt.Errorf("at least one output format must be enabled")
+	}
+	return nil
+}
+
+func knownSection(section string) bool {
+	switch section {
+	case "permissions", "scan", "analysis", "output":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseInt(value string) (int64, error) {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("expected an integer, got %q", value)
+	}
+	return parsed, nil
+}
+
+func parseBool(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes", "1":
+		return true, nil
+	case "false", "no", "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("expected true or false, got %q", value)
+	}
+}
+
+func stripInlineComment(line string) string {
+	var quote rune
+	for index, char := range line {
+		switch {
+		case quote == 0 && (char == '\'' || char == '"'):
+			quote = char
+		case quote == char:
+			quote = 0
+		case quote == 0 && char == '#':
+			return line[:index]
+		}
+	}
+	return line
+}
+
+func unquote(value string) string {
+	if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+		return value[1 : len(value)-1]
+	}
+	return value
+}
+
+func configError(path string, line int, message string) error {
+	return fmt.Errorf("config %s:%d: %s", path, line, message)
 }
 
 func DefaultYAML() string {
@@ -150,15 +304,4 @@ func WriteDefault(path string) error {
 		return fmt.Errorf("%s already exists", path)
 	}
 	return os.WriteFile(path, []byte(DefaultYAML()), 0644)
-}
-
-func parseBool(value string, fallback bool) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "true", "yes", "1":
-		return true
-	case "false", "no", "0":
-		return false
-	default:
-		return fallback
-	}
 }
