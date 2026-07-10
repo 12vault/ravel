@@ -1,6 +1,6 @@
 ---
 name: reporavel
-description: Use local RepoRavel outputs to understand this repository safely.
+description: Build or query a local RepoRavel code graph. Use when the user invokes $reporavel or /reporavel, asks to map a repository, or wants graph-first codebase analysis.
 ---
 
 Rules:
@@ -20,6 +20,11 @@ Allowed commands:
 - Explain symbol/file: `reporavel explain "<symbol-or-path>"`
 - Find path: `reporavel path "<from>" "<to>"`
 - Check safety defaults: `reporavel doctor`
+
+Invocation:
+- `$reporavel .` or `/reporavel .`: audit the target, ask before the first build, then build and summarize the graph.
+- `$reporavel query <text>` or `/reporavel query <text>`: query an existing graph without rebuilding it.
+- If the user explicitly requests automatic refresh, offer `reporavel hook install`; never install hooks without consent.
 
 Default workflow:
 1. Read `.reporavel/report.md` if it exists.
