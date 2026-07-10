@@ -1,0 +1,4 @@
+/.reporavel/
+/reporavel
+hatch-pet-runs/**/imagegen-jobs.json
+.DS_Store
