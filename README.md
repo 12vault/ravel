@@ -41,6 +41,9 @@ Then run it from a repository:
 ```sh
 cd your-repository
 
+# Confirm the installed version.
+reporavel version
+
 # Preview which files RepoRavel will read.
 reporavel audit .
 

@@ -19,6 +19,8 @@ import (
 	"github.com/12ya/reporavel/internal/store"
 )
 
+var Version = "v0.1.0"
+
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		usage(stdout)
@@ -27,6 +29,9 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	switch args[0] {
 	case "help", "-h", "--help":
 		usage(stdout)
+		return nil
+	case "version", "--version":
+		fmt.Fprintf(stdout, "reporavel %s\n", Version)
 		return nil
 	case "init":
 		return runInit(args[1:], stdout)
@@ -339,9 +344,10 @@ func flexibleFlags(args []string, valueFlags ...string) []string {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "RepoRavel v0.1")
+	fmt.Fprintf(w, "RepoRavel %s\n", Version)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  reporavel version")
 	fmt.Fprintln(w, "  reporavel init")
 	fmt.Fprintln(w, "  reporavel doctor")
 	fmt.Fprintln(w, "  reporavel audit [root]")
