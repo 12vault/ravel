@@ -12,6 +12,8 @@ import (
 
 	buildrunner "github.com/12ya/reporavel/internal/build"
 	"github.com/12ya/reporavel/internal/config"
+	gitHooks "github.com/12ya/reporavel/internal/hooks"
+	installmgr "github.com/12ya/reporavel/internal/install"
 	"github.com/12ya/reporavel/internal/query"
 	"github.com/12ya/reporavel/internal/report"
 	"github.com/12ya/reporavel/internal/scan"
@@ -35,6 +37,16 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return nil
 	case "init":
 		return runInit(args[1:], stdout)
+	case "install":
+		return runInstall(args[1:], stdout)
+	case "uninstall":
+		return runUninstall(args[1:], stdout)
+	case "codex":
+		return runCodex(args[1:], stdout)
+	case "hook":
+		return runHook(args[1:], stdout)
+	case "assistant-hook":
+		return runAssistantHook(stdout)
 	case "doctor":
 		return runDoctor(args[1:], stdout)
 	case "audit", "scan":
@@ -52,6 +64,136 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runInstall(args []string, stdout io.Writer) error {
+	fs := newFlagSet("install")
+	platform := fs.String("platform", "claude", "AI assistant platform")
+	project := fs.Bool("project", false, "install into the current project")
+	if err := fs.Parse(flexibleFlags(args, "platform")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("install does not accept positional arguments")
+	}
+	dst, err := installmgr.InstallSkill(installmgr.SkillOptions{Platform: *platform, Project: *project})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Skill installed: %s\n", dst)
+	if *project {
+		if strings.EqualFold(*platform, "codex") {
+			paths, err := installmgr.InstallCodex(installmgr.CodexOptions{})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "Codex integration installed: %s\n", strings.Join(paths, ", "))
+		}
+		fmt.Fprintf(stdout, "Add to version control: git add %s\n", dst)
+	}
+	fmt.Fprintln(stdout, "Invoke it from your assistant as $reporavel (Codex) or /reporavel.")
+	return nil
+}
+
+func runUninstall(args []string, stdout io.Writer) error {
+	fs := newFlagSet("uninstall")
+	platform := fs.String("platform", "claude", "AI assistant platform")
+	project := fs.Bool("project", false, "remove the current-project installation")
+	if err := fs.Parse(flexibleFlags(args, "platform")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("uninstall does not accept positional arguments")
+	}
+	dst, removed, err := installmgr.UninstallSkill(installmgr.SkillOptions{Platform: *platform, Project: *project})
+	if err != nil {
+		return err
+	}
+	if *project && strings.EqualFold(*platform, "codex") {
+		if _, err := installmgr.UninstallCodex("."); err != nil {
+			return err
+		}
+	}
+	if removed {
+		fmt.Fprintf(stdout, "Skill removed: %s\n", dst)
+	} else {
+		fmt.Fprintf(stdout, "Skill not installed: %s\n", dst)
+	}
+	return nil
+}
+
+func runCodex(args []string, stdout io.Writer) error {
+	if len(args) != 1 || (args[0] != "install" && args[0] != "uninstall") {
+		return errors.New("usage: reporavel codex <install|uninstall>")
+	}
+	if args[0] == "install" {
+		paths, err := installmgr.InstallCodex(installmgr.CodexOptions{})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Codex integration installed: %s\n", strings.Join(paths, ", "))
+		return nil
+	}
+	paths, err := installmgr.UninstallCodex(".")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Codex integration removed from: %s\n", strings.Join(paths, ", "))
+	return nil
+}
+
+func runHook(args []string, stdout io.Writer) error {
+	if len(args) == 0 || len(args) > 2 {
+		return errors.New("usage: reporavel hook <install|uninstall|status> [root]")
+	}
+	root := "."
+	if len(args) == 2 {
+		root = args[1]
+	}
+	switch args[0] {
+	case "install":
+		dir, err := gitHooks.Install(root, "")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Git hooks installed: %s\n", dir)
+		return nil
+	case "uninstall":
+		dir, err := gitHooks.Uninstall(root)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Git hooks removed: %s\n", dir)
+		return nil
+	case "status":
+		status, err := gitHooks.Check(root)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "post-commit: %s\n", installedLabel(status.PostCommit))
+		fmt.Fprintf(stdout, "post-checkout: %s\n", installedLabel(status.PostCheckout))
+		return nil
+	default:
+		return errors.New("usage: reporavel hook <install|uninstall|status> [root]")
+	}
+}
+
+func runAssistantHook(stdout io.Writer) error {
+	data, err := installmgr.AssistantHook(".")
+	if err != nil {
+		return err
+	}
+	if len(data) > 0 {
+		_, err = fmt.Fprintln(stdout, string(data))
+	}
+	return err
+}
+
+func installedLabel(installed bool) string {
+	if installed {
+		return "installed"
+	}
+	return "not installed"
 }
 
 func PrintError(w io.Writer, err error) {
@@ -349,6 +491,10 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  reporavel version")
 	fmt.Fprintln(w, "  reporavel init")
+	fmt.Fprintln(w, "  reporavel install [--platform <name>] [--project]")
+	fmt.Fprintln(w, "  reporavel uninstall [--platform <name>] [--project]")
+	fmt.Fprintln(w, "  reporavel codex <install|uninstall>")
+	fmt.Fprintln(w, "  reporavel hook <install|uninstall|status> [root]")
 	fmt.Fprintln(w, "  reporavel doctor")
 	fmt.Fprintln(w, "  reporavel audit [root]")
 	fmt.Fprintln(w, "  reporavel build [root]")
