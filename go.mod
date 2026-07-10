@@ -1,3 +1,3 @@
 module github.com/12ya/reporavel
 
-go 1.25
+go 1.26.5

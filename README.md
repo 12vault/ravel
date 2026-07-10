@@ -26,7 +26,7 @@ RepoRavel creates that missing map:
 
 ## Quick start
 
-RepoRavel requires Go 1.25 or newer.
+RepoRavel requires Go 1.26.5 or newer.
 
 Install the CLI from a clone:
 
