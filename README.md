@@ -89,7 +89,6 @@ Add `--json` to `query`, `explain`, or `path` when another tool will consume the
 | `graph.json` | Complete node, edge, metric, and diagnostic graph |
 | `files.json` | Scanned files, hashes, sizes, languages, and ignored paths |
 | `symbols.json` | Extracted functions, methods, types, variables, and related symbols |
-| `index.db` | Placeholder marker for the planned index; JSON is authoritative in v0.1 |
 
 The graph models repository containment plus Go packages, imports, definitions, and resolved or unresolved calls.
 
@@ -127,6 +126,8 @@ reporavel audit --max-file-size 2097152 .
 reporavel build --out /tmp/reporavel-output .
 reporavel build --no-call-graph .
 ```
+
+Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` for topology-only output. The `output.json` and `output.markdownReport` switches control which artifacts are written.
 
 ## Agent workflow
 
@@ -171,4 +172,4 @@ The test fixture under `testdata/simple-go-service/` covers repository topology 
 
 ## License
 
-No license has been added yet. Until one is added, standard copyright rules apply.
+RepoRavel is available under the [MIT License](LICENSE).
