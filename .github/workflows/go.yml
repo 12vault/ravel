@@ -34,5 +34,14 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      - name: Test native assistant integrations
+        run: go test ./internal/install -run TestNativeProjectIntegrationsAreIdempotentAndReversible
+
+      - name: Compile benchmark suite
+        run: go test -run '^$' -bench '^$' ./internal/build ./internal/query
+
+      - name: Verify release versions
+        run: python3 scripts/test_release.py
+
       - name: Build
         run: go build ./...

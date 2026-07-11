@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "ravel",
+  "version": "0.1.0",
+  "description": "Safe local knowledge graphs for coding agents",
+  "owner": {
+    "name": "Ravel Labs"
+  },
+  "plugins": [
+    {
+      "name": "ravel",
+      "description": "Map, explain, and teach codebases and document corpora with local knowledge graphs.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Ravel Labs"
+      },
+      "source": "./plugins/ravel",
+      "category": "development"
+    }
+  ]
+}

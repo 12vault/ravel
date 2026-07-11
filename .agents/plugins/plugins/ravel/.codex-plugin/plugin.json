@@ -1,0 +1,20 @@
+{
+  "name": "ravel",
+  "version": "0.1.0+codex.20260711071321",
+  "description": "Build and explore safe local knowledge graphs for code, documents, PDFs, and schemas.",
+  "author": {
+    "name": "Ravel Labs"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Ravel",
+    "shortDescription": "Safe local knowledge graphs for any codebase.",
+    "longDescription": "Ravel maps code and documents, validates agent enrichment, explains relationships, analyzes change impact, and creates onboarding tours without uploading source code.",
+    "developerName": "Ravel Labs",
+    "category": "Developer Tools",
+    "capabilities": [
+      "skills"
+    ],
+    "defaultPrompt": "Use $ravel to map, explain, and teach this codebase safely."
+  }
+}

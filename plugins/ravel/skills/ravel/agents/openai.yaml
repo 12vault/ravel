@@ -1,0 +1,4 @@
+interface:
+  display_name: Ravel
+  short_description: Safe local knowledge graphs for any codebase
+  default_prompt: Use $ravel to map, explain, and teach this codebase safely.

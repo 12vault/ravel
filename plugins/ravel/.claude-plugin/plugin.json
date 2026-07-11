@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin.json",
+  "name": "ravel",
+  "version": "0.1.0",
+  "description": "Safe local knowledge graphs for code, documents, PDFs, and schemas.",
+  "author": {
+    "name": "Ravel Labs"
+  },
+  "repository": "https://github.com/12vault/ravel",
+  "skills": "./skills/"
+}

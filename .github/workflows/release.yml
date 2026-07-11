@@ -1,0 +1,67 @@
+name: Release binaries
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: amd64, runner: ubuntu-latest }
+          - { os: linux, arch: arm64, runner: ubuntu-latest }
+          - { os: darwin, arch: amd64, runner: macos-latest }
+          - { os: darwin, arch: arm64, runner: macos-latest }
+          - { os: windows, arch: amd64, runner: windows-latest }
+          - { os: windows, arch: arm64, runner: windows-latest }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build Unix archive
+        if: matrix.os != 'windows'
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          go build -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
+          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
+      - name: Build Windows archive
+        if: matrix.os == 'windows'
+        shell: pwsh
+        env:
+          GOOS: windows
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          go build -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=$env:GITHUB_REF_NAME" -o ravel.exe ./cmd/ravel
+          Compress-Archive -Path ravel.exe,LICENSE -DestinationPath "ravel_windows_$env:GOARCH.zip"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ravel-${{ matrix.os }}-${{ matrix.arch }}
+          path: ravel_*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: ravel-*
+          merge-multiple: true
+      - name: Create checksums
+        run: sha256sum ravel_* > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            ravel_*
+            checksums.txt
