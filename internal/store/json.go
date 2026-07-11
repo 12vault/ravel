@@ -18,6 +18,11 @@ type SymbolsFile struct {
 	Symbols []graph.Node `json:"symbols"`
 }
 
+type ChangesFile struct {
+	Changed []string `json:"changed"`
+	Removed []string `json:"removed"`
+}
+
 func WriteArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report string, output config.OutputConfig) error {
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
@@ -96,6 +101,26 @@ func LoadScan(outDir string) (scan.Result, error) {
 		return scan.Result{}, err
 	}
 	return result, nil
+}
+
+func WriteChanges(outDir string, changed, removed []string) error {
+	path := filepath.Join(outDir, stateDir)
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return err
+	}
+	return WriteJSON(filepath.Join(path, "changes.json"), ChangesFile{Changed: changed, Removed: removed})
+}
+
+func LoadChanges(outDir string) (ChangesFile, error) {
+	data, err := readState(outDir, "changes.json")
+	if err != nil {
+		return ChangesFile{}, fmt.Errorf("load changes: %w", err)
+	}
+	var changes ChangesFile
+	if err := json.Unmarshal(data, &changes); err != nil {
+		return ChangesFile{}, err
+	}
+	return changes, nil
 }
 
 func readState(outDir, name string) ([]byte, error) {
