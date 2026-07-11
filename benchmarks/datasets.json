@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "metrics": ["answer_recall", "evidence_precision", "latency_ms", "graph_nodes", "graph_edges"],
+  "datasets": [
+    {
+      "name": "repository-questions",
+      "adapter": "graph-query-jsonl",
+      "input": "question, expectedNodeIds, expectedEvidence"
+    },
+    {
+      "name": "LOCOMO",
+      "adapter": "conversation-fragment-jsonl",
+      "external": true
+    },
+    {
+      "name": "LongMemEval",
+      "adapter": "conversation-fragment-jsonl",
+      "external": true
+    }
+  ]
+}
