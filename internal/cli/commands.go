@@ -2,26 +2,35 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	buildrunner "github.com/12ya/reporavel/internal/build"
 	"github.com/12ya/reporavel/internal/config"
+	"github.com/12ya/reporavel/internal/corpus"
 	"github.com/12ya/reporavel/internal/dashboard"
+	"github.com/12ya/reporavel/internal/evaluation"
 	gitHooks "github.com/12ya/reporavel/internal/hooks"
 	"github.com/12ya/reporavel/internal/ingest"
 	installmgr "github.com/12ya/reporavel/internal/install"
+	"github.com/12ya/reporavel/internal/orchestrate"
 	"github.com/12ya/reporavel/internal/query"
 	"github.com/12ya/reporavel/internal/report"
 	"github.com/12ya/reporavel/internal/scan"
 	"github.com/12ya/reporavel/internal/security"
+	"github.com/12ya/reporavel/internal/selfupdate"
+	"github.com/12ya/reporavel/internal/share"
 	"github.com/12ya/reporavel/internal/store"
 	updater "github.com/12ya/reporavel/internal/update"
+	"github.com/12ya/reporavel/internal/workflow"
 )
 
 var Version = "v0.1.0"
@@ -38,6 +47,8 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 	case "version", "--version":
 		fmt.Fprintf(stdout, "ravel %s\n", Version)
 		return nil
+	case "self-update":
+		return runSelfUpdate(ctx, args[1:], stdout)
 	case "init":
 		return runInit(args[1:], stdout)
 	case "install":
@@ -46,22 +57,36 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return runUninstall(args[1:], stdout)
 	case "codex":
 		return runCodex(args[1:], stdout)
+	case "claude", "cursor", "vscode", "copilot", "gemini", "opencode":
+		return runPlatformIntegration(args[0], args[1:], stdout)
 	case "hook":
 		return runHook(args[1:], stdout)
 	case "assistant-hook":
-		return runAssistantHook(stdout)
+		return runAssistantHook(args[1:], stdout)
 	case "ingest":
 		return runIngest(args[1:], stdout)
 	case "dashboard":
 		return runDashboard(args[1:], stdout)
 	case "doctor":
 		return runDoctor(args[1:], stdout)
+	case "tools":
+		return runTools(args[1:], stdout)
+	case "extract":
+		return runExtract(ctx, args[1:], stdout)
+	case "plan":
+		return runPlan(args[1:], stdout)
+	case "benchmark":
+		return runBenchmark(args[1:], stdout)
 	case "audit", "scan":
 		return runAudit(args[1:], stdout)
 	case "build":
 		return runBuild(ctx, args[1:], stdout)
 	case "update":
 		return runUpdate(ctx, args[1:], stdout)
+	case "watch":
+		return runWatch(ctx, args[1:], stdout)
+	case "share":
+		return runShare(args[1:], stdout)
 	case "report":
 		return runReport(args[1:], stdout)
 	case "query":
@@ -70,6 +95,8 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return runExplain(args[1:], stdout)
 	case "path":
 		return runPath(args[1:], stdout)
+	case "tech", "understand", "learn", "docs", "pdf", "schema", "diff":
+		return runWorkflow(args[0], args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -91,16 +118,52 @@ func runInstall(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "Skill installed: %s\n", dst)
 	if *project {
-		if strings.EqualFold(*platform, "codex") {
-			paths, err := installmgr.InstallCodex(installmgr.CodexOptions{})
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(stdout, "Codex integration installed: %s\n", strings.Join(paths, ", "))
+		if paths, err := installmgr.InstallIntegration(installmgr.IntegrationOptions{Platform: *platform}); err == nil {
+			fmt.Fprintf(stdout, "%s integration installed: %s\n", *platform, strings.Join(paths, ", "))
+		} else if strings.Contains(err.Error(), "native project integration is unavailable") {
+			fmt.Fprintf(stdout, "No native %s integration; installed its portable skill bundle.\n", *platform)
+		} else {
+			return err
 		}
 		fmt.Fprintf(stdout, "Add to version control: git add %s\n", dst)
 	}
 	fmt.Fprintln(stdout, "Invoke it from your assistant as $ravel (Codex) or /ravel.")
+	return nil
+}
+
+func runSelfUpdate(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := newFlagSet("self-update")
+	version := fs.String("version", "latest", "release version or latest")
+	repository := fs.String("repo", "12vault/ravel", "GitHub owner/repository")
+	platforms := fs.String("platforms", "", "comma-separated skill platforms to refresh")
+	project := fs.Bool("project", false, "refresh project-scoped skills and integrations")
+	if err := fs.Parse(flexibleFlags(args, "version", "repo", "platforms")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("self-update does not accept positional arguments")
+	}
+	path, err := selfupdate.Run(ctx, selfupdate.Options{Version: *version, Repository: *repository})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Updated Ravel binary: %s\n", path)
+	for _, platform := range strings.Split(*platforms, ",") {
+		platform = strings.TrimSpace(platform)
+		if platform == "" {
+			continue
+		}
+		installArgs := []string{"install", "--platform", platform}
+		if *project {
+			installArgs = append(installArgs, "--project")
+		}
+		command := exec.CommandContext(ctx, path, installArgs...)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("refresh %s skill: %w: %s", platform, err, strings.TrimSpace(string(output)))
+		}
+		fmt.Fprintf(stdout, "Refreshed %s skill and integration\n", platform)
+	}
 	return nil
 }
 
@@ -118,8 +181,8 @@ func runUninstall(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if *project && strings.EqualFold(*platform, "codex") {
-		if _, err := installmgr.UninstallCodex("."); err != nil {
+	if *project {
+		if _, err := installmgr.UninstallIntegration(*platform, "."); err != nil && !strings.Contains(err.Error(), "native project integration is unavailable") {
 			return err
 		}
 	}
@@ -132,22 +195,26 @@ func runUninstall(args []string, stdout io.Writer) error {
 }
 
 func runCodex(args []string, stdout io.Writer) error {
+	return runPlatformIntegration("codex", args, stdout)
+}
+
+func runPlatformIntegration(platform string, args []string, stdout io.Writer) error {
 	if len(args) != 1 || (args[0] != "install" && args[0] != "uninstall") {
-		return errors.New("usage: ravel codex <install|uninstall>")
+		return fmt.Errorf("usage: ravel %s <install|uninstall>", platform)
 	}
 	if args[0] == "install" {
-		paths, err := installmgr.InstallCodex(installmgr.CodexOptions{})
+		paths, err := installmgr.InstallIntegration(installmgr.IntegrationOptions{Platform: platform})
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "Codex integration installed: %s\n", strings.Join(paths, ", "))
+		fmt.Fprintf(stdout, "%s integration installed: %s\n", platform, strings.Join(paths, ", "))
 		return nil
 	}
-	paths, err := installmgr.UninstallCodex(".")
+	paths, err := installmgr.UninstallIntegration(platform, ".")
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Codex integration removed from: %s\n", strings.Join(paths, ", "))
+	fmt.Fprintf(stdout, "%s integration removed from: %s\n", platform, strings.Join(paths, ", "))
 	return nil
 }
 
@@ -187,8 +254,16 @@ func runHook(args []string, stdout io.Writer) error {
 	}
 }
 
-func runAssistantHook(stdout io.Writer) error {
-	data, err := installmgr.AssistantHook(".")
+func runAssistantHook(args []string, stdout io.Writer) error {
+	fs := newFlagSet("assistant-hook")
+	platform := fs.String("platform", "codex", "assistant platform")
+	if err := fs.Parse(flexibleFlags(args, "platform")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("assistant-hook does not accept positional arguments")
+	}
+	data, err := installmgr.AssistantHook(".", *platform)
 	if err != nil {
 		return err
 	}
@@ -392,9 +467,109 @@ func runUpdate(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := store.WriteArtifacts(out, result.Build.Graph, result.Build.Scan, markdown, cfg.Output); err != nil {
 		return err
 	}
+	if err := store.WriteChanges(out, result.Changed, result.Removed); err != nil {
+		return err
+	}
 	fmt.Fprintf(stdout, "Updated %s\n", out)
 	fmt.Fprintf(stdout, "Changed files: %d\n", len(result.Changed))
 	fmt.Fprintf(stdout, "Removed files: %d\n", len(result.Removed))
+	return nil
+}
+
+func runWatch(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := newFlagSet("watch")
+	configPath := fs.String("config", ".reporavel.yaml", "config path")
+	outDir := fs.String("out", "", "output directory")
+	interval := fs.Duration("interval", 2*time.Second, "polling interval")
+	if err := fs.Parse(flexibleFlags(args, "config", "out", "interval")); err != nil {
+		return err
+	}
+	if *interval <= 0 {
+		return errors.New("watch interval must be positive")
+	}
+	root := "."
+	if fs.NArg() == 1 {
+		root = fs.Arg(0)
+	} else if fs.NArg() > 1 {
+		return errors.New("watch accepts at most one root")
+	}
+	cfg, err := loadConfigWithOverrides(*configPath, *outDir, 0)
+	if err != nil {
+		return err
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	out := cfg.Output.Dir
+	if !filepath.IsAbs(out) {
+		out = filepath.Join(absRoot, out)
+	}
+	previous, err := store.LoadScan(out)
+	if err != nil {
+		return fmt.Errorf("watch requires an existing graph: %w", err)
+	}
+	fmt.Fprintf(stdout, "Watching %s every %s\n", absRoot, interval.String())
+	ticker := time.NewTicker(*interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			current, err := scan.Scan(root, cfg)
+			if err != nil {
+				return err
+			}
+			if sameScan(previous, current) {
+				continue
+			}
+			updateArgs := []string{"--config", *configPath}
+			if *outDir != "" {
+				updateArgs = append(updateArgs, "--out", *outDir)
+			}
+			updateArgs = append(updateArgs, root)
+			if err := runUpdate(ctx, updateArgs, stdout); err != nil {
+				return err
+			}
+			previous = current
+		}
+	}
+}
+
+func sameScan(a, b scan.Result) bool {
+	if len(a.Files) != len(b.Files) {
+		return false
+	}
+	for i := range a.Files {
+		if a.Files[i].Path != b.Files[i].Path || a.Files[i].Hash != b.Files[i].Hash {
+			return false
+		}
+	}
+	return true
+}
+
+func runShare(args []string, stdout io.Writer) error {
+	fs := newFlagSet("share")
+	from := fs.String("from", ".reporavel", "source graph directory")
+	out := fs.String("out", "ravel-graph", "share bundle directory")
+	if err := fs.Parse(flexibleFlags(args, "from", "out")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("share does not accept positional arguments")
+	}
+	g, err := store.LoadGraph(*from)
+	if err != nil {
+		return err
+	}
+	if err := share.Write(*out, g, time.Now()); err != nil {
+		return err
+	}
+	if err := share.Validate(*out); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Wrote commit-safe graph bundle to %s\n", *out)
 	return nil
 }
 
@@ -477,6 +652,169 @@ func runPath(args []string, stdout io.Writer) error {
 		return nil
 	}
 	return query.WritePath(stdout, nodes, *jsonOut)
+}
+
+func runWorkflow(mode string, args []string, stdout io.Writer) error {
+	fs := newFlagSet(mode)
+	outDir := fs.String("out", ".reporavel", "output directory")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	if err := fs.Parse(flexibleFlags(args, "out")); err != nil {
+		return err
+	}
+	if mode != "diff" && fs.NArg() != 0 {
+		return fmt.Errorf("%s does not accept positional arguments", mode)
+	}
+	targets := fs.Args()
+	if mode == "diff" && len(targets) == 0 {
+		changes, err := store.LoadChanges(*outDir)
+		if err != nil {
+			return errors.New("diff requires changed paths or a prior ravel update")
+		}
+		targets = append(changes.Changed, changes.Removed...)
+	}
+	g, err := store.LoadGraph(*outDir)
+	if err != nil {
+		return err
+	}
+	view, err := workflow.Build(mode, g, targets)
+	if err != nil {
+		return err
+	}
+	return workflow.Write(stdout, view, *jsonOut)
+}
+
+func runPlan(args []string, stdout io.Writer) error {
+	fs := newFlagSet("plan")
+	outDir := fs.String("out", ".reporavel", "graph and task output directory")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	batchSize := fs.Int("batch-size", 40, "maximum source paths per code task")
+	if err := fs.Parse(flexibleFlags(args, "out", "batch-size")); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("plan requires a route")
+	}
+	route := fs.Arg(0)
+	targets := fs.Args()[1:]
+	if route == "diff" && len(targets) == 0 {
+		changes, err := store.LoadChanges(*outDir)
+		if err != nil {
+			return errors.New("diff plan requires changed paths or a prior ravel update")
+		}
+		targets = append(changes.Changed, changes.Removed...)
+	}
+	g, err := store.LoadGraph(*outDir)
+	if err != nil {
+		return err
+	}
+	plan, err := orchestrate.Build(route, g, targets, *batchSize, *outDir)
+	if err != nil {
+		return err
+	}
+	return orchestrate.Write(stdout, plan, *jsonOut)
+}
+
+func runTools(args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("tools does not accept arguments")
+	}
+	fmt.Fprintln(stdout, "Ravel local tool discovery")
+	for _, tool := range []struct {
+		name, purpose string
+	}{
+		{"pdftotext", "PDF text extraction"},
+		{"mutool", "PDF text and metadata extraction"},
+		{"pandoc", "document conversion"},
+		{"sqlite3", "SQLite schema inspection"},
+		{"psql", "PostgreSQL schema inspection"},
+		{"mysqldump", "MySQL schema inspection"},
+	} {
+		path, err := exec.LookPath(tool.name)
+		if err != nil {
+			fmt.Fprintf(stdout, "missing\t%s\t%s\n", tool.name, tool.purpose)
+			continue
+		}
+		fmt.Fprintf(stdout, "available\t%s\t%s\t%s\n", tool.name, tool.purpose, path)
+	}
+	return nil
+}
+
+func runExtract(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := newFlagSet("extract")
+	graphDir := fs.String("graph", ".reporavel", "graph directory")
+	out := fs.String("out", ".reporavel/corpus", "local extracted-text directory")
+	jsonOut := fs.Bool("json", false, "write manifest JSON")
+	if err := fs.Parse(flexibleFlags(args, "graph", "out")); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("extract requires one or more audited corpus paths")
+	}
+	g, err := store.LoadGraph(*graphDir)
+	if err != nil {
+		return err
+	}
+	manifest, err := corpus.Extract(ctx, g, *out, fs.Args(), corpus.ExecRunner{})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		data, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(stdout, string(data))
+		return err
+	}
+	for _, result := range manifest.Results {
+		fmt.Fprintf(stdout, "Extracted %s with %s -> %s\n", result.Source, result.Tool, result.Output)
+	}
+	return nil
+}
+
+func runBenchmark(args []string, stdout io.Writer) error {
+	fs := newFlagSet("benchmark")
+	graphDir := fs.String("graph", ".reporavel", "graph directory")
+	dataset := fs.String("dataset", "", "evaluation JSONL file")
+	out := fs.String("out", "-", "result JSON file or - for stdout")
+	topK := fs.Int("top-k", 10, "retrieval result count")
+	if err := fs.Parse(flexibleFlags(args, "graph", "dataset", "out", "top-k")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *dataset == "" {
+		return errors.New("benchmark requires --dataset <cases.jsonl>")
+	}
+	g, err := store.LoadGraph(*graphDir)
+	if err != nil {
+		return err
+	}
+	cases, err := evaluation.LoadJSONL(*dataset)
+	if err != nil {
+		return err
+	}
+	result, err := evaluation.Run(g, cases, *topK)
+	if err != nil {
+		return err
+	}
+	if *out == "-" {
+		return evaluation.Write(stdout, result)
+	}
+	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+		return err
+	}
+	file, err := os.Create(*out)
+	if err != nil {
+		return err
+	}
+	if err := evaluation.Write(file, result); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Wrote benchmark results to %s\n", *out)
+	return nil
 }
 
 func loadConfigWithOverrides(configPath, outDir string, maxFileSize int64) (config.Config, error) {
@@ -598,19 +936,28 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  ravel version")
+	fmt.Fprintln(w, "  ravel self-update [--version latest] [--platforms codex,claude] [--project]")
 	fmt.Fprintln(w, "  ravel init")
 	fmt.Fprintln(w, "  ravel install [--platform <name>] [--project]")
 	fmt.Fprintln(w, "  ravel uninstall [--platform <name>] [--project]")
-	fmt.Fprintln(w, "  ravel codex <install|uninstall>")
+	fmt.Fprintln(w, "  ravel codex|claude|cursor|vscode|gemini|opencode <install|uninstall>")
 	fmt.Fprintln(w, "  ravel hook <install|uninstall|status> [root]")
 	fmt.Fprintln(w, "  ravel ingest [--out <dir>] <fragment.json>")
 	fmt.Fprintln(w, "  ravel dashboard [--out <dir>]")
 	fmt.Fprintln(w, "  ravel doctor")
+	fmt.Fprintln(w, "  ravel tools")
+	fmt.Fprintln(w, "  ravel extract [--json] <audited-doc-or-pdf>...")
+	fmt.Fprintln(w, "  ravel plan [--json] <route> [paths...]")
+	fmt.Fprintln(w, "  ravel benchmark --dataset <cases.jsonl> [--graph .reporavel]")
 	fmt.Fprintln(w, "  ravel audit [root]")
 	fmt.Fprintln(w, "  ravel build [root]")
 	fmt.Fprintln(w, "  ravel update [root]")
+	fmt.Fprintln(w, "  ravel watch [--interval 2s] [root]")
+	fmt.Fprintln(w, "  ravel share [--out ravel-graph]")
 	fmt.Fprintln(w, "  ravel report")
 	fmt.Fprintln(w, "  ravel query [--json] <text>")
 	fmt.Fprintln(w, "  ravel explain [--json] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel path [--json] <from> <to>")
+	fmt.Fprintln(w, "  ravel tech|understand|learn|docs|pdf|schema [--json]")
+	fmt.Fprintln(w, "  ravel diff [--json] <changed-path>...")
 }
