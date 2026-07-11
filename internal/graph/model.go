@@ -30,7 +30,9 @@ const (
 	NodeSection   NodeKind = "section"
 	NodeSchema    NodeKind = "schema"
 	NodeTable     NodeKind = "table"
+	NodeView      NodeKind = "view"
 	NodeColumn    NodeKind = "column"
+	NodeIndex     NodeKind = "index"
 	NodeConcept   NodeKind = "concept"
 	NodeDomain    NodeKind = "domain"
 	NodeFlow      NodeKind = "flow"
@@ -122,7 +124,7 @@ func NewBuilder(root string) *Builder {
 		nodes: map[string]Node{},
 		edges: map[string]Edge{},
 	}
-	b.AddNode(Node{ID: RepoID(), Kind: NodeRepo, Name: filepath.Base(root), Path: "."})
+	b.AddNode(Node{ID: RepoID(), Kind: NodeRepo, Name: filepath.Base(root), Path: ".", Meta: map[string]string{"confidence": "extracted", "evidence": "."}})
 	return b
 }
 
@@ -221,6 +223,14 @@ func ImportID(path string) string {
 	return "go-import://" + path
 }
 
+// ExternalFunctionID identifies a function selected from an imported Go
+// package. Import nodes describe dependencies; keeping callable symbols in a
+// separate namespace prevents call edges from turning package imports into
+// artificial call-graph hubs.
+func ExternalFunctionID(importPath, name string) string {
+	return ContentID("go-external-function", importPath, name)
+}
+
 func TypeID(pkgDir, name string) string {
 	return "go://" + qualifier(pkgDir) + "." + name
 }
@@ -236,6 +246,21 @@ func MethodID(pkgDir, receiver, name string) string {
 func UnresolvedCallID(name string) string {
 	sum := sha1.Sum([]byte(name))
 	return "unresolved-call://" + hex.EncodeToString(sum[:8])
+}
+
+// UnresolvedCallSiteID identifies one unresolved call occurrence. The caller
+// is part of the identity so unrelated unresolved calls with the same spelling
+// do not collapse into a high-degree placeholder node.
+func UnresolvedCallSiteID(caller, path, name string, line, column int) string {
+	identity := strings.Join([]string{
+		strings.TrimSpace(caller),
+		slash(path),
+		fmt.Sprintf("%d", line),
+		fmt.Sprintf("%d", column),
+		strings.TrimSpace(name),
+	}, "\x00")
+	sum := sha1.Sum([]byte(identity))
+	return "unresolved-callsite://" + hex.EncodeToString(sum[:12])
 }
 
 func ContentID(scheme string, parts ...string) string {

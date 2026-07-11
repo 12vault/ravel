@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/12ya/reporavel/internal/config"
@@ -42,8 +44,20 @@ func Scan(root string, cfg config.Config) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	absRoot, err = filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return Result{}, fmt.Errorf("resolve scan root: %w", err)
+	}
 	var result Result
 	result.Root = absRoot
+	if reason := sensitiveAncestorReason(absRoot); reason != "" {
+		result.Ignored = append(result.Ignored, Ignored{Path: ".", Reason: reason})
+		return result, nil
+	}
+	ignoredByGit, err := newIgnoreMatcher(absRoot)
+	if err != nil {
+		return Result{}, err
+	}
 
 	err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -57,16 +71,31 @@ func Scan(root string, cfg config.Config) (Result, error) {
 			return nil
 		}
 		relPath := rel(absRoot, path)
+		if entry.Type()&os.ModeSymlink != 0 {
+			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "symbolic link"})
+			return nil
+		}
 		if entry.IsDir() {
 			if reason := ignoreDir(relPath, entry.Name()); reason != "" {
 				result.Ignored = append(result.Ignored, Ignored{Path: relPath + "/", Reason: reason})
 				return filepath.SkipDir
+			}
+			if ignoredByGit.ignored(relPath, true) {
+				result.Ignored = append(result.Ignored, Ignored{Path: relPath + "/", Reason: "gitignored"})
+				return filepath.SkipDir
+			}
+			if err := ignoredByGit.loadDir(relPath); err != nil {
+				return err
 			}
 			return nil
 		}
 		reason := ignoreFile(relPath, entry.Name())
 		if reason != "" {
 			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: reason})
+			return nil
+		}
+		if ignoredByGit.ignored(relPath, false) {
+			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "gitignored"})
 			return nil
 		}
 		info, err := entry.Info()
@@ -240,8 +269,11 @@ func LanguageForPath(path string) string {
 }
 
 func ignoreDir(path, name string) string {
+	if isSensitiveDirectoryName(name) {
+		return "sensitive credential directory"
+	}
 	switch name {
-	case ".git", "node_modules", "vendor", "Pods", "DerivedData", ".build", "dist", "build", "coverage", ".next", ".nuxt", "target", ".idea", ".vscode", ".reporavel", "ravel-graph":
+	case ".git", "node_modules", "vendor", "Pods", "DerivedData", ".build", "dist", "coverage", ".next", ".nuxt", "target", ".idea", ".vscode", ".reporavel", "ravel-graph":
 		return "default ignored directory"
 	}
 	if strings.HasPrefix(name, ".") && (name == ".cache" || strings.HasSuffix(name, "_cache")) {
@@ -252,12 +284,14 @@ func ignoreDir(path, name string) string {
 
 func ignoreFile(path, name string) string {
 	lower := strings.ToLower(name)
-	if name == ".env" || strings.HasPrefix(name, ".env.") {
+	if lower == ".env" || strings.HasPrefix(lower, ".env.") {
 		return "secret-like environment file"
 	}
 	switch {
-	case strings.HasSuffix(lower, ".pem"), strings.HasSuffix(lower, ".key"), strings.HasSuffix(lower, ".p12"), strings.HasSuffix(lower, ".pfx"):
+	case strings.HasSuffix(lower, ".pem"), strings.HasSuffix(lower, ".key"), strings.HasSuffix(lower, ".p8"), strings.HasSuffix(lower, ".der"), strings.HasSuffix(lower, ".crt"), strings.HasSuffix(lower, ".cer"), strings.HasSuffix(lower, ".p12"), strings.HasSuffix(lower, ".pfx"), strings.HasSuffix(lower, ".jks"), strings.HasSuffix(lower, ".keystore"):
 		return "secret-like key material"
+	case isSensitiveFilename(name):
+		return "sensitive credential filename"
 	case strings.HasSuffix(lower, ".min.js"):
 		return "minified generated file"
 	case strings.HasSuffix(lower, ".lock"):
@@ -272,6 +306,47 @@ func ignoreFile(path, name string) string {
 		return "database file"
 	}
 	return ""
+}
+
+func sensitiveAncestorReason(path string) string {
+	for current := filepath.Clean(path); ; current = filepath.Dir(current) {
+		if isSensitiveDirectoryName(filepath.Base(current)) {
+			return "inside sensitive credential directory"
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return ""
+		}
+	}
+}
+
+func isSensitiveDirectoryName(name string) bool {
+	switch strings.ToLower(name) {
+	case ".ssh", ".aws", ".gcloud", "secrets", "credentials":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSensitiveFilename(name string) bool {
+	words := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	for i, word := range words {
+		switch word {
+		case "credential", "credentials", "secret", "secrets", "apitoken", "accesstoken", "privatekey":
+			return true
+		}
+		if i+1 >= len(words) {
+			continue
+		}
+		next := words[i+1]
+		if ((word == "api" || word == "access") && next == "token") || (word == "private" && next == "key") {
+			return true
+		}
+	}
+	return false
 }
 
 func fileHash(path string) (string, error) {

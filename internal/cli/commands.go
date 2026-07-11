@@ -18,6 +18,7 @@ import (
 	"github.com/12ya/reporavel/internal/corpus"
 	"github.com/12ya/reporavel/internal/dashboard"
 	"github.com/12ya/reporavel/internal/evaluation"
+	"github.com/12ya/reporavel/internal/graph"
 	gitHooks "github.com/12ya/reporavel/internal/hooks"
 	"github.com/12ya/reporavel/internal/ingest"
 	installmgr "github.com/12ya/reporavel/internal/install"
@@ -40,8 +41,21 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		usage(stdout)
 		return nil
 	}
+	if args[0] == "help" {
+		if len(args) == 1 {
+			usage(stdout)
+			return nil
+		}
+		if len(args) != 2 {
+			return errors.New("help accepts at most one command")
+		}
+		return commandUsage(stdout, args[1])
+	}
+	if commandHelpRequested(args[1:]) {
+		return commandUsage(stdout, args[0])
+	}
 	switch args[0] {
-	case "help", "-h", "--help":
+	case "-h", "--help":
 		usage(stdout)
 		return nil
 	case "version", "--version":
@@ -91,6 +105,8 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return runReport(args[1:], stdout)
 	case "query":
 		return runQuery(args[1:], stdout)
+	case "context":
+		return runContext(args[1:], stdout)
 	case "explain":
 		return runExplain(args[1:], stdout)
 	case "path":
@@ -611,6 +627,56 @@ func runQuery(args []string, stdout io.Writer) error {
 	return query.WriteSearch(stdout, results, *jsonOut)
 }
 
+func runContext(args []string, stdout io.Writer) error {
+	configPath := flagValue(args, "config", ".reporavel.yaml")
+	cfg, err := loadCommandConfig(args, configPath)
+	if err != nil {
+		return err
+	}
+	fs := newFlagSet("context")
+	configFlag := fs.String("config", configPath, "configuration file")
+	outDir := fs.String("out", cfg.Output.Dir, "graph directory")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	traversal := fs.String("traversal", cfg.Retrieval.Traversal, "bfs or dfs")
+	direction := fs.String("direction", cfg.Retrieval.Direction, "out, in, or both")
+	relations := fs.String("relations", cfg.Retrieval.Relations, "comma-separated edge kinds")
+	inferRelations := fs.Bool("infer-relations", cfg.Retrieval.InferRelations, "infer relation filters from the question")
+	seedLimit := fs.Int("seed-limit", cfg.Retrieval.SeedLimit, "maximum lexical seeds")
+	maxDepth := fs.Int("max-depth", cfg.Retrieval.MaxDepth, "graph traversal depth")
+	maxNodes := fs.Int("max-nodes", cfg.Retrieval.MaxNodes, "hard node limit")
+	hubThreshold := fs.Int("hub-degree-threshold", cfg.Retrieval.HubDegreeThreshold, "0 for automatic, -1 to disable")
+	tokenBudget := fs.Int("token-budget", cfg.Retrieval.TokenBudget, "approximate output-token budget")
+	valueFlags := []string{"config", "out", "traversal", "direction", "relations", "seed-limit", "max-depth", "max-nodes", "hub-degree-threshold", "token-budget"}
+	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("context requires a natural-language question")
+	}
+	if *configFlag != configPath {
+		return errors.New("internal config flag parsing mismatch")
+	}
+	g, err := store.LoadGraph(*outDir)
+	if err != nil {
+		return err
+	}
+	var edgeKinds []graph.EdgeKind
+	for _, value := range strings.Split(*relations, ",") {
+		if value = strings.TrimSpace(value); value != "" && !strings.EqualFold(value, "all") {
+			edgeKinds = append(edgeKinds, graph.EdgeKind(value))
+		}
+	}
+	result, err := query.NewIndex(g).Retrieve(strings.Join(fs.Args(), " "), query.RetrieveOptions{
+		Traversal: query.Traversal(strings.ToLower(*traversal)), Direction: query.Direction(strings.ToLower(*direction)),
+		Relations: edgeKinds, DisableRelationInference: !*inferRelations, SeedLimit: *seedLimit,
+		MaxDepth: *maxDepth, MaxNodes: *maxNodes, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
+	})
+	if err != nil {
+		return err
+	}
+	return query.WriteRetrieval(stdout, result, *jsonOut)
+}
+
 func runExplain(args []string, stdout io.Writer) error {
 	fs := newFlagSet("explain")
 	outDir := fs.String("out", ".reporavel", "output directory")
@@ -773,16 +839,38 @@ func runExtract(ctx context.Context, args []string, stdout io.Writer) error {
 }
 
 func runBenchmark(args []string, stdout io.Writer) error {
+	configPath := flagValue(args, "config", ".reporavel.yaml")
+	cfg, err := loadCommandConfig(args, configPath)
+	if err != nil {
+		return err
+	}
 	fs := newFlagSet("benchmark")
-	graphDir := fs.String("graph", ".reporavel", "graph directory")
+	configFlag := fs.String("config", configPath, "configuration file")
+	graphDir := fs.String("graph", cfg.Output.Dir, "graph directory")
 	dataset := fs.String("dataset", "", "evaluation JSONL file")
 	out := fs.String("out", "-", "result JSON file or - for stdout")
-	topK := fs.Int("top-k", 10, "retrieval result count")
-	if err := fs.Parse(flexibleFlags(args, "graph", "dataset", "out", "top-k")); err != nil {
+	topK := fs.Int("top-k", cfg.Retrieval.MaxNodes, "retrieval result count and context-node cap")
+	retriever := fs.String("retriever", "context", "context or flat")
+	traversal := fs.String("traversal", cfg.Retrieval.Traversal, "bfs or dfs")
+	direction := fs.String("direction", cfg.Retrieval.Direction, "out, in, or both")
+	relations := fs.String("relations", cfg.Retrieval.Relations, "comma-separated edge kinds")
+	inferRelations := fs.Bool("infer-relations", cfg.Retrieval.InferRelations, "infer relation filters from each question")
+	seedLimit := fs.Int("seed-limit", cfg.Retrieval.SeedLimit, "maximum lexical seeds")
+	maxDepth := fs.Int("max-depth", cfg.Retrieval.MaxDepth, "graph traversal depth")
+	hubThreshold := fs.Int("hub-degree-threshold", cfg.Retrieval.HubDegreeThreshold, "0 for automatic, -1 to disable")
+	tokenBudget := fs.Int("token-budget", cfg.Retrieval.TokenBudget, "approximate output-token budget")
+	datasetRevision := fs.String("dataset-revision", "unspecified", "dataset revision or commit")
+	graphRevision := fs.String("graph-revision", "unspecified", "source revision used to build the graph")
+	adapterVersion := fs.String("adapter-version", "graph-query-jsonl-v2", "dataset adapter version")
+	valueFlags := []string{"config", "graph", "dataset", "out", "top-k", "retriever", "traversal", "direction", "relations", "seed-limit", "max-depth", "hub-degree-threshold", "token-budget", "dataset-revision", "graph-revision", "adapter-version"}
+	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 || *dataset == "" {
 		return errors.New("benchmark requires --dataset <cases.jsonl>")
+	}
+	if *configFlag != configPath {
+		return errors.New("internal config flag parsing mismatch")
 	}
 	g, err := store.LoadGraph(*graphDir)
 	if err != nil {
@@ -792,7 +880,30 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	result, err := evaluation.Run(g, cases, *topK)
+	datasetHash, err := evaluation.DatasetHash(*dataset)
+	if err != nil {
+		return err
+	}
+	graphHash, err := evaluation.GraphHash(g)
+	if err != nil {
+		return err
+	}
+	var edgeKinds []graph.EdgeKind
+	for _, value := range strings.Split(*relations, ",") {
+		if value = strings.TrimSpace(value); value != "" && !strings.EqualFold(value, "all") {
+			edgeKinds = append(edgeKinds, graph.EdgeKind(value))
+		}
+	}
+	result, err := evaluation.RunWithOptions(g, cases, evaluation.RunOptions{
+		Retriever: strings.ToLower(*retriever), TopK: *topK,
+		Retrieval: query.RetrieveOptions{
+			Traversal: query.Traversal(strings.ToLower(*traversal)), Direction: query.Direction(strings.ToLower(*direction)),
+			Relations: edgeKinds, SeedLimit: *seedLimit, MaxDepth: *maxDepth, MaxNodes: *topK,
+			DisableRelationInference: !*inferRelations, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
+		},
+		RavelVersion: Version, DatasetRevision: *datasetRevision, DatasetSHA256: datasetHash, AdapterVersion: *adapterVersion,
+		GraphSHA256: graphHash, GraphRevision: *graphRevision,
+	})
 	if err != nil {
 		return err
 	}
@@ -815,6 +926,13 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "Wrote benchmark results to %s\n", *out)
 	return nil
+}
+
+func loadCommandConfig(args []string, path string) (config.Config, error) {
+	if flagProvided(args, "config") {
+		return config.LoadRequired(path)
+	}
+	return config.Load(path)
 }
 
 func loadConfigWithOverrides(configPath, outDir string, maxFileSize int64) (config.Config, error) {
@@ -931,6 +1049,102 @@ func flexibleFlags(args []string, valueFlags ...string) []string {
 	return append(flags, positionals...)
 }
 
+func flagValue(args []string, name, fallback string) string {
+	long := "--" + name
+	short := "-" + name
+	for i, arg := range args {
+		if arg == long || arg == short {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return fallback
+		}
+		if key, value, ok := strings.Cut(arg, "="); ok && (key == long || key == short) {
+			return value
+		}
+	}
+	return fallback
+}
+
+func flagProvided(args []string, name string) bool {
+	long := "--" + name
+	short := "-" + name
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == long || arg == short {
+			return true
+		}
+		if key, _, ok := strings.Cut(arg, "="); ok && (key == long || key == short) {
+			return true
+		}
+	}
+	return false
+}
+
+func commandHelpRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func commandUsage(w io.Writer, command string) error {
+	lines := map[string]string{
+		"version":     "ravel version",
+		"self-update": "ravel self-update [--version latest] [--platforms codex,claude] [--project]",
+		"init":        "ravel init",
+		"install":     "ravel install [--platform <name>] [--project]",
+		"uninstall":   "ravel uninstall [--platform <name>] [--project]",
+		"hook":        "ravel hook <install|uninstall|status> [root]",
+		"ingest":      "ravel ingest [--out <dir>] <fragment.json>",
+		"dashboard":   "ravel dashboard [--out <dir>]",
+		"doctor":      "ravel doctor",
+		"tools":       "ravel tools",
+		"extract":     "ravel extract [--json] <audited-doc-or-pdf>...",
+		"plan":        "ravel plan [--json] <route> [paths...]",
+		"audit":       "ravel audit [--config <path>] [--out <dir>] [root]",
+		"scan":        "ravel scan [--config <path>] [--out <dir>] [root]",
+		"build":       "ravel build [--config <path>] [--out <dir>] [root]",
+		"update":      "ravel update [--config <path>] [--out <dir>] [root]",
+		"watch":       "ravel watch [--interval 2s] [root]",
+		"share":       "ravel share [--from <dir>] [--out ravel-graph]",
+		"report":      "ravel report [--out <dir>]",
+		"query":       "ravel query [--out <dir>] [--limit 25] [--json] <text>",
+		"explain":     "ravel explain [--out <dir>] [--json] <file-or-symbol>",
+		"path":        "ravel path [--out <dir>] [--json] <from> <to>",
+		"tech":        "ravel tech [--out <dir>] [--json]",
+		"understand":  "ravel understand [--out <dir>] [--json]",
+		"learn":       "ravel learn [--out <dir>] [--json]",
+		"docs":        "ravel docs [--out <dir>] [--json]",
+		"pdf":         "ravel pdf [--out <dir>] [--json]",
+		"schema":      "ravel schema [--out <dir>] [--json]",
+		"diff":        "ravel diff [--out <dir>] [--json] [changed-path]...",
+	}
+	switch command {
+	case "context":
+		fmt.Fprintln(w, "Usage: ravel context [options] <question>")
+		fmt.Fprintln(w, "Options: --config --out --json --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --hub-degree-threshold --token-budget")
+		return nil
+	case "benchmark":
+		fmt.Fprintln(w, "Usage: ravel benchmark --dataset <cases.jsonl> [options]")
+		fmt.Fprintln(w, "Options: --config --graph --out --retriever --top-k --traversal --direction --relations --infer-relations --seed-limit --max-depth --hub-degree-threshold --token-budget --dataset-revision --graph-revision --adapter-version")
+		return nil
+	}
+	line, ok := lines[command]
+	if !ok {
+		return fmt.Errorf("unknown command %q", command)
+	}
+	fmt.Fprintln(w, "Usage:", line)
+	return nil
+}
+
 func usage(w io.Writer) {
 	fmt.Fprintf(w, "RepoRavel %s\n", Version)
 	fmt.Fprintln(w)
@@ -948,7 +1162,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel tools")
 	fmt.Fprintln(w, "  ravel extract [--json] <audited-doc-or-pdf>...")
 	fmt.Fprintln(w, "  ravel plan [--json] <route> [paths...]")
-	fmt.Fprintln(w, "  ravel benchmark --dataset <cases.jsonl> [--graph .reporavel]")
+	fmt.Fprintln(w, "  ravel benchmark --dataset <cases.jsonl> [--retriever context|flat] [--token-budget 2000]")
 	fmt.Fprintln(w, "  ravel audit [root]")
 	fmt.Fprintln(w, "  ravel build [root]")
 	fmt.Fprintln(w, "  ravel update [root]")
@@ -956,6 +1170,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel share [--out ravel-graph]")
 	fmt.Fprintln(w, "  ravel report")
 	fmt.Fprintln(w, "  ravel query [--json] <text>")
+	fmt.Fprintln(w, "  ravel context [--json] [--token-budget 2000] [--max-depth 2] <question>")
 	fmt.Fprintln(w, "  ravel explain [--json] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel path [--json] <from> <to>")
 	fmt.Fprintln(w, "  ravel tech|understand|learn|docs|pdf|schema [--json]")

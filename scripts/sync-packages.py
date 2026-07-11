@@ -73,6 +73,10 @@ with tempfile.TemporaryDirectory(prefix="ravel-go-cache-") as cache:
             shutil.rmtree(packaged_binaries)
         shutil.copytree(binaries, packaged_binaries)
 
+# The repository-local Codex skill mirrors the canonical instructions but uses
+# the checkout's launcher instead of carrying release binaries.
+copy_tree(ROOT / ".codex" / "skills" / "ravel")
+
 # Claude discovers plugin-native subagents from the plugin root.
 claude_agents = ROOT / "plugins" / "ravel" / "agents"
 if claude_agents.exists():

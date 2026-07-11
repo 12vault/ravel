@@ -34,31 +34,7 @@ type Relation struct {
 }
 
 func Search(g graph.Graph, term string, limit int) []SearchResult {
-	needles := queryTerms(term)
-	if len(needles) == 0 {
-		return nil
-	}
-	var out []SearchResult
-	for _, n := range g.Nodes {
-		score := 0
-		for _, needle := range needles {
-			score += nodeScore(n, needle)
-		}
-		if score == 0 {
-			continue
-		}
-		out = append(out, SearchResult{Node: n, Score: score})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Score == out[j].Score {
-			return out[i].Node.ID < out[j].Node.ID
-		}
-		return out[i].Score > out[j].Score
-	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
+	return NewIndex(g).Search(term, limit)
 }
 
 func WriteSearch(w io.Writer, results []SearchResult, jsonOut bool) error {
@@ -70,9 +46,9 @@ func WriteSearch(w io.Writer, results []SearchResult, jsonOut bool) error {
 		return err
 	}
 	for _, r := range results {
-		fmt.Fprintf(w, "%s\t%s\t%s", r.Node.Kind, r.Node.ID, display(r.Node))
+		fmt.Fprintf(w, "%s\t%s\t%s", safeText(string(r.Node.Kind)), compactID(r.Node.ID), safeText(display(r.Node)))
 		if r.Node.Path != "" && !strings.Contains(display(r.Node), r.Node.Path) {
-			fmt.Fprintf(w, "\t%s", r.Node.Path)
+			fmt.Fprintf(w, "\t%s", safeText(r.Node.Path))
 		}
 		fmt.Fprintln(w)
 	}
@@ -80,10 +56,17 @@ func WriteSearch(w io.Writer, results []SearchResult, jsonOut bool) error {
 }
 
 func Explain(g graph.Graph, target string) (Explanation, bool) {
-	n, ok := FindBest(g, target)
+	return NewIndex(g).Explain(target)
+}
+
+// Explain returns the immediate relationships for the best matching target
+// while reusing the index's immutable graph snapshot.
+func (idx *Index) Explain(target string) (Explanation, bool) {
+	n, ok := idx.FindBest(target)
 	if !ok {
 		return Explanation{}, false
 	}
+	g := idx.graph
 	byID := nodesByID(g)
 	ex := Explanation{Target: n}
 	for _, e := range g.Edges {
@@ -122,9 +105,9 @@ func WriteExplanation(w io.Writer, ex Explanation, jsonOut bool) error {
 	if jsonOut {
 		return writeJSON(w, ex)
 	}
-	fmt.Fprintf(w, "%s: %s\n", ex.Target.Kind, display(ex.Target))
+	fmt.Fprintf(w, "%s: %s\n", safeText(string(ex.Target.Kind)), safeText(display(ex.Target)))
 	if ex.Target.Path != "" {
-		fmt.Fprintf(w, "Path: %s", ex.Target.Path)
+		fmt.Fprintf(w, "Path: %s", safeText(ex.Target.Path))
 		if ex.Target.StartLine > 0 {
 			fmt.Fprintf(w, ":%d", ex.Target.StartLine)
 		}
@@ -142,14 +125,18 @@ func WriteExplanation(w io.Writer, ex Explanation, jsonOut bool) error {
 }
 
 func ShortestPath(g graph.Graph, fromQuery, toQuery string) ([]graph.Node, bool) {
-	from, ok := FindBest(g, fromQuery)
-	if !ok {
+	return NewIndex(g).ShortestPath(fromQuery, toQuery)
+}
+
+// ShortestPath finds a directed path first and then an undirected fallback
+// while reusing the index's immutable graph snapshot.
+func (idx *Index) ShortestPath(fromQuery, toQuery string) ([]graph.Node, bool) {
+	from, fromOK := idx.FindBest(fromQuery)
+	to, toOK := idx.FindBest(toQuery)
+	if !fromOK || !toOK {
 		return nil, false
 	}
-	to, ok := FindBest(g, toQuery)
-	if !ok {
-		return nil, false
-	}
+	g := idx.graph
 	if path, ok := bfs(g, from.ID, to.ID, true); ok {
 		return path, true
 	}
@@ -168,42 +155,29 @@ func WritePath(w io.Writer, nodes []graph.Node, jsonOut bool) error {
 		if i > 0 {
 			fmt.Fprintln(w, "  ->")
 		}
-		fmt.Fprintf(w, "%s\t%s\n", n.Kind, display(n))
+		fmt.Fprintf(w, "%s\t%s\n", safeText(string(n.Kind)), safeText(display(n)))
 	}
 	return nil
 }
 
 func FindBest(g graph.Graph, query string) (graph.Node, bool) {
-	q := strings.TrimSpace(query)
-	if q == "" {
+	if node, ok := exactMatch(g, query); ok {
+		return node, true
+	}
+	return NewIndex(g).FindBest(query)
+}
+
+func exactMatch(g graph.Graph, query string) (graph.Node, bool) {
+	value := strings.TrimSpace(query)
+	if value == "" {
 		return graph.Node{}, false
 	}
-	for _, n := range g.Nodes {
-		if n.ID == q || n.Path == q || n.Name == q {
-			return n, true
+	for _, node := range g.Nodes {
+		if node.ID == value || node.Path == value || node.Name == value {
+			return node, true
 		}
 	}
-	needles := queryTerms(q)
-	var matches []SearchResult
-	for _, n := range g.Nodes {
-		score := 0
-		for _, needle := range needles {
-			score += nodeScore(n, needle)
-		}
-		if score > 0 {
-			matches = append(matches, SearchResult{Node: n, Score: score})
-		}
-	}
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].Score == matches[j].Score {
-			return matches[i].Node.ID < matches[j].Node.ID
-		}
-		return matches[i].Score > matches[j].Score
-	})
-	if len(matches) == 0 {
-		return graph.Node{}, false
-	}
-	return matches[0].Node, true
+	return graph.Node{}, false
 }
 
 func bfs(g graph.Graph, fromID, toID string, directed bool) ([]graph.Node, bool) {
@@ -243,39 +217,6 @@ func bfs(g graph.Graph, fromID, toID string, directed bool) ([]graph.Node, bool)
 		}
 	}
 	return nil, false
-}
-
-func nodeScore(n graph.Node, needle string) int {
-	score := 0
-	lowerName := strings.ToLower(n.Name)
-	lowerPath := strings.ToLower(n.Path)
-	lowerPackage := strings.ToLower(n.Package)
-	lowerID := strings.ToLower(n.ID)
-	switch {
-	case lowerName == needle:
-		score += 100
-	case strings.Contains(lowerName, needle):
-		score += 50
-	}
-	if lowerPath == needle {
-		score += 90
-	} else if strings.Contains(lowerPath, needle) {
-		score += 35
-	}
-	if lowerPackage == needle {
-		score += 60
-	} else if strings.Contains(lowerPackage, needle) {
-		score += 20
-	}
-	if strings.Contains(lowerID, needle) {
-		score += 10
-	}
-	for k, v := range n.Meta {
-		if strings.Contains(strings.ToLower(k), needle) || strings.Contains(strings.ToLower(v), needle) {
-			score += 5
-		}
-	}
-	return score
 }
 
 func nodesByID(g graph.Graph) map[string]graph.Node {
@@ -319,7 +260,7 @@ func writeNodeSection(w io.Writer, title string, nodes []graph.Node) {
 	}
 	fmt.Fprintf(w, "\n%s:\n", title)
 	for _, n := range nodes {
-		fmt.Fprintf(w, "- %s\t%s\n", n.Kind, display(n))
+		fmt.Fprintf(w, "- %s\t%s\n", safeText(string(n.Kind)), safeText(display(n)))
 	}
 }
 
@@ -329,7 +270,7 @@ func writeRelationSection(w io.Writer, title string, relations []Relation) {
 	}
 	fmt.Fprintf(w, "\n%s:\n", title)
 	for _, relation := range relations {
-		fmt.Fprintf(w, "- %s\t%s\n", relation.Kind, display(relation.Node))
+		fmt.Fprintf(w, "- %s\t%s\n", safeText(string(relation.Kind)), safeText(display(relation.Node)))
 	}
 }
 
@@ -340,22 +281,6 @@ func sortRelations(relations []Relation) {
 		}
 		return relations[i].Kind < relations[j].Kind
 	})
-}
-
-func queryTerms(value string) []string {
-	stop := map[string]bool{"a": true, "an": true, "and": true, "are": true, "do": true, "does": true, "how": true, "in": true, "is": true, "of": true, "the": true, "to": true, "what": true, "where": true, "which": true, "with": true}
-	seen := map[string]bool{}
-	var terms []string
-	for _, field := range strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-')
-	}) {
-		if len(field) < 2 || stop[field] || seen[field] {
-			continue
-		}
-		seen[field] = true
-		terms = append(terms, field)
-	}
-	return terms
 }
 
 func display(n graph.Node) string {

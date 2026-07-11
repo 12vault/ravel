@@ -1,0 +1,1 @@
+{"id":"architecture-entrypoint","correct":true,"keyFactsFound":["The API entry point is go://testdata/simple-go-service/cmd/api.main."],"inputTokens":100,"outputTokens":20,"toolTokens":80,"costUsd":0.001,"model":"fixture-model","judge":"fixture-judge","runId":"example-run"}

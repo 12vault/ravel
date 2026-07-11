@@ -54,6 +54,38 @@ func TestDefaultYAMLLoads(t *testing.T) {
 	}
 }
 
+func TestLoadRequiredRejectsMissingExplicitPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.yaml")
+	if _, err := LoadRequired(path); err == nil || !strings.Contains(err.Error(), "read config") {
+		t.Fatalf("LoadRequired() error = %v, want missing-config error", err)
+	}
+	if got, err := Load(path); err != nil || got != Default() {
+		t.Fatalf("Load() implicit default = %#v, %v", got, err)
+	}
+}
+
+func TestLoadHonorsRetrievalSettings(t *testing.T) {
+	path := writeConfig(t, `retrieval:
+  traversal: dfs
+  direction: in
+  inferRelations: false
+  relations: calls,references
+  seedLimit: 5
+  maxDepth: 4
+  maxNodes: 250
+  hubDegreeThreshold: 75
+  tokenBudget: 4096
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RetrievalConfig{Traversal: "dfs", Direction: "in", InferRelations: false, Relations: "calls,references", SeedLimit: 5, MaxDepth: 4, MaxNodes: 250, HubDegreeThreshold: 75, TokenBudget: 4096}
+	if cfg.Retrieval != want {
+		t.Fatalf("Retrieval = %#v, want %#v", cfg.Retrieval, want)
+	}
+}
+
 func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -64,6 +96,9 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		{name: "unknown section", content: "database:\n  enabled: true\n", want: `unknown section "database"`},
 		{name: "invalid boolean", content: "analysis:\n  go: maybe\n", want: "expected true or false"},
 		{name: "invalid integer", content: "scan:\n  maxFileSize: large\n", want: "expected an integer"},
+		{name: "invalid traversal", content: "retrieval:\n  traversal: sideways\n", want: "retrieval.traversal must be bfs or dfs"},
+		{name: "invalid direction", content: "retrieval:\n  direction: around\n", want: "retrieval.direction must be out, in, or both"},
+		{name: "invalid retrieval budget", content: "retrieval:\n  tokenBudget: 12\n", want: "retrieval.tokenBudget must be between"},
 		{name: "unsafe permission", content: "permissions:\n  network: true\n", want: "permissions.network cannot be enabled"},
 		{name: "type resolution unavailable", content: "analysis:\n  typeResolution: true\n", want: "analysis.typeResolution is not implemented"},
 		{name: "sqlite unavailable", content: "output:\n  sqlite: true\n", want: "output.sqlite is not implemented"},

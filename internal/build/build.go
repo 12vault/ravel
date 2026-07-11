@@ -65,8 +65,8 @@ func Run(ctx context.Context, root string, cfg config.Config) (Result, error) {
 }
 
 func addFileTopology(builder *graph.Builder, scanResult scan.Result) {
-	builder.AddNode(graph.Node{ID: graph.DirID("."), Kind: graph.NodeDir, Name: ".", Path: "."})
-	builder.AddEdge(graph.Edge{Kind: graph.EdgeContains, From: graph.RepoID(), To: graph.DirID(".")})
+	builder.AddNode(graph.Node{ID: graph.DirID("."), Kind: graph.NodeDir, Name: ".", Path: ".", Meta: topologyMeta(".")})
+	builder.AddEdge(graph.Edge{Kind: graph.EdgeContains, From: graph.RepoID(), To: graph.DirID("."), Meta: topologyMeta(".")})
 	seenDirs := map[string]bool{".": true}
 	for _, file := range scanResult.Files {
 		dir := graph.ParentDir(file.Path)
@@ -77,12 +77,14 @@ func addFileTopology(builder *graph.Builder, scanResult scan.Result) {
 			Name: filepath.Base(file.Path),
 			Path: file.Path,
 			Meta: map[string]string{
-				"language": file.Language,
-				"hash":     file.Hash,
-				"size":     int64String(file.Size),
+				"confidence": "extracted",
+				"evidence":   file.Path,
+				"language":   file.Language,
+				"hash":       file.Hash,
+				"size":       int64String(file.Size),
 			},
 		})
-		builder.AddEdge(graph.Edge{Kind: graph.EdgeContains, From: graph.DirID(dir), To: graph.FileID(file.Path)})
+		builder.AddEdge(graph.Edge{Kind: graph.EdgeContains, From: graph.DirID(dir), To: graph.FileID(file.Path), Meta: topologyMeta(file.Path)})
 	}
 }
 
@@ -98,9 +100,13 @@ func addDir(builder *graph.Builder, seen map[string]bool, dir string) {
 		parent = "."
 	}
 	addDir(builder, seen, parent)
-	builder.AddNode(graph.Node{ID: graph.DirID(dir), Kind: graph.NodeDir, Name: filepath.Base(dir), Path: dir})
-	builder.AddEdge(graph.Edge{Kind: graph.EdgeContains, From: graph.DirID(parent), To: graph.DirID(dir)})
+	builder.AddNode(graph.Node{ID: graph.DirID(dir), Kind: graph.NodeDir, Name: filepath.Base(dir), Path: dir, Meta: topologyMeta(dir)})
+	builder.AddEdge(graph.Edge{Kind: graph.EdgeContains, From: graph.DirID(parent), To: graph.DirID(dir), Meta: topologyMeta(dir)})
 	seen[dir] = true
+}
+
+func topologyMeta(evidence string) map[string]string {
+	return map[string]string{"confidence": "extracted", "evidence": filepath.ToSlash(evidence)}
 }
 
 func int64String(v int64) string {

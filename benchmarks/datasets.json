@@ -1,21 +1,32 @@
 {
-  "version": 1,
-  "metrics": ["answer_recall", "evidence_precision", "latency_ms", "graph_nodes", "graph_edges"],
+  "version": 3,
+  "metrics": [
+    "node_recall",
+    "node_precision",
+    "evidence_recall",
+    "evidence_precision",
+    "reciprocal_rank",
+    "estimated_tokens",
+    "recall_per_1000_tokens",
+    "evidence_recall_per_1000_tokens",
+    "truncation_rate",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "index_build_ms",
+    "graph_nodes",
+    "graph_edges",
+    "answer_accuracy",
+    "mean_key_fact_coverage",
+    "total_agent_tokens",
+    "total_cost_usd"
+  ],
   "datasets": [
     {
       "name": "repository-questions",
       "adapter": "graph-query-jsonl",
-      "input": "question, expectedNodeIds, expectedEvidence"
-    },
-    {
-      "name": "LOCOMO",
-      "adapter": "conversation-fragment-jsonl",
-      "external": true
-    },
-    {
-      "name": "LongMemEval",
-      "adapter": "conversation-fragment-jsonl",
-      "external": true
+      "input": "id, dataset, question, expectedNodeIds or expectedEvidence; optional expectedKeyFacts plus a separate answer ledger"
     }
-  ]
+  ],
+  "answerLedger": "Strict external JSONL judgments keyed by case id; stores correctness, found rubric facts, tokens, cost, and provenance but never raw answers.",
+  "externalDatasets": "Custom dataset names are accepted after the caller converts them to graph-query JSONL. Ravel does not claim built-in LOCOMO or LongMemEval corpus adapters."
 }

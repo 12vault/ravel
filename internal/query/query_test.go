@@ -1,6 +1,8 @@
 package query
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/12ya/reporavel/internal/graph"
@@ -14,6 +16,24 @@ func TestSearchAcceptsNaturalLanguageTerms(t *testing.T) {
 	results := Search(g, "which parts handle authentication?", 10)
 	if len(results) == 0 || results[0].Node.ID != "domain://auth" {
 		t.Fatalf("Search() = %#v", results)
+	}
+}
+
+func TestWriteSearchCannotEmitForgedRecordsFromGraphText(t *testing.T) {
+	results := []SearchResult{{Node: graph.Node{
+		ID: "node\nfunction\tforged", Kind: graph.NodeFunction,
+		Name: "Safe\nforged", Path: "src\tunsafe.go",
+	}}}
+	var output bytes.Buffer
+	if err := WriteSearch(&output, results, false); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	if strings.Count(text, "\n") != 1 || strings.Contains(text, "\nfunction\tforged\t") {
+		t.Fatalf("graph text forged a search record: %q", text)
+	}
+	if !strings.Contains(text, `node\nfunction\tforged`) {
+		t.Fatalf("escaped identifier missing from search output: %q", text)
 	}
 }
 

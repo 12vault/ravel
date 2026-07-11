@@ -1,12 +1,15 @@
 package goanalyzer
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"go/ast"
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"go/types"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -57,11 +60,14 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 		state := packages[dir]
 		if state == nil {
 			state = &packageState{
-				dir:       dir,
-				name:      parsed.Name.Name,
-				files:     map[string]*fileState{},
-				functions: map[string]string{},
-				methods:   map[string]string{},
+				dir:             dir,
+				name:            parsed.Name.Name,
+				files:           map[string]*fileState{},
+				functions:       map[string]string{},
+				functionResults: map[string]string{},
+				methods:         map[string][]methodTarget{},
+				definedTypes:    map[string]bool{},
+				declaredValues:  map[string]bool{},
 			}
 			packages[dir] = state
 		}
@@ -73,6 +79,10 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 
 	for _, state := range sortedPackages(packages) {
 		pkgID := graph.PackageID(state.dir)
+		packageEvidence := ""
+		if files := sortedFiles(state.files); len(files) > 0 {
+			packageEvidence = sourceEvidence(files[0].file.Path, fset.Position(files[0].parsed.Name.Pos()).Line)
+		}
 		result.Nodes = append(result.Nodes, graph.Node{
 			ID:      pkgID,
 			Kind:    graph.NodePackage,
@@ -80,20 +90,31 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 			Path:    state.dir,
 			Package: packageQualifier(state.dir, state.name),
 			Meta: map[string]string{
-				"language": "go",
+				"confidence": "extracted",
+				"evidence":   packageEvidence,
+				"language":   "go",
 			},
 		})
 
 		for _, fs := range sortedFiles(state.files) {
-			result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeContains, From: pkgID, To: graph.FileID(fs.file.Path)})
+			packageLine := fset.Position(fs.parsed.Name.Pos()).Line
+			result.Edges = append(result.Edges, graph.Edge{
+				Kind: graph.EdgeContains,
+				From: pkgID,
+				To:   graph.FileID(fs.file.Path),
+				Meta: extractedMeta(fs.file.Path, packageLine),
+			})
 			for _, spec := range fs.parsed.Imports {
 				importPath := strings.Trim(spec.Path.Value, `"`)
+				importLine := fset.Position(spec.Pos()).Line
 				importNode := graph.Node{
 					ID:   graph.ImportID(importPath),
 					Kind: graph.NodeImport,
 					Name: importPath,
 					Meta: map[string]string{
-						"language": "go",
+						"confidence": "extracted",
+						"evidence":   sourceEvidence(fs.file.Path, importLine),
+						"language":   "go",
 					},
 				}
 				if spec.Name != nil {
@@ -104,6 +125,7 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 					Kind: graph.EdgeImports,
 					From: graph.FileID(fs.file.Path),
 					To:   graph.ImportID(importPath),
+					Meta: extractedMeta(fs.file.Path, importLine),
 				})
 			}
 			for _, decl := range fs.parsed.Decls {
@@ -112,13 +134,32 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 					node := functionNode(fset, state, fs.file.Path, d)
 					if d.Recv == nil {
 						state.functions[d.Name.Name] = node.ID
+						state.functionResults[d.Name.Name] = singleResultType(d.Type.Results)
 					} else {
-						state.methods[methodKey(receiverName(d), d.Name.Name)] = node.ID
+						state.methods[d.Name.Name] = append(state.methods[d.Name.Name], methodTarget{
+							base: receiverBase(d.Recv.List[0].Type),
+							id:   node.ID,
+						})
 					}
 					result.Nodes = append(result.Nodes, node)
-					result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(fs.file.Path), To: node.ID})
+					result.Edges = append(result.Edges, graph.Edge{
+						Kind: graph.EdgeDefines,
+						From: graph.FileID(fs.file.Path),
+						To:   node.ID,
+						Meta: extractedMeta(fs.file.Path, node.StartLine),
+					})
 				case *ast.GenDecl:
 					nodes, edges := typeAndValueNodes(fset, state, fs.file.Path, d)
+					for _, spec := range d.Specs {
+						switch spec := spec.(type) {
+						case *ast.TypeSpec:
+							state.definedTypes[spec.Name.Name] = true
+						case *ast.ValueSpec:
+							for _, name := range spec.Names {
+								state.declaredValues[name.Name] = true
+							}
+						}
+					}
 					result.Nodes = append(result.Nodes, nodes...)
 					result.Edges = append(result.Edges, edges...)
 				}
@@ -127,6 +168,7 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 	}
 
 	if a.CallGraph {
+		localPackages := packagesByImportPath(packages, moduleRoots(files))
 		for _, state := range sortedPackages(packages) {
 			for _, fs := range sortedFiles(state.files) {
 				for _, decl := range fs.parsed.Decls {
@@ -135,33 +177,70 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 						continue
 					}
 					from := functionNodeID(state, fn)
-					importAliases := importsByAlias(fs.parsed)
-					calls := collectCalls(fset, fn.Body)
+					importAliases := importsByAlias(fset, fs.file.Path, fs.parsed)
+					calls := collectCalls(fset, fn)
 					for _, call := range calls {
-						to, resolved := resolveCall(state, importAliases, call)
-						if !resolved {
+						resolution := resolveCall(state, localPackages, importAliases, from, fs.file.Path, call)
+						if resolution.suppressed {
+							continue
+						}
+						if resolution.external {
 							result.Nodes = append(result.Nodes, graph.Node{
-								ID:   to,
-								Kind: graph.NodeFunction,
-								Name: call.Name,
+								ID:      resolution.to,
+								Kind:    graph.NodeFunction,
+								Name:    resolution.name,
+								Package: resolution.importPath,
+							Meta: map[string]string{
+								"confidence":      "inferred",
+								"evidence":        "import:" + resolution.importPath,
+								"external":        "true",
+								"language":        "go",
+									"rationale":       resolution.rationale,
+									"resolved":        "true",
+								},
+							})
+						} else if !resolution.resolved {
+							result.Nodes = append(result.Nodes, graph.Node{
+								ID:        resolution.to,
+								Kind:      graph.NodeFunction,
+								Name:      call.Name,
+								Path:      fs.file.Path,
+								StartLine: call.Line,
+								EndLine:   call.Line,
 								Meta: map[string]string{
-									"resolved": "false",
-									"language": "go",
+									"confidence": "inferred",
+									"column":     intString(call.Column),
+									"evidence":   resolution.evidence,
+									"language":   "go",
+									"line":       intString(call.Line),
+									"path":       fs.file.Path,
+									"rationale":  resolution.rationale,
+									"resolved":   "false",
 								},
 							})
 						}
 						meta := map[string]string{
-							"name":     call.Name,
-							"resolved": boolString(resolved),
-							"path":     fs.file.Path,
+							"confidence": "inferred",
+							"evidence":   resolution.evidence,
+							"name":       call.Name,
+							"path":       fs.file.Path,
+							"rationale":  resolution.rationale,
+							"resolved":   boolString(resolution.resolved),
 						}
 						if call.Line > 0 {
 							meta["line"] = intString(call.Line)
 						}
+						if call.Column > 0 {
+							meta["column"] = intString(call.Column)
+						}
+						if resolution.external {
+							meta["external"] = "true"
+							meta["import_evidence"] = resolution.importEvidence
+						}
 						result.Edges = append(result.Edges, graph.Edge{
 							Kind: graph.EdgeCalls,
 							From: from,
-							To:   to,
+							To:   resolution.to,
 							Meta: meta,
 						})
 					}
@@ -174,11 +253,24 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 }
 
 type packageState struct {
-	dir       string
-	name      string
-	files     map[string]*fileState
-	functions map[string]string
-	methods   map[string]string
+	dir             string
+	name            string
+	files           map[string]*fileState
+	functions       map[string]string
+	functionResults map[string]string
+	methods         map[string][]methodTarget
+	definedTypes    map[string]bool
+	declaredValues  map[string]bool
+}
+
+type moduleRoot struct {
+	dir  string
+	path string
+}
+
+type methodTarget struct {
+	base string
+	id   string
 }
 
 type fileState struct {
@@ -187,8 +279,33 @@ type fileState struct {
 }
 
 type callSite struct {
-	Name string
-	Line int
+	Name              string
+	Selector          string
+	Receiver          string
+	ReceiverType      string
+	ReceiverIsLocal   bool
+	IdentifierIsLocal bool
+	Predeclared       bool
+	ConversionSyntax  bool
+	Line              int
+	Column            int
+}
+
+type importBinding struct {
+	path     string
+	evidence string
+}
+
+type callResolution struct {
+	to             string
+	name           string
+	importPath     string
+	importEvidence string
+	evidence       string
+	rationale      string
+	resolved       bool
+	external       bool
+	suppressed     bool
 }
 
 func filterGoFiles(files []scan.File) []scan.File {
@@ -202,10 +319,89 @@ func filterGoFiles(files []scan.File) []scan.File {
 	return out
 }
 
+func moduleRoots(files []scan.File) []moduleRoot {
+	var roots []moduleRoot
+	for _, file := range files {
+		if filepath.Base(file.Path) != "go.mod" {
+			continue
+		}
+		modulePath := modulePathFromFile(file.AbsPath)
+		if modulePath == "" {
+			continue
+		}
+		roots = append(roots, moduleRoot{
+			dir:  graph.ParentDir(file.Path),
+			path: modulePath,
+		})
+	}
+	sort.Slice(roots, func(i, j int) bool {
+		if len(roots[i].dir) != len(roots[j].dir) {
+			return len(roots[i].dir) > len(roots[j].dir)
+		}
+		if roots[i].dir != roots[j].dir {
+			return roots[i].dir < roots[j].dir
+		}
+		return roots[i].path < roots[j].path
+	})
+	return roots
+}
+
+func modulePathFromFile(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "module" {
+			return strings.Trim(fields[1], "`\"")
+		}
+	}
+	return ""
+}
+
+func packagesByImportPath(packages map[string]*packageState, roots []moduleRoot) map[string]*packageState {
+	out := map[string]*packageState{}
+	for _, state := range sortedPackages(packages) {
+		dir := state.dir
+		for _, root := range roots {
+			if !pathWithinModule(dir, root.dir) {
+				continue
+			}
+			relative := strings.TrimPrefix(dir, root.dir)
+			relative = strings.TrimPrefix(relative, "/")
+			importPath := root.path
+			if relative != "" && relative != "." {
+				importPath += "/" + relative
+			}
+			if _, exists := out[importPath]; !exists {
+				out[importPath] = state
+			}
+			break
+		}
+	}
+	return out
+}
+
+func pathWithinModule(dir, moduleDir string) bool {
+	if moduleDir == "." {
+		return true
+	}
+	return dir == moduleDir || strings.HasPrefix(dir, moduleDir+"/")
+}
+
 func functionNode(fset *token.FileSet, state *packageState, path string, fn *ast.FuncDecl) graph.Node {
 	kind := graph.NodeFunction
 	id := graph.FunctionID(state.dir, fn.Name.Name)
 	name := fn.Name.Name
+	startLine := fset.Position(fn.Pos()).Line
 	if fn.Recv != nil {
 		kind = graph.NodeMethod
 		receiver := receiverName(fn)
@@ -218,10 +414,12 @@ func functionNode(fset *token.FileSet, state *packageState, path string, fn *ast
 		Name:      name,
 		Path:      path,
 		Package:   packageQualifier(state.dir, state.name),
-		StartLine: fset.Position(fn.Pos()).Line,
+		StartLine: startLine,
 		EndLine:   fset.Position(fn.End()).Line,
 		Meta: map[string]string{
-			"language": "go",
+			"confidence": "extracted",
+			"evidence":   sourceEvidence(path, startLine),
+			"language":   "go",
 		},
 	}
 }
@@ -231,6 +429,18 @@ func functionNodeID(state *packageState, fn *ast.FuncDecl) string {
 		return graph.FunctionID(state.dir, fn.Name.Name)
 	}
 	return graph.MethodID(state.dir, receiverName(fn), fn.Name.Name)
+}
+
+func singleResultType(results *ast.FieldList) string {
+	if results == nil || len(results.List) != 1 {
+		return ""
+	}
+	field := results.List[0]
+	// A single field can declare multiple named results: (left, right Value).
+	if len(field.Names) > 1 {
+		return ""
+	}
+	return receiverBase(field.Type)
 }
 
 func typeAndValueNodes(fset *token.FileSet, state *packageState, path string, decl *ast.GenDecl) ([]graph.Node, []graph.Edge) {
@@ -246,37 +456,43 @@ func typeAndValueNodes(fset *token.FileSet, state *packageState, path string, de
 			case *ast.InterfaceType:
 				kind = graph.NodeInterface
 			}
+			startLine := fset.Position(s.Pos()).Line
 			node := graph.Node{
 				ID:        graph.TypeID(state.dir, s.Name.Name),
 				Kind:      kind,
 				Name:      s.Name.Name,
 				Path:      path,
 				Package:   packageQualifier(state.dir, state.name),
-				StartLine: fset.Position(s.Pos()).Line,
+				StartLine: startLine,
 				EndLine:   fset.Position(s.End()).Line,
 				Meta: map[string]string{
-					"language": "go",
+					"confidence": "extracted",
+					"evidence":   sourceEvidence(path, startLine),
+					"language":   "go",
 				},
 			}
 			nodes = append(nodes, node)
-			edges = append(edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(path), To: node.ID})
+			edges = append(edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(path), To: node.ID, Meta: extractedMeta(path, startLine)})
 		case *ast.ValueSpec:
 			for _, name := range s.Names {
+				startLine := fset.Position(name.Pos()).Line
 				node := graph.Node{
 					ID:        graph.TypeID(state.dir, name.Name),
 					Kind:      graph.NodeVariable,
 					Name:      name.Name,
 					Path:      path,
 					Package:   packageQualifier(state.dir, state.name),
-					StartLine: fset.Position(name.Pos()).Line,
+					StartLine: startLine,
 					EndLine:   fset.Position(name.End()).Line,
 					Meta: map[string]string{
-						"language": "go",
-						"decl":     strings.ToLower(decl.Tok.String()),
+						"confidence": "extracted",
+						"decl":       strings.ToLower(decl.Tok.String()),
+						"evidence":   sourceEvidence(path, startLine),
+						"language":   "go",
 					},
 				}
 				nodes = append(nodes, node)
-				edges = append(edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(path), To: node.ID})
+				edges = append(edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(path), To: node.ID, Meta: extractedMeta(path, startLine)})
 			}
 		}
 	}
@@ -295,37 +511,61 @@ func receiverName(fn *ast.FuncDecl) string {
 	}
 }
 
-func importsByAlias(file *ast.File) map[string]string {
-	out := map[string]string{}
+func importsByAlias(fset *token.FileSet, path string, file *ast.File) map[string]importBinding {
+	out := map[string]importBinding{}
 	for _, spec := range file.Imports {
 		importPath := strings.Trim(spec.Path.Value, `"`)
 		alias := filepath.Base(importPath)
 		if spec.Name != nil {
 			alias = spec.Name.Name
 		}
-		out[alias] = importPath
+		if alias == "_" || alias == "." {
+			continue
+		}
+		out[alias] = importBinding{
+			path:     importPath,
+			evidence: sourceEvidence(path, fset.Position(spec.Pos()).Line),
+		}
 	}
 	return out
 }
 
-func collectCalls(fset *token.FileSet, body *ast.BlockStmt) []callSite {
-	seen := map[string]bool{}
+func collectCalls(fset *token.FileSet, fn *ast.FuncDecl) []callSite {
+	bindings, locals := receiverBindings(fn)
 	var calls []callSite
-	ast.Inspect(body, func(n ast.Node) bool {
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		name := callName(call.Fun)
+		fun := callableExpr(call.Fun)
+		name := callName(fun)
 		if name == "" {
 			return true
 		}
-		key := name + "@" + intString(fset.Position(call.Pos()).Line)
-		if seen[key] {
-			return true
+		position := fset.Position(call.Pos())
+		site := callSite{
+			Name:             name,
+			ConversionSyntax: conversionSyntax(fun),
+			Line:             position.Line,
+			Column:           position.Column,
 		}
-		seen[key] = true
-		calls = append(calls, callSite{Name: name, Line: fset.Position(call.Pos()).Line})
+		switch target := fun.(type) {
+		case *ast.Ident:
+			site.IdentifierIsLocal = locals[target.Name]
+			site.Predeclared = types.Universe.Lookup(target.Name) != nil
+		case *ast.SelectorExpr:
+			site.Selector = target.Sel.Name
+			site.Receiver = exprString(unparen(target.X))
+			site.ReceiverType = inferReceiverType(target.X, bindings)
+			if ident, ok := unparen(target.X).(*ast.Ident); ok {
+				site.ReceiverIsLocal = locals[ident.Name]
+			}
+		}
+		calls = append(calls, site)
 		return true
 	})
 	return calls
@@ -342,28 +582,398 @@ func callName(expr ast.Expr) string {
 		}
 		return x + "." + e.Sel.Name
 	default:
-		return exprString(expr)
+		return ""
 	}
 }
 
-func resolveCall(state *packageState, imports map[string]string, call callSite) (string, bool) {
-	if id, ok := state.functions[call.Name]; ok {
-		return id, true
-	}
-	if strings.Contains(call.Name, ".") {
-		parts := strings.Split(call.Name, ".")
-		if len(parts) == 2 {
-			if importPath, ok := imports[parts[0]]; ok {
-				return graph.ImportID(importPath), true
-			}
-			for key, id := range state.methods {
-				if strings.HasSuffix(key, "."+parts[1]) {
-					return id, true
+func resolveCall(state *packageState, localPackages map[string]*packageState, imports map[string]importBinding, caller, path string, call callSite) callResolution {
+	evidence := sourceEvidence(path, call.Line)
+	if call.Selector == "" {
+		if !call.IdentifierIsLocal {
+			if id, ok := state.functions[call.Name]; ok {
+				return callResolution{
+					to:        id,
+					evidence:  evidence,
+					rationale: "callee identifier matches a parsed function in the same package",
+					resolved:  true,
 				}
 			}
 		}
+		if (!call.IdentifierIsLocal && !state.declaredValues[call.Name] && call.Predeclared) || state.definedTypes[call.Name] || call.ConversionSyntax {
+			return callResolution{suppressed: true}
+		}
+		return unresolvedCall(caller, path, call, evidence, "callee identifier could not be matched to a parsed function")
 	}
-	return graph.UnresolvedCallID(call.Name), false
+
+	receiverType := call.ReceiverType
+	if receiverType == "" && !call.ReceiverIsLocal {
+		if syntacticType := receiverTypeBase(call.Receiver); state.definedTypes[syntacticType] {
+			receiverType = syntacticType
+		}
+	}
+	if receiverType != "" {
+		if id, ok := uniqueMethodTarget(state, receiverType, call.Selector); ok {
+			return callResolution{
+				to:        id,
+				evidence:  evidence,
+				rationale: "receiver type and selector uniquely match a parsed method in the same package",
+				resolved:  true,
+			}
+		}
+		if targetState, targetType, rationale, ok := importedReceiverTarget(state, localPackages, imports, receiverType); ok {
+			if id, unique := uniqueMethodTarget(targetState, targetType, call.Selector); unique {
+				return callResolution{
+					to:        id,
+					evidence:  evidence,
+					rationale: rationale,
+					resolved:  true,
+				}
+			}
+		}
+		if imported, typeName, ok := externalReceiverTarget(state, localPackages, imports, receiverType); ok {
+			name := typeName + "." + call.Selector
+			return callResolution{
+				to:             graph.ExternalFunctionID(imported.path, name),
+				name:           name,
+				importPath:     imported.path,
+				importEvidence: imported.evidence,
+				evidence:       evidence,
+				rationale:      "receiver type is qualified by a parsed external import; external method existence is not type-checked",
+				resolved:       true,
+				external:       true,
+			}
+		}
+	}
+
+	if !call.ReceiverIsLocal {
+		if imported, ok := imports[call.Receiver]; ok {
+			if targetState, local := localPackages[imported.path]; local {
+				if id, found := targetState.functions[call.Selector]; found {
+					return callResolution{
+						to:        id,
+						evidence:  evidence,
+						rationale: "parsed import alias maps to a parsed local package function",
+						resolved:  true,
+					}
+				}
+				if targetState.definedTypes[call.Selector] {
+					return callResolution{suppressed: true}
+				}
+				return unresolvedCall(caller, path, call, evidence, "parsed import alias maps to a local package, but the selector does not match a parsed function")
+			}
+			return callResolution{
+				to:             graph.ExternalFunctionID(imported.path, call.Selector),
+				name:           call.Selector,
+				importPath:     imported.path,
+				importEvidence: imported.evidence,
+				evidence:       evidence,
+				rationale:      "selector is qualified by a parsed import alias; external symbol existence is not type-checked",
+				resolved:       true,
+				external:       true,
+			}
+		}
+	}
+
+	rationale := "selector receiver type could not be resolved uniquely"
+	if receiverType != "" {
+		rationale = "known receiver type did not uniquely match a parsed method"
+	}
+	return unresolvedCall(caller, path, call, evidence, rationale)
+}
+
+const callResultPrefix = "call-result:"
+
+func importedReceiverTarget(state *packageState, localPackages map[string]*packageState, imports map[string]importBinding, receiverType string) (*packageState, string, string, bool) {
+	if qualifier, function, ok := parseCallResult(receiverType); ok {
+		targetState := state
+		if qualifier != "" {
+			imported, found := imports[qualifier]
+			if !found {
+				return nil, "", "", false
+			}
+			targetState = localPackages[imported.path]
+			if targetState == nil {
+				return nil, "", "", false
+			}
+		}
+		resultType := targetState.functionResults[function]
+		if resultType == "" {
+			return nil, "", "", false
+		}
+		return targetState, resultType, "parsed constructor result type and selector uniquely match a parsed local method", true
+	}
+
+	qualifier, typeName, ok := strings.Cut(receiverTypeBase(receiverType), ".")
+	if !ok || qualifier == "" || typeName == "" {
+		return nil, "", "", false
+	}
+	imported, found := imports[qualifier]
+	if !found {
+		return nil, "", "", false
+	}
+	targetState := localPackages[imported.path]
+	if targetState == nil || !targetState.definedTypes[receiverTypeBase(typeName)] {
+		return nil, "", "", false
+	}
+	return targetState, typeName, "parsed imported receiver type and selector uniquely match a parsed local method", true
+}
+
+func externalReceiverTarget(state *packageState, localPackages map[string]*packageState, imports map[string]importBinding, receiverType string) (importBinding, string, bool) {
+	if qualifier, function, ok := parseCallResult(receiverType); ok {
+		if qualifier != "" {
+			return importBinding{}, "", false
+		}
+		receiverType = state.functionResults[function]
+	}
+	qualifier, typeName, ok := strings.Cut(receiverTypeBase(receiverType), ".")
+	if !ok || qualifier == "" || typeName == "" {
+		return importBinding{}, "", false
+	}
+	imported, found := imports[qualifier]
+	if !found || localPackages[imported.path] != nil {
+		return importBinding{}, "", false
+	}
+	return imported, receiverTypeBase(typeName), true
+}
+
+func parseCallResult(receiverType string) (string, string, bool) {
+	if !strings.HasPrefix(receiverType, callResultPrefix) {
+		return "", "", false
+	}
+	qualified := strings.TrimPrefix(receiverType, callResultPrefix)
+	if qualified == "" {
+		return "", "", false
+	}
+	qualifier, function, found := strings.Cut(qualified, ".")
+	if !found {
+		return "", qualified, true
+	}
+	if qualifier == "" || function == "" || strings.Contains(function, ".") {
+		return "", "", false
+	}
+	return qualifier, function, true
+}
+
+func unresolvedCall(caller, path string, call callSite, evidence, rationale string) callResolution {
+	return callResolution{
+		to:        graph.UnresolvedCallSiteID(caller, path, call.Name, call.Line, call.Column),
+		evidence:  evidence,
+		rationale: rationale,
+	}
+}
+
+func uniqueMethodTarget(state *packageState, receiverType, selector string) (string, bool) {
+	base := receiverTypeBase(receiverType)
+	if base == "" {
+		return "", false
+	}
+	ids := map[string]bool{}
+	for _, candidate := range state.methods[selector] {
+		if candidate.base == base {
+			ids[candidate.id] = true
+		}
+	}
+	if len(ids) != 1 {
+		return "", false
+	}
+	for id := range ids {
+		return id, true
+	}
+	return "", false
+}
+
+func receiverBindings(fn *ast.FuncDecl) (map[string]string, map[string]bool) {
+	bindings := map[string]string{}
+	locals := map[string]bool{}
+	candidates := map[string]map[string]bool{}
+	uncertain := map[string]bool{}
+	record := func(name, receiverType string) {
+		if receiverType == "" {
+			uncertain[name] = true
+			delete(bindings, name)
+			return
+		}
+		if candidates[name] == nil {
+			candidates[name] = map[string]bool{}
+		}
+		candidates[name][receiverType] = true
+		if uncertain[name] || len(candidates[name]) != 1 {
+			delete(bindings, name)
+			return
+		}
+		bindings[name] = receiverType
+	}
+	bindFields := func(fields *ast.FieldList) {
+		if fields == nil {
+			return
+		}
+		for _, field := range fields.List {
+			base := receiverBase(field.Type)
+			for _, name := range field.Names {
+				locals[name.Name] = true
+				record(name.Name, base)
+			}
+		}
+	}
+	bindFields(fn.Recv)
+	if fn.Type != nil {
+		bindFields(fn.Type.Params)
+		bindFields(fn.Type.Results)
+	}
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		switch statement := n.(type) {
+		case *ast.DeclStmt:
+			decl, ok := statement.Decl.(*ast.GenDecl)
+			if !ok {
+				return true
+			}
+			for _, spec := range decl.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				explicitType := receiverBase(value.Type)
+				for i, name := range value.Names {
+					locals[name.Name] = true
+					inferred := explicitType
+					if inferred == "" && i < len(value.Values) {
+						inferred = inferReceiverType(value.Values[i], bindings)
+					}
+					record(name.Name, inferred)
+				}
+			}
+		case *ast.AssignStmt:
+			for i, left := range statement.Lhs {
+				name, ok := unparen(left).(*ast.Ident)
+				if !ok || name.Name == "_" {
+					continue
+				}
+				if statement.Tok != token.DEFINE {
+					continue
+				}
+				locals[name.Name] = true
+				inferred := ""
+				if i < len(statement.Rhs) {
+					inferred = inferReceiverType(statement.Rhs[i], bindings)
+				}
+				record(name.Name, inferred)
+			}
+		case *ast.RangeStmt:
+			if statement.Tok != token.DEFINE {
+				return true
+			}
+			for _, expression := range []ast.Expr{statement.Key, statement.Value} {
+				if name, ok := expression.(*ast.Ident); ok && name.Name != "_" {
+					locals[name.Name] = true
+					record(name.Name, "")
+				}
+			}
+		}
+		return true
+	})
+	return bindings, locals
+}
+
+func inferReceiverType(expr ast.Expr, bindings map[string]string) string {
+	expr = unparen(expr)
+	switch value := expr.(type) {
+	case *ast.Ident:
+		return bindings[value.Name]
+	case *ast.CompositeLit:
+		return receiverBase(value.Type)
+	case *ast.UnaryExpr:
+		if value.Op == token.AND {
+			return inferReceiverType(value.X, bindings)
+		}
+	case *ast.StarExpr:
+		return inferReceiverType(value.X, bindings)
+	case *ast.TypeAssertExpr:
+		return receiverBase(value.Type)
+	case *ast.CallExpr:
+		switch function := callableExpr(value.Fun).(type) {
+		case *ast.Ident:
+			if function.Name == "new" && len(value.Args) == 1 {
+				return receiverBase(value.Args[0])
+			}
+			return callResultPrefix + function.Name
+		case *ast.SelectorExpr:
+			if qualifier, ok := unparen(function.X).(*ast.Ident); ok {
+				return callResultPrefix + qualifier.Name + "." + function.Sel.Name
+			}
+		}
+	}
+	return ""
+}
+
+func receiverBase(expr ast.Expr) string {
+	if expr == nil {
+		return ""
+	}
+	expr = unparen(expr)
+	switch value := expr.(type) {
+	case *ast.Ident:
+		return value.Name
+	case *ast.SelectorExpr:
+		return exprString(value)
+	case *ast.StarExpr:
+		return receiverBase(value.X)
+	case *ast.IndexExpr:
+		return receiverBase(value.X)
+	case *ast.IndexListExpr:
+		return receiverBase(value.X)
+	default:
+		return ""
+	}
+}
+
+func receiverTypeBase(receiverType string) string {
+	base := strings.TrimSpace(receiverType)
+	for len(base) >= 2 && strings.HasPrefix(base, "(") && strings.HasSuffix(base, ")") {
+		base = strings.TrimSpace(base[1 : len(base)-1])
+	}
+	base = strings.TrimLeft(base, "* ")
+	if generic := strings.IndexByte(base, '['); generic >= 0 {
+		base = strings.TrimSpace(base[:generic])
+	}
+	return base
+}
+
+func callableExpr(expr ast.Expr) ast.Expr {
+	for {
+		expr = unparen(expr)
+		switch value := expr.(type) {
+		case *ast.IndexExpr:
+			expr = value.X
+		case *ast.IndexListExpr:
+			expr = value.X
+		default:
+			return expr
+		}
+	}
+}
+
+func conversionSyntax(expr ast.Expr) bool {
+	expr = unparen(expr)
+	switch expr.(type) {
+	case *ast.ArrayType, *ast.MapType, *ast.ChanType, *ast.FuncType, *ast.InterfaceType, *ast.StructType, *ast.StarExpr:
+		return true
+	default:
+		return false
+	}
+}
+
+func unparen(expr ast.Expr) ast.Expr {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = paren.X
+	}
 }
 
 func exprString(expr ast.Expr) string {
@@ -407,15 +1017,31 @@ func sortedFiles(files map[string]*fileState) []*fileState {
 	return out
 }
 
-func methodKey(receiver, name string) string {
-	return receiver + "." + name
-}
-
 func boolString(v bool) string {
 	if v {
 		return "true"
 	}
 	return "false"
+}
+
+func extractedMeta(path string, line int) map[string]string {
+	meta := map[string]string{
+		"confidence": "extracted",
+		"evidence":   sourceEvidence(path, line),
+		"path":       path,
+	}
+	if line > 0 {
+		meta["line"] = intString(line)
+	}
+	return meta
+}
+
+func sourceEvidence(path string, line int) string {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if line <= 0 {
+		return path
+	}
+	return path + ":" + intString(line)
 }
 
 func intString(v int) string {

@@ -14,8 +14,6 @@ import (
 
 var (
 	markdownLink = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
-	createTable  = regexp.MustCompile(`(?i)^\s*create\s+table\s+(?:if\s+not\s+exists\s+)?["` + "`" + `\[]?([\w.]+)`)
-	columnLine   = regexp.MustCompile(`^\s*["` + "`" + `\[]?([A-Za-z_][\w]*)["` + "`" + `\]]?\s+([A-Za-z][\w()]*)`)
 )
 
 type Analyzer struct {
@@ -36,6 +34,21 @@ func (a *Analyzer) Extensions() []string {
 
 func (a *Analyzer) Analyze(ctx context.Context, _ string, files []scan.File) (*lang.AnalysisResult, error) {
 	result := &lang.AnalysisResult{}
+	if a.language == "sql" {
+		sources := make([]sqlSource, 0, len(files))
+		for _, file := range files {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			data, err := os.ReadFile(file.AbsPath)
+			if err != nil {
+				return nil, err
+			}
+			sources = append(sources, sqlSource{file: file, content: string(data)})
+		}
+		analyzeSQLSources(sources, result)
+		return result, nil
+	}
 	for _, file := range files {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -44,19 +57,15 @@ func (a *Analyzer) Analyze(ctx context.Context, _ string, files []scan.File) (*l
 		if err != nil {
 			return nil, err
 		}
-		if a.language == "sql" {
-			analyzeSQL(file, string(data), result)
-		} else {
-			analyzeMarkdown(file, string(data), result)
-		}
+		analyzeMarkdown(file, string(data), result)
 	}
 	return result, nil
 }
 
 func analyzeMarkdown(file scan.File, content string, result *lang.AnalysisResult) {
 	documentID := graph.ContentID("document", file.Path)
-	result.Nodes = append(result.Nodes, graph.Node{ID: documentID, Kind: graph.NodeDocument, Name: file.Path, Path: file.Path, Meta: map[string]string{"confidence": "extracted"}})
-	result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(file.Path), To: documentID, Meta: map[string]string{"confidence": "extracted"}})
+	result.Nodes = append(result.Nodes, graph.Node{ID: documentID, Kind: graph.NodeDocument, Name: file.Path, Path: file.Path, Meta: extractedMeta(file.Path, 1)})
+	result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(file.Path), To: documentID, Meta: extractedMeta(file.Path, 1)})
 
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	line := 0
@@ -88,8 +97,10 @@ func analyzeMarkdown(file scan.File, content string, result *lang.AnalysisResult
 			name := strings.TrimSpace(strings.TrimSuffix(trimmed[level:], "#"))
 			if name != "" {
 				sectionID := graph.ContentID("section", file.Path, lineString(line))
-				result.Nodes = append(result.Nodes, graph.Node{ID: sectionID, Kind: graph.NodeSection, Name: name, Path: file.Path, StartLine: line, Meta: map[string]string{"level": lineString(level), "confidence": "extracted"}})
-				result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeContains, From: documentID, To: sectionID, Meta: map[string]string{"confidence": "extracted"}})
+				meta := extractedMeta(file.Path, line)
+				meta["level"] = lineString(level)
+				result.Nodes = append(result.Nodes, graph.Node{ID: sectionID, Kind: graph.NodeSection, Name: name, Path: file.Path, StartLine: line, Meta: meta})
+				result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeContains, From: documentID, To: sectionID, Meta: extractedMeta(file.Path, line)})
 			}
 		}
 		for _, match := range markdownLink.FindAllStringSubmatch(text, -1) {
@@ -98,8 +109,10 @@ func analyzeMarkdown(file scan.File, content string, result *lang.AnalysisResult
 				continue
 			}
 			refID := graph.ContentID("document-ref", target)
-			result.Nodes = append(result.Nodes, graph.Node{ID: refID, Kind: graph.NodeDocument, Name: target, Meta: map[string]string{"reference": "true", "confidence": "extracted"}})
-			result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeCites, From: documentID, To: refID, Meta: map[string]string{"line": lineString(line), "confidence": "extracted"}})
+			meta := extractedMeta(file.Path, line)
+			meta["reference"] = "true"
+			result.Nodes = append(result.Nodes, graph.Node{ID: refID, Kind: graph.NodeDocument, Name: target, Meta: meta})
+			result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeCites, From: documentID, To: refID, Meta: extractedMeta(file.Path, line)})
 		}
 	}
 }
@@ -114,48 +127,12 @@ func markdownFence(text string) string {
 	return ""
 }
 
-func analyzeSQL(file scan.File, content string, result *lang.AnalysisResult) {
-	schemaID := graph.ContentID("schema", file.Path)
-	result.Nodes = append(result.Nodes, graph.Node{ID: schemaID, Kind: graph.NodeSchema, Name: file.Path, Path: file.Path, Meta: map[string]string{"confidence": "extracted"}})
-	result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(file.Path), To: schemaID, Meta: map[string]string{"confidence": "extracted"}})
-
-	var tableID string
-	scanner := bufio.NewScanner(strings.NewReader(content))
-	line := 0
-	for scanner.Scan() {
-		line++
-		text := scanner.Text()
-		if match := createTable.FindStringSubmatch(text); len(match) == 2 {
-			name := strings.Trim(match[1], `"`+"`"+`[]`)
-			tableID = graph.ContentID("table", file.Path, strings.ToLower(name))
-			result.Nodes = append(result.Nodes, graph.Node{ID: tableID, Kind: graph.NodeTable, Name: name, Path: file.Path, StartLine: line, Meta: map[string]string{"confidence": "extracted"}})
-			result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeContains, From: schemaID, To: tableID, Meta: map[string]string{"confidence": "extracted"}})
-			continue
-		}
-		if strings.HasPrefix(strings.TrimSpace(text), ")") {
-			tableID = ""
-			continue
-		}
-		if tableID == "" {
-			continue
-		}
-		match := columnLine.FindStringSubmatch(text)
-		if len(match) != 3 || sqlConstraint(match[1]) {
-			continue
-		}
-		columnID := graph.ContentID("column", tableID, strings.ToLower(match[1]))
-		result.Nodes = append(result.Nodes, graph.Node{ID: columnID, Kind: graph.NodeColumn, Name: match[1], Path: file.Path, StartLine: line, Meta: map[string]string{"type": match[2], "confidence": "extracted"}})
-		result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeContains, From: tableID, To: columnID, Meta: map[string]string{"confidence": "extracted"}})
+func extractedMeta(path string, line int) map[string]string {
+	evidence := path
+	if line > 0 {
+		evidence += ":" + lineString(line)
 	}
-}
-
-func sqlConstraint(value string) bool {
-	switch strings.ToLower(value) {
-	case "primary", "foreign", "unique", "constraint", "check", "key":
-		return true
-	default:
-		return false
-	}
+	return map[string]string{"confidence": "extracted", "evidence": evidence, "line": lineString(line), "path": path}
 }
 
 func lineString(value int) string {

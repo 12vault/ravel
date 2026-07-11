@@ -8,11 +8,12 @@ import (
 )
 
 type Config struct {
-	Version  int
-	Mode     string
-	Scan     ScanConfig
-	Analysis AnalysisConfig
-	Output   OutputConfig
+	Version   int
+	Mode      string
+	Scan      ScanConfig
+	Analysis  AnalysisConfig
+	Retrieval RetrievalConfig
+	Output    OutputConfig
 }
 
 type ScanConfig struct {
@@ -35,6 +36,18 @@ type OutputConfig struct {
 	MarkdownReport bool
 }
 
+type RetrievalConfig struct {
+	Traversal          string
+	Direction          string
+	InferRelations     bool
+	Relations          string
+	SeedLimit          int
+	MaxDepth           int
+	MaxNodes           int
+	HubDegreeThreshold int
+	TokenBudget        int
+}
+
 func Default() Config {
 	return Config{
 		Version: 1,
@@ -50,6 +63,17 @@ func Default() Config {
 			CallGraph:      true,
 			TypeResolution: false,
 		},
+		Retrieval: RetrievalConfig{
+			Traversal:          "bfs",
+			Direction:          "both",
+			InferRelations:     true,
+			Relations:          "",
+			SeedLimit:          3,
+			MaxDepth:           2,
+			MaxNodes:           100,
+			HubDegreeThreshold: 0,
+			TokenBudget:        2000,
+		},
 		Output: OutputConfig{
 			Dir:            ".reporavel",
 			JSON:           true,
@@ -60,13 +84,23 @@ func Default() Config {
 }
 
 func Load(path string) (Config, error) {
+	return load(path, false)
+}
+
+// LoadRequired parses an explicitly requested configuration file and returns
+// an error instead of silently falling back when the path is absent.
+func LoadRequired(path string) (Config, error) {
+	return load(path, true)
+}
+
+func load(path string, required bool) (Config, error) {
 	cfg := Default()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) && !required {
 			return cfg, nil
 		}
-		return cfg, err
+		return cfg, fmt.Errorf("read config %s: %w", path, err)
 	}
 
 	section := ""
@@ -177,6 +211,51 @@ func applyValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		cfg.Analysis.TypeResolution = parsed
+	case "retrieval.traversal":
+		cfg.Retrieval.Traversal = strings.ToLower(value)
+	case "retrieval.direction":
+		cfg.Retrieval.Direction = strings.ToLower(value)
+	case "retrieval.inferRelations":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Retrieval.InferRelations = parsed
+	case "retrieval.relations":
+		if strings.EqualFold(value, "all") {
+			value = ""
+		}
+		cfg.Retrieval.Relations = value
+	case "retrieval.seedLimit":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Retrieval.SeedLimit = int(parsed)
+	case "retrieval.maxDepth":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Retrieval.MaxDepth = int(parsed)
+	case "retrieval.maxNodes":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Retrieval.MaxNodes = int(parsed)
+	case "retrieval.hubDegreeThreshold":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Retrieval.HubDegreeThreshold = int(parsed)
+	case "retrieval.tokenBudget":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Retrieval.TokenBudget = int(parsed)
 	case "output.dir":
 		cfg.Output.Dir = value
 	case "output.json":
@@ -222,6 +301,27 @@ func validate(cfg Config) error {
 	if cfg.Analysis.TypeResolution {
 		return fmt.Errorf("analysis.typeResolution is not implemented")
 	}
+	if cfg.Retrieval.Traversal != "bfs" && cfg.Retrieval.Traversal != "dfs" {
+		return fmt.Errorf("retrieval.traversal must be bfs or dfs")
+	}
+	if cfg.Retrieval.Direction != "out" && cfg.Retrieval.Direction != "in" && cfg.Retrieval.Direction != "both" {
+		return fmt.Errorf("retrieval.direction must be out, in, or both")
+	}
+	if cfg.Retrieval.SeedLimit < 1 || cfg.Retrieval.SeedLimit > 20 {
+		return fmt.Errorf("retrieval.seedLimit must be between 1 and 20")
+	}
+	if cfg.Retrieval.MaxDepth < 1 || cfg.Retrieval.MaxDepth > 8 {
+		return fmt.Errorf("retrieval.maxDepth must be between 1 and 8")
+	}
+	if cfg.Retrieval.MaxNodes < 1 || cfg.Retrieval.MaxNodes > 10000 {
+		return fmt.Errorf("retrieval.maxNodes must be between 1 and 10000")
+	}
+	if cfg.Retrieval.HubDegreeThreshold < -1 {
+		return fmt.Errorf("retrieval.hubDegreeThreshold must be -1, 0, or positive")
+	}
+	if cfg.Retrieval.TokenBudget < 128 || cfg.Retrieval.TokenBudget > 100000 {
+		return fmt.Errorf("retrieval.tokenBudget must be between 128 and 100000")
+	}
 	if cfg.Output.SQLite {
 		return fmt.Errorf("output.sqlite is not implemented")
 	}
@@ -233,7 +333,7 @@ func validate(cfg Config) error {
 
 func knownSection(section string) bool {
 	switch section {
-	case "permissions", "scan", "analysis", "output":
+	case "permissions", "scan", "analysis", "retrieval", "output":
 		return true
 	default:
 		return false
@@ -308,6 +408,17 @@ analysis:
   schemas: true
   callGraph: true
   typeResolution: false
+
+retrieval:
+  traversal: bfs
+  direction: both
+  inferRelations: true
+  relations: all
+  seedLimit: 3
+  maxDepth: 2
+  maxNodes: 100
+  hubDegreeThreshold: 0
+  tokenBudget: 2000
 
 output:
   dir: ".reporavel"

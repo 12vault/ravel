@@ -36,6 +36,14 @@ for target in [root / "plugins/ravel/skills/ravel", root / ".agents/plugins/plug
     if actual != expected:
         raise SystemExit(f"{target / 'bin'}: expected {sorted(expected)}, found {sorted(actual)}")
 
+codex_target = root / ".codex/skills/ravel"
+if (codex_target / "SKILL.md").read_bytes() != (source / "skill.md").read_bytes():
+    raise SystemExit(f"{codex_target}: stale SKILL.md")
+for directory in ("references", "agents", "scripts"):
+    comparison = filecmp.dircmp(source / directory, codex_target / directory)
+    if comparison.left_only or comparison.right_only or comparison.diff_files or comparison.funny_files:
+        raise SystemExit(f"{codex_target / directory}: package drift")
+
 left = root / "plugins/ravel/skills/ravel/bin"
 right = root / ".agents/plugins/plugins/ravel/skills/ravel/bin"
 for name in expected:

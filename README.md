@@ -111,6 +111,24 @@ Search for files, packages, types, functions, or methods:
 ravel query "SessionManager"
 ```
 
+Retrieve a connected, token-bounded explanation for a natural-language question:
+
+```sh
+ravel context "how does SessionManager create and persist a session?"
+```
+
+`ravel context` combines Unicode-aware BM25F/IDF ranking, multiple lexical seeds, and deterministic graph traversal. It defaults to bidirectional BFS at depth 2, suppresses expansion through non-seed super-hubs, and keeps every discovered node beside the edge that explains why it was included. The compact text payload is conservatively bounded to about 2,000 tokens by default.
+
+Useful controls include:
+
+```sh
+ravel context --traversal dfs --direction out --max-depth 3 "authentication flow"
+ravel context --relations calls,references --token-budget 1200 "who reaches CreateSession?"
+ravel context --json "what imports the storage package?"
+```
+
+When no explicit `--relations` filter is supplied, Ravel can infer one from words such as “called,” “imports,” “inherits,” or “tested.” Use `--infer-relations=false` to traverse every available relationship. `--json` returns the same selected context in a machine-readable envelope; `estimatedTokens` measures the compact text payload, so JSON field-name and formatting overhead is intentionally not included.
+
 Explain a file or symbol and show its immediate relationships:
 
 ```sh
@@ -125,11 +143,13 @@ ravel path "main" "CreateSession"
 
 Add `--json` to `query`, `explain`, or `path` when another tool will consume the result.
 
-Natural-language wording is accepted for lexical graph search:
+Natural-language wording is accepted for compact lexical graph search:
 
 ```sh
 ravel query "which parts handle authentication?"
 ```
+
+Use `query` when a short ranked list is enough. Use `context` when the relationships around the matches are part of the answer.
 
 Focused graph workflows are first-class commands:
 
@@ -184,7 +204,7 @@ Ravel is local-first and audit-first.
 - Analysis, graph, query, dashboard, and corpus commands make no network requests and never call an LLM. Only the explicit `ravel self-update` command accesses the release server.
 - `ravel extract` may execute a discovered, allowlisted local extractor (`pdftotext`, `mutool`, or `pandoc`) only when the user invokes that command.
 - Agent roles run only through the installed skill and the host assistant's normal permission model.
-- `.env` files, private-key formats, databases, archives, binary media, dependency folders, and common build output are ignored by default.
+- `.gitignore` rules, symlinks, `.env` files, private-key formats, credential directories, databases, archives, binary media, dependency folders, and common build output are rejected before file content is read.
 - Default limits are 1 MiB per file and 100 MiB total input.
 - Output goes to `.reporavel/` unless another directory is explicitly selected.
 - Unresolved calls stay unresolved instead of being presented as certain matches.
@@ -216,6 +236,21 @@ ravel update .
 
 Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` for topology-only output. The `output.json` and `output.markdownReport` switches control which artifacts are written.
 
+The connected retriever can also be configured once for agents and benchmarks:
+
+```yaml
+retrieval:
+  traversal: bfs
+  direction: both
+  inferRelations: true
+  relations: all
+  seedLimit: 3
+  maxDepth: 2
+  maxNodes: 100
+  hubDegreeThreshold: 0 # automatic p99 with a floor of 50; -1 disables
+  tokenBudget: 2000
+```
+
 ## Agent workflow
 
 The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a progressive agent workflow for technical maps, architecture understanding, business domains, change impact, documents, PDFs, schemas, articles, and dependency-ordered learning tours. Installers and marketplace packages publish it as the required uppercase `SKILL.md`.
@@ -226,7 +261,7 @@ The intended loop is:
 2. Build deterministic graph facts with user consent.
 3. Run `ravel plan <route> --json` to create bounded, dependency-aware agent tasks.
 4. Dispatch the seven packaged agents in ready waves and validate every returned fragment with `ravel ingest`.
-5. Use `query`, `explain`, `path`, and `dashboard` for exploration.
+5. Use `context` for bounded relationship questions, `query` for exact lookups, and `explain`, `path`, and `dashboard` for focused exploration.
 
 Use `ravel tools` before document, PDF, or schema work. It discovers local extractors and database clients without executing them. `ravel extract <audited-file>` then processes PDF, DOCX, ODT, RTF, Markdown, or text locally into `.reporavel/corpus/`; it refuses unaudited paths. PDF content stays local unless the user separately authorizes an external service.
 
@@ -297,7 +332,7 @@ Maintainers prepare a synchronized release with `scripts/release.sh 0.2.0`. It u
 | Docs and schemas | Markdown and SQL extraction | Rich document, PDF, article, and schema semantics |
 | Domains and flows | Validated graph model and focused views | Domain, flow, process-step, and actor inference |
 | Learning | Centrality and tour graph views | Generated onboarding guides and dependency-ordered tours |
-| Queries | Lexical search, explain, shortest path, traversal, impact | Natural-language synthesis grounded in graph evidence |
+| Queries | IDF/BM25F search, bounded multi-seed BFS/DFS context, explain, shortest path, traversal, impact | Natural-language synthesis grounded in graph evidence |
 | Updates | Hash-aware update, Git hooks, and watch mode | Stale enrichment invalidation and targeted re-analysis |
 | Dashboard | Self-contained read-only HTML | Optional generated explanations and tours |
 
@@ -305,7 +340,7 @@ The distinction is intentional: a skill does not need a language allowlist, but 
 
 ## Benchmarks
 
-Run the local build/query performance suite with `./benchmarks/run.sh`. Run retrieval-quality evaluation with `ravel benchmark --dataset cases.jsonl`. [`benchmarks/datasets.json`](benchmarks/datasets.json) defines the common adapter contract for repository questions, LOCOMO, and LongMemEval; the executable runner reports recall, precision, reciprocal rank, latency, and graph size. External datasets and model credentials are never fetched automatically, and every published score must record dataset revision, adapter, model, configuration, and raw results.
+Run the local build/query performance suite with `./benchmarks/run.sh`. Run the checked-in relationship suite with `ravel benchmark --dataset benchmarks/ravel-retrieval.jsonl --retriever context`; use `--retriever flat` for the ranked-list baseline. [`benchmarks/datasets.json`](benchmarks/datasets.json) defines the implemented repository-question contract. Version 3 reports node recall/precision, evidence recall/precision, reciprocal rank, p50/p95 latency, compact context tokens, node and evidence recall per 1,000 tokens, truncation rate, index-build time, logical graph and dataset hashes/revisions, adapter version, Ravel version, Go version, and platform. An optional strict `--answers` ledger adds externally adjudicated accuracy, rubric key-fact coverage, total agent tokens, total spend, and provenance without retaining raw answers; see the [benchmark guide](benchmarks/README.md). Ravel does not claim native LOCOMO/LongMemEval corpus adapters and never invokes a model or judge. Every published score must retain the raw result file and configuration.
 
 ## Development
 

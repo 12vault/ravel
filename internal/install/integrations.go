@@ -128,7 +128,7 @@ func normalizeIntegration(platform string) string {
 }
 
 func instructionBody() string {
-	return "When `.reporavel/graph.json` exists, use `ravel query`, `ravel explain`, `ravel path`, and the `ravel tech|understand|learn|diff` views before broad source searches. Read `.reporavel/report.md` for an architecture overview. Treat inferred and unresolved relationships honestly."
+	return "When `.reporavel/graph.json` exists, use `ravel context` for natural-language relationship questions and `ravel query` for exact lookups before broad source searches. Use `ravel explain`, `ravel path`, and the `ravel tech|understand|learn|diff` views for focused follow-up. Read `.reporavel/report.md` for an architecture overview. Treat inferred and unresolved relationships honestly."
 }
 
 func integrationInstructions(name string) string {

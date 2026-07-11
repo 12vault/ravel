@@ -304,7 +304,7 @@ func AssistantHook(root, platform string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	message := "Ravel graph found. Prefer ravel query, explain, path, tech, understand, learn, and diff before broad source searches."
+	message := "Ravel graph found. Prefer ravel context for relationship questions, ravel query for exact lookups, then explain, path, tech, understand, learn, and diff before broad source searches."
 	if strings.EqualFold(platform, "claude") {
 		return json.Marshal(map[string]any{"hookSpecificOutput": map[string]string{
 			"hookEventName":     "PreToolUse",
@@ -317,7 +317,7 @@ func AssistantHook(root, platform string) ([]byte, error) {
 func codexInstructions() string {
 	return agentsStart + "\n" +
 		"## RepoRavel\n\n" +
-		"When `.reporavel/graph.json` exists, use `ravel query`, `ravel explain`, and `ravel path` before broad source searches. " +
+		"When `.reporavel/graph.json` exists, use `ravel context` for relationship questions and `ravel query` for exact lookups before broad source searches. Use `ravel explain` and `ravel path` for focused follow-up. " +
 		"Read `.reporavel/report.md` for an architecture overview. Treat unresolved calls as unresolved.\n" +
 		agentsEnd + "\n"
 }
