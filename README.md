@@ -46,6 +46,8 @@ ravel install --platform codex
 ravel install --project --platform codex
 ```
 
+Marketplace packages include native Ravel binaries for macOS, Linux, and Windows on amd64 and arm64. If `ravel` is not already on `PATH`, the skill uses the matching bundled binary in place, with no initial download or separate installation.
+
 Then invoke the skill in Codex:
 
 ```text
