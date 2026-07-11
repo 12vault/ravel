@@ -6,12 +6,14 @@ Ravel extracts Markdown headings and links deterministically. Ask `document-anal
 
 ## PDFs
 
-Treat PDFs as local corpus files. Extract text locally with the host's PDF tooling, preserve page numbers in node metadata, and never send the PDF externally without consent. Create `document`, `section`, `concept`, and citation nodes, then ingest the fragment.
+Run `ravel tools` to discover local PDF and document utilities, then `ravel extract <audited-path.pdf>`. Ravel prefers `pdftotext`, falls back to `mutool`, writes only under `.reporavel/corpus/`, and preserves page breaks. Never send the PDF externally without consent. Give the extracted local text to `document-article-analyzer`, preserve page numbers in node metadata, then ingest its document, section, concept, and citation fragment. If no local extractor exists, report the missing tool instead of silently uploading the PDF.
 
 ## Schemas
 
-Ravel deterministically extracts basic SQL tables and columns. Ask `document-analyzer` or `domain-analyzer` to add foreign-key meaning, bounded contexts, ownership, data flows, and links to application code. Mark parser facts `extracted` and inferred business meaning `inferred`.
+Ravel deterministically extracts basic SQL tables and columns. `ravel tools` reports locally available SQLite, PostgreSQL, and MySQL inspection tools. Ask `document-article-analyzer` or `domain-analyzer` to add foreign-key meaning, bounded contexts, ownership, data flows, and links to application code. Mark parser facts `extracted` and inferred business meaning `inferred`.
 
 ## Mixed corpus
 
 Join code, docs, PDFs, and schemas in one graph. Prefer explicit citations, matching identifiers, manifest references, and schema usage before semantic inference.
+
+For DOCX, ODT, and RTF sources, use `ravel extract`; it runs local Pandoc only after the explicit command. Plain text and Markdown use the built-in copier. Extraction refuses paths that are absent from the audited graph.

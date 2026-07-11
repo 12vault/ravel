@@ -40,12 +40,26 @@ func TestInstallAndUninstallSkillForEveryPlatform(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "references", "workflows.md")); err != nil {
 					t.Fatalf("installed references missing: %v", err)
 				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "agents", "code-analyzer.md")); err != nil {
+					t.Fatalf("installed agents missing: %v", err)
+				}
+				bootstrap := filepath.Join(filepath.Dir(dst), "scripts", "bootstrap.sh")
+				if info, err := os.Stat(bootstrap); err != nil || info.Mode()&0o111 == 0 {
+					t.Fatalf("installed executable bootstrap missing: %v, mode %v", err, infoMode(info))
+				}
 				if _, removed, err := UninstallSkill(opts); err != nil || !removed {
 					t.Fatalf("UninstallSkill() = removed %v, err %v", removed, err)
 				}
 			}
 		})
 	}
+}
+
+func infoMode(info os.FileInfo) os.FileMode {
+	if info == nil {
+		return 0
+	}
+	return info.Mode()
 }
 
 func TestReplaceDirectoryRestoresExistingBundleOnFailure(t *testing.T) {
@@ -148,7 +162,7 @@ func TestInstallCodexPreservesExistingConfigurationAndIsIdempotent(t *testing.T)
 
 func TestAssistantHookOnlyRespondsWhenGraphExists(t *testing.T) {
 	root := t.TempDir()
-	data, err := AssistantHook(root)
+	data, err := AssistantHook(root, "codex")
 	if err != nil || data != nil {
 		t.Fatalf("AssistantHook without graph = %q, %v", data, err)
 	}
@@ -158,8 +172,59 @@ func TestAssistantHookOnlyRespondsWhenGraphExists(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".reporavel", "graph.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	data, err = AssistantHook(root)
+	data, err = AssistantHook(root, "codex")
 	if err != nil || !strings.Contains(string(data), "systemMessage") {
 		t.Fatalf("AssistantHook with graph = %q, %v", data, err)
+	}
+}
+
+func TestNativeProjectIntegrationsAreIdempotentAndReversible(t *testing.T) {
+	for _, platform := range NativePlatforms() {
+		platform := platform
+		t.Run(platform, func(t *testing.T) {
+			root := t.TempDir()
+			paths, err := InstallIntegration(IntegrationOptions{Platform: platform, ProjectDir: root, Executable: "/opt/ravel"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := InstallIntegration(IntegrationOptions{Platform: platform, ProjectDir: root, Executable: "/opt/ravel"}); err != nil {
+				t.Fatalf("second install: %v", err)
+			}
+			for _, path := range paths {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("missing integration file %s: %v", path, err)
+				}
+			}
+			removed, err := UninstallIntegration(platform, root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range removed {
+				data, err := os.ReadFile(path)
+				if err == nil && strings.Contains(strings.ToLower(string(data)), "ravel") {
+					t.Fatalf("Ravel content remains in %s:\n%s", path, data)
+				}
+				if err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeHookUsesAdditionalContext(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".reporavel"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".reporavel", "graph.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data, err := AssistantHook(root, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "additionalContext") || !strings.Contains(string(data), "PreToolUse") {
+		t.Fatalf("unexpected Claude hook output: %s", data)
 	}
 }

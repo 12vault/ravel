@@ -23,13 +23,13 @@ Use the Go CLI for deterministic scanning, storage, queries, and validation. Use
 2. Run `ravel audit <target>` before a first build and show the user what will be read.
 3. Ask before building a missing or stale graph.
 4. Run `ravel build <target>` after consent.
-5. Use specialized agents when available and authorized; otherwise run the same roles sequentially.
-6. Validate every agent result by ingesting its fragment through `ravel ingest`.
+5. Read `references/orchestration.md`, run `ravel plan <route> --json`, and dispatch every ready role. Parallelize only tasks whose dependencies are complete.
+6. Require each role to return one fragment file. Run `ravel ingest` after each wave; stop the workflow if validation fails.
 7. Answer from graph evidence and cite `path:startLine` when available.
 
 ## Specialized roles
 
-Use five core roles plus two source-specific roles:
+Use the seven executable role prompts in `agents/`. On hosts with native subagents, dispatch those roles directly. Otherwise execute the same prompts sequentially in isolated passes.
 
 1. `project-scanner`: inventory languages, frameworks, manifests, entry points, and boundaries.
 2. `code-analyzer`: extract symbols and explicit code relationships for any language.
@@ -40,6 +40,10 @@ Use five core roles plus two source-specific roles:
 7. `document-analyzer`: extract concepts, claims, citations, schema entities, and code links from docs and PDFs.
 
 Keep each role scoped to explicit files from the audited corpus. Do not let agents scan ignored or secret-like files.
+
+## Bootstrap
+
+If `ravel version` fails, locate the packaged bootstrap script. Explain that it downloads a checksum-verified release, ask for explicit permission, and only then run it. Marketplace installation itself must never execute downloads. After installation, continue from `ravel audit`.
 
 ## Safety
 

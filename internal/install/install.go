@@ -78,28 +78,43 @@ func InstallSkill(opts SkillOptions) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", err
 	}
-	references, err := skills.ReferenceFiles()
+	support, err := skills.SupportFiles()
 	if err != nil {
 		return "", err
 	}
-	referencesDir := filepath.Join(filepath.Dir(dst), "references")
-	tmpReferences, err := os.MkdirTemp(filepath.Dir(dst), ".ravel-references-")
+	tmpBundle, err := os.MkdirTemp(filepath.Dir(dst), ".ravel-bundle-")
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(tmpReferences)
-	names := make([]string, 0, len(references))
-	for name := range references {
+	defer os.RemoveAll(tmpBundle)
+	names := make([]string, 0, len(support))
+	for name := range support {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(tmpReferences, name), references[name], 0o644); err != nil {
+		path := filepath.Join(tmpBundle, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return "", err
+		}
+		mode := os.FileMode(0o644)
+		if strings.HasPrefix(name, "scripts/") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(path, support[name], mode); err != nil {
 			return "", err
 		}
 	}
-	if err := replaceDirectory(tmpReferences, referencesDir); err != nil {
-		return "", err
+	for _, directory := range []string{"references", "agents", "scripts"} {
+		source := filepath.Join(tmpBundle, directory)
+		if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return "", err
+		}
+		if err := replaceDirectory(source, filepath.Join(filepath.Dir(dst), directory)); err != nil {
+			return "", err
+		}
 	}
 	tmp := dst + ".tmp"
 	if err := os.WriteFile(tmp, skills.Ravel, 0o644); err != nil {
@@ -153,14 +168,16 @@ func UninstallSkill(opts SkillOptions) (string, bool, error) {
 	} else if err == nil {
 		removed = true
 	}
-	referencesDir := filepath.Join(filepath.Dir(dst), "references")
-	if _, err := os.Stat(referencesDir); err == nil {
-		removed = true
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return dst, false, err
-	}
-	if err := os.RemoveAll(referencesDir); err != nil {
-		return dst, false, err
+	for _, directory := range []string{"references", "agents", "scripts"} {
+		path := filepath.Join(filepath.Dir(dst), directory)
+		if _, err := os.Stat(path); err == nil {
+			removed = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return dst, false, err
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return dst, false, err
+		}
 	}
 	removeEmptyParents(filepath.Dir(dst), scopeRoot(opts))
 	return dst, removed, nil
@@ -277,7 +294,7 @@ func UninstallCodex(projectDir string) ([]string, error) {
 	return []string{agentsPath, hooksPath}, nil
 }
 
-func AssistantHook(root string) ([]byte, error) {
+func AssistantHook(root, platform string) ([]byte, error) {
 	if root == "" {
 		root = "."
 	}
@@ -287,9 +304,14 @@ func AssistantHook(root string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	return json.Marshal(map[string]string{
-		"systemMessage": "RepoRavel graph found. Prefer ravel query, explain, and path before broad source searches.",
-	})
+	message := "Ravel graph found. Prefer ravel query, explain, path, tech, understand, learn, and diff before broad source searches."
+	if strings.EqualFold(platform, "claude") {
+		return json.Marshal(map[string]any{"hookSpecificOutput": map[string]string{
+			"hookEventName":     "PreToolUse",
+			"additionalContext": message,
+		}})
+	}
+	return json.Marshal(map[string]string{"systemMessage": message})
 }
 
 func codexInstructions() string {
