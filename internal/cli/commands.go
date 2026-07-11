@@ -22,6 +22,7 @@ import (
 	gitHooks "github.com/12ya/reporavel/internal/hooks"
 	"github.com/12ya/reporavel/internal/ingest"
 	installmgr "github.com/12ya/reporavel/internal/install"
+	"github.com/12ya/reporavel/internal/mcp"
 	"github.com/12ya/reporavel/internal/orchestrate"
 	"github.com/12ya/reporavel/internal/query"
 	"github.com/12ya/reporavel/internal/report"
@@ -37,6 +38,12 @@ import (
 var Version = "v0.1.1"
 
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	return ExecuteIO(ctx, args, os.Stdin, stdout, stderr)
+}
+
+// ExecuteIO is the injectable CLI entry point used by long-running stdio
+// integrations. Execute remains the compatibility wrapper for normal callers.
+func ExecuteIO(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		usage(stdout)
 		return nil
@@ -107,10 +114,14 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return runQuery(args[1:], stdout)
 	case "context":
 		return runContext(args[1:], stdout)
+	case "affected":
+		return runAffected(args[1:], stdout)
 	case "explain":
 		return runExplain(args[1:], stdout)
 	case "path":
 		return runPath(args[1:], stdout)
+	case "mcp":
+		return runMCP(ctx, args[1:], stdin, stdout)
 	case "tech", "understand", "learn", "docs", "pdf", "schema", "diff":
 		return runWorkflow(args[0], args[1:], stdout)
 	default:
@@ -677,6 +688,42 @@ func runContext(args []string, stdout io.Writer) error {
 	return query.WriteRetrieval(stdout, result, *jsonOut)
 }
 
+func runAffected(args []string, stdout io.Writer) error {
+	fs := newFlagSet("affected")
+	outDir := fs.String("out", ".reporavel", "graph directory")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	relations := fs.String("relations", "", "comma-separated edge kinds")
+	maxDepth := fs.Int("max-depth", 2, "incoming traversal depth")
+	maxNodes := fs.Int("max-nodes", 100, "hard node limit")
+	hubThreshold := fs.Int("hub-degree-threshold", 0, "0 for automatic, -1 to disable")
+	tokenBudget := fs.Int("token-budget", 2000, "approximate output-token budget")
+	valueFlags := []string{"out", "relations", "max-depth", "max-nodes", "hub-degree-threshold", "token-budget"}
+	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("affected requires a file, symbol, or node id")
+	}
+	g, err := store.LoadGraph(*outDir)
+	if err != nil {
+		return err
+	}
+	var edgeKinds []graph.EdgeKind
+	for _, value := range strings.Split(*relations, ",") {
+		if value = strings.TrimSpace(value); value != "" && !strings.EqualFold(value, "all") {
+			edgeKinds = append(edgeKinds, graph.EdgeKind(value))
+		}
+	}
+	result, err := query.NewIndex(g).Affected(strings.Join(fs.Args(), " "), query.RetrieveOptions{
+		Relations: edgeKinds, MaxDepth: *maxDepth, MaxNodes: *maxNodes,
+		HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
+	})
+	if err != nil {
+		return err
+	}
+	return query.WriteAffected(stdout, result, *jsonOut)
+}
+
 func runExplain(args []string, stdout io.Writer) error {
 	fs := newFlagSet("explain")
 	outDir := fs.String("out", ".reporavel", "output directory")
@@ -718,6 +765,18 @@ func runPath(args []string, stdout io.Writer) error {
 		return nil
 	}
 	return query.WritePath(stdout, nodes, *jsonOut)
+}
+
+func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
+	fs := newFlagSet("mcp")
+	outDir := fs.String("out", ".reporavel", "graph directory")
+	if err := fs.Parse(flexibleFlags(args, "out")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("mcp does not accept positional arguments")
+	}
+	return mcp.Serve(ctx, stdin, stdout, mcp.Options{OutDir: *outDir, Version: Version})
 }
 
 func runWorkflow(mode string, args []string, stdout io.Writer) error {
@@ -848,6 +907,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	configFlag := fs.String("config", configPath, "configuration file")
 	graphDir := fs.String("graph", cfg.Output.Dir, "graph directory")
 	dataset := fs.String("dataset", "", "evaluation JSONL file")
+	answers := fs.String("answers", "", "external answer-quality JSONL ledger")
 	out := fs.String("out", "-", "result JSON file or - for stdout")
 	topK := fs.Int("top-k", cfg.Retrieval.MaxNodes, "retrieval result count and context-node cap")
 	retriever := fs.String("retriever", "context", "context or flat")
@@ -862,7 +922,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	datasetRevision := fs.String("dataset-revision", "unspecified", "dataset revision or commit")
 	graphRevision := fs.String("graph-revision", "unspecified", "source revision used to build the graph")
 	adapterVersion := fs.String("adapter-version", "graph-query-jsonl-v2", "dataset adapter version")
-	valueFlags := []string{"config", "graph", "dataset", "out", "top-k", "retriever", "traversal", "direction", "relations", "seed-limit", "max-depth", "hub-degree-threshold", "token-budget", "dataset-revision", "graph-revision", "adapter-version"}
+	valueFlags := []string{"config", "graph", "dataset", "answers", "out", "top-k", "retriever", "traversal", "direction", "relations", "seed-limit", "max-depth", "hub-degree-threshold", "token-budget", "dataset-revision", "graph-revision", "adapter-version"}
 	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
 		return err
 	}
@@ -905,6 +965,9 @@ func runBenchmark(args []string, stdout io.Writer) error {
 		GraphSHA256: graphHash, GraphRevision: *graphRevision,
 	})
 	if err != nil {
+		return err
+	}
+	if err := attachAnswerLedger(&result, cases, *answers); err != nil {
 		return err
 	}
 	if *out == "-" {
@@ -1117,8 +1180,10 @@ func commandUsage(w io.Writer, command string) error {
 		"share":       "ravel share [--from <dir>] [--out ravel-graph]",
 		"report":      "ravel report [--out <dir>]",
 		"query":       "ravel query [--out <dir>] [--limit 25] [--json] <text>",
+		"affected":    "ravel affected [--out <dir>] [--json] [--max-depth 2] [--relations <kinds>] <file-or-symbol>",
 		"explain":     "ravel explain [--out <dir>] [--json] <file-or-symbol>",
 		"path":        "ravel path [--out <dir>] [--json] <from> <to>",
+		"mcp":         "ravel mcp [--out <graphdir>]",
 		"tech":        "ravel tech [--out <dir>] [--json]",
 		"understand":  "ravel understand [--out <dir>] [--json]",
 		"learn":       "ravel learn [--out <dir>] [--json]",
@@ -1134,7 +1199,7 @@ func commandUsage(w io.Writer, command string) error {
 		return nil
 	case "benchmark":
 		fmt.Fprintln(w, "Usage: ravel benchmark --dataset <cases.jsonl> [options]")
-		fmt.Fprintln(w, "Options: --config --graph --out --retriever --top-k --traversal --direction --relations --infer-relations --seed-limit --max-depth --hub-degree-threshold --token-budget --dataset-revision --graph-revision --adapter-version")
+		fmt.Fprintln(w, "Options: --config --graph --answers --out --retriever --top-k --traversal --direction --relations --infer-relations --seed-limit --max-depth --hub-degree-threshold --token-budget --dataset-revision --graph-revision --adapter-version")
 		return nil
 	}
 	line, ok := lines[command]
@@ -1162,7 +1227,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel tools")
 	fmt.Fprintln(w, "  ravel extract [--json] <audited-doc-or-pdf>...")
 	fmt.Fprintln(w, "  ravel plan [--json] <route> [paths...]")
-	fmt.Fprintln(w, "  ravel benchmark --dataset <cases.jsonl> [--retriever context|flat] [--token-budget 2000]")
+	fmt.Fprintln(w, "  ravel benchmark --dataset <cases.jsonl> [--answers <judgments.jsonl>] [--retriever context|flat] [--token-budget 2000]")
 	fmt.Fprintln(w, "  ravel audit [root]")
 	fmt.Fprintln(w, "  ravel build [root]")
 	fmt.Fprintln(w, "  ravel update [root]")
@@ -1171,8 +1236,10 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel report")
 	fmt.Fprintln(w, "  ravel query [--json] <text>")
 	fmt.Fprintln(w, "  ravel context [--json] [--token-budget 2000] [--max-depth 2] <question>")
+	fmt.Fprintln(w, "  ravel affected [--json] [--max-depth 2] [--relations calls,references] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel explain [--json] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel path [--json] <from> <to>")
+	fmt.Fprintln(w, "  ravel mcp [--out <graphdir>]")
 	fmt.Fprintln(w, "  ravel tech|understand|learn|docs|pdf|schema [--json]")
 	fmt.Fprintln(w, "  ravel diff [--json] <changed-path>...")
 }

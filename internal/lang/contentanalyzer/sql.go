@@ -1,6 +1,8 @@
 package contentanalyzer
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,7 +21,7 @@ const (
 var (
 	sqlCreateTableRE = regexp.MustCompile(`(?is)^\s*create\s+(?:temporary\s+|temp\s+)?table\s+(?:if\s+not\s+exists\s+)?(` + sqlIdentifier + `)`)
 	sqlCreateViewRE  = regexp.MustCompile(`(?is)^\s*create\s+(?:or\s+replace\s+)?(?:temporary\s+|temp\s+)?(materialized\s+)?view\s+(?:if\s+not\s+exists\s+)?(` + sqlIdentifier + `)`)
-	sqlCreateIndexRE = regexp.MustCompile(`(?is)^\s*create\s+(?:(unique)\s+)?index\s+(?:if\s+not\s+exists\s+)?(` + sqlIdentifier + `)\s+on\s+(?:only\s+)?(` + sqlIdentifier + `)`)
+	sqlCreateIndexRE = regexp.MustCompile(`(?is)^\s*create\s+(?:(unique)\s+)?index\s+(?:concurrently\s+)?(?:if\s+not\s+exists\s+)?(` + sqlIdentifier + `)\s+on\s+(?:only\s+)?(` + sqlIdentifier + `)`)
 	sqlAlterTableRE  = regexp.MustCompile(`(?is)^\s*alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(` + sqlIdentifier + `)`)
 
 	sqlLeadingIdentifierRE = regexp.MustCompile(`^\s*(` + sqlIdentifierSegment + `)`)
@@ -28,7 +30,7 @@ var (
 	sqlForeignKeyRE        = regexp.MustCompile(`(?is)(?:\bconstraint\s+` + sqlIdentifierSegment + `\s+)?\bforeign\s+key\s*\(([^)]*)\)\s*references\s+(` + sqlIdentifier + `)(?:\s*\(([^)]*)\))?`)
 	sqlInlineReferenceRE   = regexp.MustCompile(`(?is)\breferences\s+(` + sqlIdentifier + `)(?:\s*\(([^)]*)\))?`)
 	sqlRelationRE          = regexp.MustCompile(`(?is)\b(from|join)\s+(?:(?:only|lateral)\s+)*(` + sqlIdentifier + `)`)
-	sqlCTEAliasRE          = regexp.MustCompile(`(?is)(?:\bwith|,)\s*(` + sqlIdentifierSegment + `)\s+as\s*\(`)
+	sqlCTEAliasRE          = regexp.MustCompile(`(?is)(?:\bwith\s+(?:recursive\s+)?|,\s*)(` + sqlIdentifierSegment + `)\s+as\s*\(`)
 )
 
 type sqlSource struct {
@@ -394,11 +396,8 @@ func (catalog *sqlCatalog) resolve(scope, name string) *sqlObject {
 	if object := catalog.byName[sqlCatalogKey(scope, canonical)]; object != nil {
 		return object
 	}
-	if strings.Contains(canonical, ".") {
-		return nil
-	}
 	candidates := catalog.byBase[sqlCatalogKey(scope, sqlBaseName(canonical))]
-	if len(candidates) == 1 {
+	if len(candidates) == 1 && (!strings.Contains(canonical, ".") || !strings.Contains(candidates[0].canonical, ".")) {
 		return candidates[0]
 	}
 	return nil
@@ -894,7 +893,9 @@ func sqlColumnID(objectID, column string) string {
 }
 
 func sqlReferenceEdgeID(from, to, relation, discriminator string) string {
-	return graph.ContentID("sql-reference", from, to, relation, discriminator)
+	identity := strings.Join([]string{from, to, relation, discriminator}, "\x00")
+	sum := sha1.Sum([]byte(identity))
+	return "sql-reference://" + hex.EncodeToString(sum[:12])
 }
 
 func validSQLTypeStart(value byte) bool {

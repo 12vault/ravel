@@ -35,54 +35,58 @@ type graphCache struct {
 }
 
 func newGraphCache(outDir string) *graphCache {
-	return &graphCache{outDir: filepath.Clean(outDir)}
+	outDir = filepath.Clean(outDir)
+	if absolute, err := filepath.Abs(outDir); err == nil {
+		outDir = absolute
+	}
+	return &graphCache{outDir: outDir}
 }
 
 func (c *graphCache) snapshot() (*graphSnapshot, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	g, fingerprint, err := readGraphState(c.outDir)
+	data, fingerprint, err := readGraphState(c.outDir)
 	if err != nil {
 		return nil, err
 	}
 	if c.current != nil && c.current.fingerprint == fingerprint {
 		return c.current, nil
 	}
+	var g graph.Graph
+	if err := json.Unmarshal(data, &g); err != nil {
+		return nil, fmt.Errorf("decode graph state %s: %w", fingerprint.path, err)
+	}
 	c.current = &graphSnapshot{index: query.NewIndex(g), fingerprint: fingerprint}
 	return c.current, nil
 }
 
-func readGraphState(outDir string) (graph.Graph, graphFingerprint, error) {
+func readGraphState(outDir string) ([]byte, graphFingerprint, error) {
 	path, err := graphStatePath(outDir)
 	if err != nil {
-		return graph.Graph{}, graphFingerprint{}, err
+		return nil, graphFingerprint{}, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return graph.Graph{}, graphFingerprint{}, fmt.Errorf("open graph state %s: %w", path, err)
+		return nil, graphFingerprint{}, fmt.Errorf("open graph state %s: %w", path, err)
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		return graph.Graph{}, graphFingerprint{}, fmt.Errorf("stat graph state %s: %w", path, err)
+		return nil, graphFingerprint{}, fmt.Errorf("stat graph state %s: %w", path, err)
 	}
 	if info.Size() > maxGraphStateBytes {
-		return graph.Graph{}, graphFingerprint{}, fmt.Errorf("graph state %s exceeds %d bytes", path, maxGraphStateBytes)
+		return nil, graphFingerprint{}, fmt.Errorf("graph state %s exceeds %d bytes", path, maxGraphStateBytes)
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxGraphStateBytes+1))
 	if err != nil {
-		return graph.Graph{}, graphFingerprint{}, fmt.Errorf("read graph state %s: %w", path, err)
+		return nil, graphFingerprint{}, fmt.Errorf("read graph state %s: %w", path, err)
 	}
 	if int64(len(data)) > maxGraphStateBytes {
-		return graph.Graph{}, graphFingerprint{}, fmt.Errorf("graph state %s exceeds %d bytes", path, maxGraphStateBytes)
+		return nil, graphFingerprint{}, fmt.Errorf("graph state %s exceeds %d bytes", path, maxGraphStateBytes)
 	}
-	var g graph.Graph
-	if err := json.Unmarshal(data, &g); err != nil {
-		return graph.Graph{}, graphFingerprint{}, fmt.Errorf("decode graph state %s: %w", path, err)
-	}
-	return g, graphFingerprint{
+	return data, graphFingerprint{
 		path:    path,
 		size:    int64(len(data)),
 		modTime: info.ModTime(),

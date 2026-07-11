@@ -8,7 +8,25 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Verify source, tests, and packaged release
+        shell: bash
+        run: |
+          go test ./...
+          go vet ./...
+          python3 scripts/release.py "${GITHUB_REF_NAME}" --check
+          python3 scripts/test_release.py
+          git diff --check
+
   build:
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -32,6 +50,7 @@ jobs:
         env:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
         run: |
           go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
           tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
@@ -107,6 +126,7 @@ jobs:
         env:
           GOOS: windows
           GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
         run: |
           go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=$env:GITHUB_REF_NAME" -o ravel.exe ./cmd/ravel
           Compress-Archive -Path ravel.exe,LICENSE -DestinationPath "ravel_windows_$env:GOARCH.zip"

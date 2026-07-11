@@ -119,6 +119,9 @@ func LoadJSONL(path string) ([]Case, error) {
 		if len(data) == 0 {
 			continue
 		}
+		if err := ensureUniqueJSONFields(data); err != nil {
+			return nil, fmt.Errorf("dataset line %d: %w", line, err)
+		}
 		var item Case
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.DisallowUnknownFields()

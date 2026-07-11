@@ -168,6 +168,30 @@ func TestSQLResolvesAlterTableForeignKeyAndIgnoresCTEAlias(t *testing.T) {
 	}
 }
 
+func TestSQLSkipsCommentsLiteralsFunctionsAndAmbiguousReferences(t *testing.T) {
+	tables := testFile(t, "db/tables.sql", "-- CREATE TABLE fake (id UUID);\nCREATE TABLE public.users (id UUID);\nCREATE TABLE audit.users (id UUID);\n")
+	views := testFile(t, "db/views.sql", "CREATE VIEW ambiguous_users AS SELECT * FROM users;\nCREATE VIEW public_users AS SELECT * FROM public.users;\nCREATE VIEW literal_only AS SELECT 'FROM public.users' AS message;\nCREATE VIEW generated AS SELECT * FROM generate_series(1, 3);\n")
+
+	result, err := SQL().Analyze(context.Background(), "", []scan.File{views, tables})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countKind(result.Nodes, graph.NodeTable); got != 2 {
+		t.Fatalf("table nodes = %d, want 2: %#v", got, result.Nodes)
+	}
+	publicViewID := graph.ContentID("view", "db", "public_users")
+	publicUsersID := graph.ContentID("table", "db", "public.users")
+	assertSQLReference(t, result.Edges, publicViewID, publicUsersID, "from", "db/views.sql:2")
+	for _, viewName := range []string{"ambiguous_users", "literal_only", "generated"} {
+		viewID := graph.ContentID("view", "db", viewName)
+		for _, edge := range result.Edges {
+			if edge.Kind == graph.EdgeReferences && edge.From == viewID {
+				t.Fatalf("conservative view %s produced a speculative reference: %#v", viewName, edge)
+			}
+		}
+	}
+}
+
 func testFile(t *testing.T, name, content string) scan.File {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)

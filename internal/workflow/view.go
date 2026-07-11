@@ -24,7 +24,7 @@ func Build(mode string, g graph.Graph, targets []string) (View, error) {
 	view := View{Mode: mode, Languages: g.Metrics.Languages}
 	switch mode {
 	case "tech":
-		view.Nodes = nodesOfKinds(g, graph.NodePackage, graph.NodeModule, graph.NodeSchema, graph.NodeTable)
+		view.Nodes = nodesOfKinds(g, graph.NodePackage, graph.NodeModule, graph.NodeSchema, graph.NodeTable, graph.NodeView)
 		view.Summary = []string{
 			fmt.Sprintf("%d files across %d detected languages", g.Metrics.NodesByKind[graph.NodeFile], len(g.Metrics.Languages)),
 			fmt.Sprintf("%d packages/modules and %d schemas", g.Metrics.NodesByKind[graph.NodePackage]+g.Metrics.NodesByKind[graph.NodeModule], g.Metrics.NodesByKind[graph.NodeSchema]),
@@ -54,9 +54,9 @@ func Build(mode string, g graph.Graph, targets []string) (View, error) {
 		view.Edges = edgesForNodes(g, view.Nodes)
 		view.Summary = []string{fmt.Sprintf("%d PDF corpus files and %d extracted document nodes", len(pdfFiles(g)), g.Metrics.NodesByKind[graph.NodeDocument])}
 	case "schema":
-		view.Nodes = nodesOfKinds(g, graph.NodeSchema, graph.NodeTable, graph.NodeColumn)
+		view.Nodes = nodesOfKinds(g, graph.NodeSchema, graph.NodeTable, graph.NodeView, graph.NodeColumn, graph.NodeIndex)
 		view.Edges = edgesForNodes(g, view.Nodes)
-		view.Summary = []string{fmt.Sprintf("%d schemas, %d tables, %d columns", g.Metrics.NodesByKind[graph.NodeSchema], g.Metrics.NodesByKind[graph.NodeTable], g.Metrics.NodesByKind[graph.NodeColumn])}
+		view.Summary = []string{fmt.Sprintf("%d schemas, %d tables, %d views, %d columns, %d indexes", g.Metrics.NodesByKind[graph.NodeSchema], g.Metrics.NodesByKind[graph.NodeTable], g.Metrics.NodesByKind[graph.NodeView], g.Metrics.NodesByKind[graph.NodeColumn], g.Metrics.NodesByKind[graph.NodeIndex])}
 	case "diff":
 		if len(targets) == 0 {
 			view.Summary = []string{"No paths changed in the last recorded update."}

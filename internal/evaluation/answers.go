@@ -80,6 +80,9 @@ func LoadAnswerJSONL(path string) ([]AnswerRecord, error) {
 		if len(data) == 0 {
 			continue
 		}
+		if err := ensureUniqueJSONFields(data); err != nil {
+			return nil, fmt.Errorf("answer ledger line %d: %w", line, err)
+		}
 		var record AnswerRecord
 		decoder := json.NewDecoder(bytes.NewReader(data))
 		decoder.DisallowUnknownFields()
@@ -207,6 +210,46 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 		return errors.New("multiple JSON values on one line")
 	}
 	return err
+}
+
+// ensureUniqueJSONFields rejects duplicate top-level object keys before
+// encoding/json can silently let the last value win. Benchmark records are
+// intentionally flat objects, so checking the top level protects every field
+// that can affect retrieval or answer-quality scoring.
+func ensureUniqueJSONFields(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	opening, ok := token.(json.Delim)
+	if !ok || opening != '{' {
+		return errors.New("record must be a JSON object")
+	}
+
+	seen := map[string]bool{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := token.(string)
+		if !ok {
+			return errors.New("object field name must be a string")
+		}
+		if seen[name] {
+			return fmt.Errorf("duplicate field %q", name)
+		}
+		seen[name] = true
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
 }
 
 func validateAnswerRecord(record AnswerRecord) error {

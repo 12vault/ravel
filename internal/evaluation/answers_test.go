@@ -27,11 +27,12 @@ func TestLoadAnswerJSONLIsStrictAndRejectsDuplicates(t *testing.T) {
 	}
 
 	for name, content := range map[string]string{
-		"unknown-field": `{"id":"one","correct":true,"rawAnswer":"must not be stored"}`,
-		"duplicate":     "{\"id\":\"one\",\"correct\":true}\n{\"id\":\"one\",\"correct\":false}",
-		"no-score":      `{"id":"one","inputTokens":1}`,
-		"negative":      `{"id":"one","correct":true,"inputTokens":-1}`,
-		"multiple-json": `{"id":"one","correct":true} {"id":"two","correct":true}`,
+		"unknown-field":   `{"id":"one","correct":true,"rawAnswer":"must not be stored"}`,
+		"duplicate":       "{\"id\":\"one\",\"correct\":true}\n{\"id\":\"one\",\"correct\":false}",
+		"no-score":        `{"id":"one","inputTokens":1}`,
+		"negative":        `{"id":"one","correct":true,"inputTokens":-1}`,
+		"duplicate-field": `{"id":"one","correct":true,"correct":false}`,
+		"multiple-json":   `{"id":"one","correct":true} {"id":"two","correct":true}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "answers.jsonl")

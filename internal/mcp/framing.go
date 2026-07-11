@@ -12,7 +12,7 @@ import (
 
 const (
 	defaultMaxMessageBytes = 4 << 20
-	maxHeaderLineBytes      = 8 << 10
+	maxHeaderLineBytes     = 8 << 10
 )
 
 type framingMode uint8
@@ -44,14 +44,21 @@ func newTransport(in io.Reader, out io.Writer, maxBody int) *transport {
 
 func (t *transport) read() ([]byte, error) {
 	if t.mode == framingAuto {
-		first, err := t.reader.Peek(1)
-		if err != nil {
-			return nil, err
-		}
-		if first[0] == '{' || first[0] == '[' {
-			t.mode = framingNewline
-		} else {
-			t.mode = framingContentLength
+		for {
+			first, err := t.reader.Peek(1)
+			if err != nil {
+				return nil, err
+			}
+			if first[0] == '\r' || first[0] == '\n' {
+				_, _ = t.reader.ReadByte()
+				continue
+			}
+			if first[0] == '{' || first[0] == '[' || first[0] == ' ' || first[0] == '\t' {
+				t.mode = framingNewline
+			} else {
+				t.mode = framingContentLength
+			}
+			break
 		}
 	}
 	if t.mode == framingNewline {
@@ -61,22 +68,27 @@ func (t *transport) read() ([]byte, error) {
 }
 
 func (t *transport) readNewline() ([]byte, error) {
-	line, err := t.reader.ReadBytes('\n')
-	if len(line) > t.maxBody+1 {
-		return nil, fmt.Errorf("MCP message exceeds %d bytes", t.maxBody)
+	for {
+		line, err := t.reader.ReadBytes('\n')
+		if len(line) > t.maxBody+1 {
+			return nil, fmt.Errorf("MCP message exceeds %d bytes", t.maxBody)
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return nil, io.EOF
+		}
+		line = bytes.TrimSuffix(line, []byte{'\n'})
+		line = bytes.TrimSuffix(line, []byte{'\r'})
+		if len(bytes.TrimSpace(line)) == 0 {
+			if errors.Is(err, io.EOF) {
+				return nil, io.EOF
+			}
+			continue
+		}
+		return line, nil
 	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, err
-	}
-	if errors.Is(err, io.EOF) && len(line) == 0 {
-		return nil, io.EOF
-	}
-	line = bytes.TrimSuffix(line, []byte{'\n'})
-	line = bytes.TrimSuffix(line, []byte{'\r'})
-	if len(line) == 0 {
-		return nil, errors.New("empty MCP message")
-	}
-	return line, nil
 }
 
 func (t *transport) readContentLength() ([]byte, error) {

@@ -9,6 +9,9 @@ cd "$root"
 python3 scripts/release.py "$1"
 gofmt -w internal/cli/commands.go
 go test ./...
+go vet ./...
 python3 scripts/release.py "$1" --check
+python3 scripts/test_release.py
+git diff --check
 claude plugin validate .
 echo "Release files are synchronized. Review, commit, then push tag v${1#v}."

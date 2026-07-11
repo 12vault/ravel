@@ -139,6 +139,7 @@ func TestLoadJSONLRejectsAmbiguousOrMisspelledCases(t *testing.T) {
 		"duplicate-node":     `{"id":"one","dataset":"repo","question":"where","expectedNodeIds":["node://one","node://one"]}`,
 		"duplicate-evidence": `{"id":"one","dataset":"repo","question":"where","expectedEvidence":["edge://one","edge://one"]}`,
 		"duplicate-fact":     `{"id":"one","dataset":"repo","question":"where","expectedNodeIds":["node://one"],"expectedKeyFacts":["fact","fact"]}`,
+		"duplicate-field":    `{"id":"one","id":"two","dataset":"repo","question":"where","expectedNodeIds":["node://one"]}`,
 		"empty-value":        `{"id":"one","dataset":"repo","question":"where","expectedNodeIds":[""]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
