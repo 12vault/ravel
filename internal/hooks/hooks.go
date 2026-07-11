@@ -134,7 +134,7 @@ func hookSection(executable string, checkout bool) string {
 	return startMarker + "\n" +
 		guard +
 		"RAVEL_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0\n" +
-		"(cd \"$RAVEL_ROOT\" && " + shellQuote(executable) + " build . >>\"${TMPDIR:-/tmp}/ravel-hook.log\" 2>&1) &\n" +
+		"(cd \"$RAVEL_ROOT\" && " + shellQuote(executable) + " update . >>\"${TMPDIR:-/tmp}/ravel-hook.log\" 2>&1) &\n" +
 		endMarker + "\n"
 }
 

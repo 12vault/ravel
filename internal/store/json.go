@@ -74,6 +74,31 @@ func LoadGraph(outDir string) (graph.Graph, error) {
 	return g, nil
 }
 
+func LoadScan(outDir string) (scan.Result, error) {
+	data, err := os.ReadFile(filepath.Join(outDir, "files.json"))
+	if err != nil {
+		return scan.Result{}, fmt.Errorf("load files: %w", err)
+	}
+	var result scan.Result
+	if err := json.Unmarshal(data, &result); err != nil {
+		return scan.Result{}, err
+	}
+	return result, nil
+}
+
+func RewriteGraphViews(outDir string, g graph.Graph, markdown string) error {
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+	if err := WriteJSON(filepath.Join(outDir, "graph.json"), g); err != nil {
+		return err
+	}
+	if err := WriteJSON(filepath.Join(outDir, "symbols.json"), SymbolsFile{Symbols: symbols(g)}); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(outDir, "report.md"), []byte(markdown), 0644)
+}
+
 func symbols(g graph.Graph) []graph.Node {
 	var out []graph.Node
 	for _, n := range g.Nodes {

@@ -12,13 +12,16 @@ import (
 
 	buildrunner "github.com/12ya/reporavel/internal/build"
 	"github.com/12ya/reporavel/internal/config"
+	"github.com/12ya/reporavel/internal/dashboard"
 	gitHooks "github.com/12ya/reporavel/internal/hooks"
+	"github.com/12ya/reporavel/internal/ingest"
 	installmgr "github.com/12ya/reporavel/internal/install"
 	"github.com/12ya/reporavel/internal/query"
 	"github.com/12ya/reporavel/internal/report"
 	"github.com/12ya/reporavel/internal/scan"
 	"github.com/12ya/reporavel/internal/security"
 	"github.com/12ya/reporavel/internal/store"
+	updater "github.com/12ya/reporavel/internal/update"
 )
 
 var Version = "v0.1.0"
@@ -47,12 +50,18 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		return runHook(args[1:], stdout)
 	case "assistant-hook":
 		return runAssistantHook(stdout)
+	case "ingest":
+		return runIngest(args[1:], stdout)
+	case "dashboard":
+		return runDashboard(args[1:], stdout)
 	case "doctor":
 		return runDoctor(args[1:], stdout)
 	case "audit", "scan":
 		return runAudit(args[1:], stdout)
 	case "build":
 		return runBuild(ctx, args[1:], stdout)
+	case "update":
+		return runUpdate(ctx, args[1:], stdout)
 	case "report":
 		return runReport(args[1:], stdout)
 	case "query":
@@ -189,6 +198,55 @@ func runAssistantHook(stdout io.Writer) error {
 	return err
 }
 
+func runIngest(args []string, stdout io.Writer) error {
+	fs := newFlagSet("ingest")
+	outDir := fs.String("out", ".reporavel", "output directory")
+	if err := fs.Parse(flexibleFlags(args, "out")); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("ingest requires exactly one graph fragment file")
+	}
+	current, err := store.LoadGraph(*outDir)
+	if err != nil {
+		return err
+	}
+	fragment, err := ingest.Load(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	merged, err := ingest.Apply(current, fragment)
+	if err != nil {
+		return err
+	}
+	if err := store.RewriteGraphViews(*outDir, merged, report.Markdown(merged)); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Ingested %d nodes and %d edges from %s\n", len(fragment.Nodes), len(fragment.Edges), fragment.Source)
+	return nil
+}
+
+func runDashboard(args []string, stdout io.Writer) error {
+	fs := newFlagSet("dashboard")
+	outDir := fs.String("out", ".reporavel", "output directory")
+	if err := fs.Parse(flexibleFlags(args, "out")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("dashboard does not accept positional arguments")
+	}
+	g, err := store.LoadGraph(*outDir)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(*outDir, "graph.html")
+	if err := dashboard.Write(path, g); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Wrote %s\n", path)
+	return nil
+}
+
 func installedLabel(installed bool) string {
 	if installed {
 		return "installed"
@@ -287,6 +345,56 @@ func runBuild(ctx context.Context, args []string, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "Files analyzed: %d\n", len(result.Scan.Files))
 	fmt.Fprintf(stdout, "Nodes: %d\n", len(result.Graph.Nodes))
 	fmt.Fprintf(stdout, "Edges: %d\n", len(result.Graph.Edges))
+	return nil
+}
+
+func runUpdate(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := newFlagSet("update")
+	configPath := fs.String("config", ".reporavel.yaml", "config path")
+	outDir := fs.String("out", "", "output directory")
+	maxFileSize := fs.Int64("max-file-size", 0, "max file size in bytes")
+	noCallGraph := fs.Bool("no-call-graph", false, "disable AST call extraction")
+	if err := fs.Parse(flexibleFlags(args, "config", "out", "max-file-size")); err != nil {
+		return err
+	}
+	root := "."
+	if fs.NArg() > 0 {
+		root = fs.Arg(0)
+	}
+	cfg, err := loadConfigWithOverrides(*configPath, *outDir, *maxFileSize)
+	if err != nil {
+		return err
+	}
+	if *noCallGraph {
+		cfg.Analysis.CallGraph = false
+	}
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	out := cfg.Output.Dir
+	if !filepath.IsAbs(out) {
+		out = filepath.Join(absRoot, out)
+	}
+	previous, err := store.LoadGraph(out)
+	if err != nil {
+		return fmt.Errorf("update requires an existing graph: %w", err)
+	}
+	previousScan, err := store.LoadScan(out)
+	if err != nil {
+		return fmt.Errorf("update requires existing file metadata: %w", err)
+	}
+	result, err := updater.Run(ctx, root, cfg, previous, previousScan)
+	if err != nil {
+		return err
+	}
+	markdown := report.Markdown(result.Build.Graph)
+	if err := store.WriteArtifacts(out, result.Build.Graph, result.Build.Scan, markdown, cfg.Output); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Updated %s\n", out)
+	fmt.Fprintf(stdout, "Changed files: %d\n", len(result.Changed))
+	fmt.Fprintf(stdout, "Removed files: %d\n", len(result.Removed))
 	return nil
 }
 
@@ -495,9 +603,12 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel uninstall [--platform <name>] [--project]")
 	fmt.Fprintln(w, "  ravel codex <install|uninstall>")
 	fmt.Fprintln(w, "  ravel hook <install|uninstall|status> [root]")
+	fmt.Fprintln(w, "  ravel ingest [--out <dir>] <fragment.json>")
+	fmt.Fprintln(w, "  ravel dashboard [--out <dir>]")
 	fmt.Fprintln(w, "  ravel doctor")
 	fmt.Fprintln(w, "  ravel audit [root]")
 	fmt.Fprintln(w, "  ravel build [root]")
+	fmt.Fprintln(w, "  ravel update [root]")
 	fmt.Fprintln(w, "  ravel report")
 	fmt.Fprintln(w, "  ravel query [--json] <text>")
 	fmt.Fprintln(w, "  ravel explain [--json] <file-or-symbol>")
