@@ -17,12 +17,14 @@ func TestChangesFindsModifiedAddedAndRemovedFiles(t *testing.T) {
 }
 
 func TestPreserveEnrichmentDropsChangedFileNodes(t *testing.T) {
-	current := graph.NewBuilder("/repo").Build()
+	builder := graph.NewBuilder("/repo")
+	builder.AddNode(graph.Node{ID: graph.FileID("app.py"), Kind: graph.NodeFile, Name: "app.py", Path: "app.py", Meta: map[string]string{"hash": "new"}})
+	current := builder.Build()
 	previous := graph.Graph{Root: "/repo", Nodes: []graph.Node{
-		{ID: "domain://billing", Kind: graph.NodeDomain, Name: "Billing", Meta: map[string]string{"source": "domain-analyzer"}},
-		{ID: "python://app.run", Kind: graph.NodeFunction, Name: "run", Path: "app.py", Meta: map[string]string{"source": "code-analyzer"}},
+		{ID: "domain://billing", Kind: graph.NodeDomain, Name: "Billing", Meta: map[string]string{"source": "domain-analyzer", "sourceHashes": `{"app.py":"new"}`}},
+		{ID: "python://app.run", Kind: graph.NodeFunction, Name: "run", Path: "app.py", Meta: map[string]string{"source": "code-analyzer", "sourceHashes": `{"app.py":"old"}`}},
 	}}
-	merged := preserveEnrichment(current, previous, map[string]bool{"app.py": true})
+	merged := preserveEnrichment(current, previous)
 	if !hasNode(merged, "domain://billing") || hasNode(merged, "python://app.run") {
 		t.Fatalf("nodes=%#v", merged.Nodes)
 	}

@@ -45,6 +45,6 @@ Keep each role scoped to explicit files from the audited corpus. Do not let agen
 
 - Keep source and graph artifacts local unless the user explicitly authorizes an external model or service.
 - Never read `.env`, keys, certificates, credential stores, or ignored files.
-- Tag direct evidence with `confidence: extracted`; tag agent reasoning with `confidence: inferred`.
+- Include every evidence file in fragment `sourcePaths`. Tag direct evidence with `confidence: extracted` and `evidence: path:line`; tag agent reasoning with `confidence: inferred` and a concrete `rationale`.
 - Treat unresolved and ambiguous relationships honestly.
 - Never install hooks, dependencies, models, or integrations without consent.
