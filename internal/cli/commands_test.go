@@ -13,7 +13,7 @@ func TestExecutePrintsVersion(t *testing.T) {
 		if err := Execute(context.Background(), args, &stdout, &stderr); err != nil {
 			t.Fatalf("Execute(%v) error = %v", args, err)
 		}
-		want := "reporavel v0.1.0\n"
+		want := "ravel v0.1.0\n"
 		if stdout.String() != want {
 			t.Fatalf("Execute(%v) output = %q, want %q", args, stdout.String(), want)
 		}

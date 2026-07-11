@@ -33,7 +33,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error
 		usage(stdout)
 		return nil
 	case "version", "--version":
-		fmt.Fprintf(stdout, "reporavel %s\n", Version)
+		fmt.Fprintf(stdout, "ravel %s\n", Version)
 		return nil
 	case "init":
 		return runInit(args[1:], stdout)
@@ -91,7 +91,7 @@ func runInstall(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "Add to version control: git add %s\n", dst)
 	}
-	fmt.Fprintln(stdout, "Invoke it from your assistant as $reporavel (Codex) or /reporavel.")
+	fmt.Fprintln(stdout, "Invoke it from your assistant as $ravel (Codex) or /ravel.")
 	return nil
 }
 
@@ -124,7 +124,7 @@ func runUninstall(args []string, stdout io.Writer) error {
 
 func runCodex(args []string, stdout io.Writer) error {
 	if len(args) != 1 || (args[0] != "install" && args[0] != "uninstall") {
-		return errors.New("usage: reporavel codex <install|uninstall>")
+		return errors.New("usage: ravel codex <install|uninstall>")
 	}
 	if args[0] == "install" {
 		paths, err := installmgr.InstallCodex(installmgr.CodexOptions{})
@@ -144,7 +144,7 @@ func runCodex(args []string, stdout io.Writer) error {
 
 func runHook(args []string, stdout io.Writer) error {
 	if len(args) == 0 || len(args) > 2 {
-		return errors.New("usage: reporavel hook <install|uninstall|status> [root]")
+		return errors.New("usage: ravel hook <install|uninstall|status> [root]")
 	}
 	root := "."
 	if len(args) == 2 {
@@ -174,7 +174,7 @@ func runHook(args []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "post-checkout: %s\n", installedLabel(status.PostCheckout))
 		return nil
 	default:
-		return errors.New("usage: reporavel hook <install|uninstall|status> [root]")
+		return errors.New("usage: ravel hook <install|uninstall|status> [root]")
 	}
 }
 
@@ -197,7 +197,7 @@ func installedLabel(installed bool) string {
 }
 
 func PrintError(w io.Writer, err error) {
-	fmt.Fprintf(w, "reporavel: %v\n", err)
+	fmt.Fprintf(w, "ravel: %v\n", err)
 }
 
 func runInit(args []string, stdout io.Writer) error {
@@ -489,17 +489,17 @@ func usage(w io.Writer) {
 	fmt.Fprintf(w, "RepoRavel %s\n", Version)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  reporavel version")
-	fmt.Fprintln(w, "  reporavel init")
-	fmt.Fprintln(w, "  reporavel install [--platform <name>] [--project]")
-	fmt.Fprintln(w, "  reporavel uninstall [--platform <name>] [--project]")
-	fmt.Fprintln(w, "  reporavel codex <install|uninstall>")
-	fmt.Fprintln(w, "  reporavel hook <install|uninstall|status> [root]")
-	fmt.Fprintln(w, "  reporavel doctor")
-	fmt.Fprintln(w, "  reporavel audit [root]")
-	fmt.Fprintln(w, "  reporavel build [root]")
-	fmt.Fprintln(w, "  reporavel report")
-	fmt.Fprintln(w, "  reporavel query [--json] <text>")
-	fmt.Fprintln(w, "  reporavel explain [--json] <file-or-symbol>")
-	fmt.Fprintln(w, "  reporavel path [--json] <from> <to>")
+	fmt.Fprintln(w, "  ravel version")
+	fmt.Fprintln(w, "  ravel init")
+	fmt.Fprintln(w, "  ravel install [--platform <name>] [--project]")
+	fmt.Fprintln(w, "  ravel uninstall [--platform <name>] [--project]")
+	fmt.Fprintln(w, "  ravel codex <install|uninstall>")
+	fmt.Fprintln(w, "  ravel hook <install|uninstall|status> [root]")
+	fmt.Fprintln(w, "  ravel doctor")
+	fmt.Fprintln(w, "  ravel audit [root]")
+	fmt.Fprintln(w, "  ravel build [root]")
+	fmt.Fprintln(w, "  ravel report")
+	fmt.Fprintln(w, "  ravel query [--json] <text>")
+	fmt.Fprintln(w, "  ravel explain [--json] <file-or-symbol>")
+	fmt.Fprintln(w, "  ravel path [--json] <from> <to>")
 }
