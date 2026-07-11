@@ -60,16 +60,32 @@ func analyzeMarkdown(file scan.File, content string, result *lang.AnalysisResult
 
 	scanner := bufio.NewScanner(strings.NewReader(content))
 	line := 0
+	inFence := false
+	fenceMarker := ""
 	for scanner.Scan() {
 		line++
 		text := scanner.Text()
 		trimmed := strings.TrimSpace(text)
+		if marker := markdownFence(trimmed); marker != "" {
+			if !inFence {
+				inFence, fenceMarker = true, marker
+			} else if marker == fenceMarker {
+				inFence, fenceMarker = false, ""
+			}
+			continue
+		}
+		if inFence {
+			continue
+		}
 		if strings.HasPrefix(trimmed, "#") {
 			level := 0
 			for level < len(trimmed) && trimmed[level] == '#' {
 				level++
 			}
-			name := strings.TrimSpace(trimmed[level:])
+			if level > 6 || level == len(trimmed) || trimmed[level] != ' ' {
+				continue
+			}
+			name := strings.TrimSpace(strings.TrimSuffix(trimmed[level:], "#"))
 			if name != "" {
 				sectionID := graph.ContentID("section", file.Path, lineString(line))
 				result.Nodes = append(result.Nodes, graph.Node{ID: sectionID, Kind: graph.NodeSection, Name: name, Path: file.Path, StartLine: line, Meta: map[string]string{"level": lineString(level), "confidence": "extracted"}})
@@ -86,6 +102,16 @@ func analyzeMarkdown(file scan.File, content string, result *lang.AnalysisResult
 			result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeCites, From: documentID, To: refID, Meta: map[string]string{"line": lineString(line), "confidence": "extracted"}})
 		}
 	}
+}
+
+func markdownFence(text string) string {
+	if strings.HasPrefix(text, "```") {
+		return "```"
+	}
+	if strings.HasPrefix(text, "~~~") {
+		return "~~~"
+	}
+	return ""
 }
 
 func analyzeSQL(file scan.File, content string, result *lang.AnalysisResult) {
@@ -106,7 +132,11 @@ func analyzeSQL(file scan.File, content string, result *lang.AnalysisResult) {
 			result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeContains, From: schemaID, To: tableID, Meta: map[string]string{"confidence": "extracted"}})
 			continue
 		}
-		if tableID == "" || strings.HasPrefix(strings.TrimSpace(text), ")") {
+		if strings.HasPrefix(strings.TrimSpace(text), ")") {
+			tableID = ""
+			continue
+		}
+		if tableID == "" {
 			continue
 		}
 		match := columnLine.FindStringSubmatch(text)

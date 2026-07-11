@@ -21,6 +21,17 @@ func TestMarkdownExtractsSectionsAndLinks(t *testing.T) {
 	}
 }
 
+func TestMarkdownIgnoresFencedExamplesAndNonHeadings(t *testing.T) {
+	file := testFile(t, "guide.md", "# Guide\n```md\n# Example\n[Fake](fake.md)\n```\n#include <stdio.h>\n~~~\n## Also fake\n~~~\n")
+	result, err := Markdown().Analyze(context.Background(), "", []scan.File{file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countKind(result.Nodes, graph.NodeSection) != 1 || countEdges(result.Edges, graph.EdgeCites) != 0 {
+		t.Fatalf("nodes=%#v edges=%#v", result.Nodes, result.Edges)
+	}
+}
+
 func TestSQLExtractsTablesAndColumns(t *testing.T) {
 	file := testFile(t, "schema.sql", "CREATE TABLE users (\n id UUID PRIMARY KEY,\n email TEXT NOT NULL\n);\n")
 	result, err := SQL().Analyze(context.Background(), "", []scan.File{file})
@@ -28,6 +39,17 @@ func TestSQLExtractsTablesAndColumns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if countKind(result.Nodes, graph.NodeTable) != 1 || countKind(result.Nodes, graph.NodeColumn) != 2 {
+		t.Fatalf("nodes=%#v", result.Nodes)
+	}
+}
+
+func TestSQLStopsColumnsAtTableEnd(t *testing.T) {
+	file := testFile(t, "schema.sql", "CREATE TABLE users (\n id UUID\n);\nCREATE INDEX users_id ON users(id);\n")
+	result, err := SQL().Analyze(context.Background(), "", []scan.File{file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countKind(result.Nodes, graph.NodeColumn) != 1 {
 		t.Fatalf("nodes=%#v", result.Nodes)
 	}
 }
