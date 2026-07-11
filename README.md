@@ -269,9 +269,14 @@ The command downloads the selected release archive and checksum, verifies it, at
 
 After CLI changes, run `python3 scripts/sync-packages.py` to rebuild all six native binaries and copy the refreshed skill bundle into both marketplace packages. Validate the result with `python3 scripts/test_release.py`.
 
-macOS release jobs require `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_APP_PASSWORD`, and `APPLE_TEAM_ID` repository secrets. Releases fail closed when these are absent; signed binaries are notarized and assessed by Gatekeeper before publication.
+macOS release jobs use `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_APP_PASSWORD`, and `APPLE_TEAM_ID` repository secrets when available. Until those are configured, releases use ad-hoc signatures for integrity but are not notarized by Apple.
 
 Maintainers prepare a synchronized release with `scripts/release.sh 0.2.0`. It updates CLI, Claude, and Codex versions, rebuilds the bundled binaries, synchronizes every packaged skill resource, runs tests and validators, and verifies that no package drift remains. Committing and pushing tag `v0.2.0` triggers the binary release workflow.
+
+## Roadmap
+
+- Configure Apple Developer ID signing and notarization secrets for Gatekeeper-approved macOS marketplace and release binaries.
+- Replace ad-hoc macOS release signatures with mandatory Developer ID signatures after the first public MVP releases.
 
 ## Capability layers
 

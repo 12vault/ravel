@@ -35,8 +35,31 @@ jobs:
         run: |
           go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
           tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
-      - name: Import Apple Developer ID certificate
+      - name: Check Apple signing configuration
         if: matrix.os == 'darwin'
+        id: apple-signing
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if test -n "$MACOS_CERTIFICATE_P12" && \
+             test -n "$MACOS_CERTIFICATE_PASSWORD" && \
+             test -n "$MACOS_SIGNING_IDENTITY" && \
+             test -n "$APPLE_ID" && \
+             test -n "$APPLE_APP_PASSWORD" && \
+             test -n "$APPLE_TEAM_ID"; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Apple signing secrets are incomplete; publishing an ad-hoc signed macOS binary"
+          fi
+      - name: Import Apple Developer ID certificate
+        if: matrix.os == 'darwin' && steps.apple-signing.outputs.enabled == 'true'
         shell: bash
         env:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
@@ -53,7 +76,7 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           security set-key-partition-list -S apple-tool:,apple: -s -k runner "$KEYCHAIN_PATH"
       - name: Sign and notarize macOS binary
-        if: matrix.os == 'darwin'
+        if: matrix.os == 'darwin' && steps.apple-signing.outputs.enabled == 'true'
         shell: bash
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
@@ -70,6 +93,13 @@ jobs:
           ditto -c -k --keepParent ravel "$RUNNER_TEMP/ravel-notarization.zip"
           xcrun notarytool submit "$RUNNER_TEMP/ravel-notarization.zip" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
           spctl --assess --type execute --verbose=4 ravel
+          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
+      - name: Ad-hoc sign macOS binary
+        if: matrix.os == 'darwin' && steps.apple-signing.outputs.enabled != 'true'
+        shell: bash
+        run: |
+          codesign --force --sign - ravel
+          codesign --verify --strict --verbose=2 ravel
           tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
       - name: Build Windows archive
         if: matrix.os == 'windows'
