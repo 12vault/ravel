@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/12ya/reporavel/internal/config"
 )
@@ -83,8 +84,11 @@ func Scan(root string, cfg config.Config) (Result, error) {
 		}
 		lang := LanguageForPath(relPath)
 		if lang == "" {
-			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "unsupported file type"})
-			return nil
+			if !isTextFile(path) {
+				result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "binary or unsupported file type"})
+				return nil
+			}
+			lang = "unknown"
 		}
 		hash, err := fileHash(path)
 		if err != nil {
@@ -112,6 +116,21 @@ func Scan(root string, cfg config.Config) (Result, error) {
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
 	sort.Slice(result.Ignored, func(i, j int) bool { return result.Ignored[i].Path < result.Ignored[j].Path })
 	return result, nil
+}
+
+func isTextFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 8192)
+	n, err := f.Read(buf)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false
+	}
+	buf = buf[:n]
+	return !strings.ContainsRune(string(buf), '\x00') && utf8.Valid(buf)
 }
 
 func LanguageForPath(path string) string {
