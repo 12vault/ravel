@@ -2,3 +2,8 @@
 /ravel
 hatch-pet-runs/**/imagegen-jobs.json
 .DS_Store
+*.p8
+*.pem
+*.p12
+*.pfx
+__pycache__/
