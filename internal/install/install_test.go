@@ -48,6 +48,24 @@ func TestInstallAndUninstallSkillForEveryPlatform(t *testing.T) {
 	}
 }
 
+func TestReplaceDirectoryRestoresExistingBundleOnFailure(t *testing.T) {
+	root := t.TempDir()
+	destination := filepath.Join(root, "references")
+	if err := os.Mkdir(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "existing.md"), []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceDirectory(filepath.Join(root, "missing"), destination); err == nil {
+		t.Fatal("expected replacement failure")
+	}
+	data, err := os.ReadFile(filepath.Join(destination, "existing.md"))
+	if err != nil || string(data) != "keep" {
+		t.Fatalf("existing bundle was not restored: %q, %v", data, err)
+	}
+}
+
 func TestUninstallCodexRemovesFilesItCreated(t *testing.T) {
 	root := t.TempDir()
 	if _, err := InstallCodex(CodexOptions{ProjectDir: root, Executable: "/opt/ravel"}); err != nil {
