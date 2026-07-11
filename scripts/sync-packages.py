@@ -6,6 +6,7 @@ import shutil
 import os
 import re
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,11 +50,16 @@ def build_binaries(destination: Path, cache: Path) -> None:
             "GOCACHE": str(cache),
         }
         subprocess.run(
-            ["go", "build", "-trimpath", "-ldflags", f"-s -w -X github.com/12ya/reporavel/internal/cli.Version={version}", "-o", output, "./cmd/ravel"],
+            ["go", "build", "-buildvcs=false", "-trimpath", "-ldflags", f"-s -w -X github.com/12ya/reporavel/internal/cli.Version={version}", "-o", output, "./cmd/ravel"],
             cwd=ROOT,
             env=env,
             check=True,
         )
+        if sys.platform == "darwin" and system == "darwin":
+            subprocess.run(
+                ["codesign", "--force", "--sign", "-", output],
+                check=True,
+            )
         output.chmod(0o755)
 
 
