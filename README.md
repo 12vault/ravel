@@ -1,21 +1,21 @@
-# RepoRavel
+# Ravel
 
-![RepoRavel repository topology](assets/reporavel-hero.png)
+![Ravel repository topology](assets/reporavel-hero.png)
 
 **Untangle your codebase.**
 
-RepoRavel builds a local graph of a repository so developers and coding agents can understand its shape before reading files one by one.
+Ravel builds a local knowledge graph of code and documents so developers and coding agents can understand a system before reading files one by one.
 
-It maps directories, files, packages, symbols, imports, definitions, and calls into inspectable JSON artifacts and a concise Markdown report. Everything runs locally: no network requests, hosted service, embeddings, or language model required.
+The Go binary provides a fast, offline evidence layer. The bundled skill adds language-independent agent analysis for architecture, domains, flows, tours, documents, PDFs, and schemas. Agent enrichment is optional, validated, provenance-tagged, and never confused with parser-extracted facts.
 
 > [!NOTE]
-> RepoRavel is an early v0.1 project. Go has AST-level symbol and call analysis today. Other recognized file types appear in the repository topology but do not yet receive semantic analysis.
+> Native deterministic extraction currently uses Go AST, Markdown structure, and SQL schema parsing. The agent skill analyzes popular programming languages without a fixed allowlist. Ravel states both layers explicitly because deterministic evidence and agent inference have different confidence and safety properties.
 
-## Why RepoRavel?
+## Why Ravel?
 
 Coding agents are good at reading a file. The harder problem is knowing which file matters, what calls it, and how it connects to the rest of the repository.
 
-RepoRavel creates that missing map:
+Ravel creates that missing map:
 
 - Find entry points and central packages.
 - Trace calls and definitions between symbols.
@@ -26,9 +26,19 @@ RepoRavel creates that missing map:
 
 ## Quick start
 
-RepoRavel requires Go 1.26.5 or newer.
+Install the latest checksum-verified release on macOS or Linux:
 
-Install the CLI from a clone:
+```sh
+curl -fsSL https://raw.githubusercontent.com/12vault/ravel/main/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/12vault/ravel/main/install.ps1 | iex
+```
+
+Release archives also contain a portable `ravel` binary that can run in place without installation. To build from source, install Go 1.26.5 or newer and clone the repository:
 
 ```sh
 git clone https://github.com/12vault/ravel.git
@@ -46,7 +56,7 @@ ravel install --platform codex
 ravel install --project --platform codex
 ```
 
-Marketplace packages include native Ravel binaries for macOS, Linux, and Windows on amd64 and arm64. If `ravel` is not already on `PATH`, the skill uses the matching bundled binary in place, with no initial download or separate installation.
+That command installs the complete skill bundle: orchestration instructions, seven role prompts, references, and consent-gated binary bootstrap scripts. Marketplace installation provides the same bundle. If the binary is absent, the skill explains the download and asks before running its checksum-verifying bootstrap; marketplace installation never executes downloads silently.
 
 Then invoke the skill in Codex:
 
@@ -64,7 +74,7 @@ cd your-repository
 # Confirm the installed version.
 ravel version
 
-# Preview which files RepoRavel will read.
+# Preview which files Ravel will read.
 ravel audit .
 
 # Build the local graph in .reporavel/.
@@ -111,6 +121,21 @@ Natural-language wording is accepted for lexical graph search:
 ravel query "which parts handle authentication?"
 ```
 
+Focused graph workflows are first-class commands:
+
+```sh
+ravel tech
+ravel understand
+ravel learn
+ravel docs
+ravel pdf
+ravel schema
+ravel diff                 # impact from the last update
+ravel diff internal/api.go # impact from explicit paths
+```
+
+In an agent session, these routes also activate the specialized semantic roles and merge their evidence-tagged fragments.
+
 ## Generated artifacts
 
 `ravel build .` writes these files to `.reporavel/` by default:
@@ -126,6 +151,15 @@ Ravel also keeps canonical update state under `.reporavel/.state/`. Disabling JS
 
 `ravel dashboard` additionally creates `graph.html`, a dependency-free local dashboard with search, kind filters, node details, and relationship navigation.
 
+Create a reviewable team bundle that omits raw source and private scanner state:
+
+```sh
+ravel share --out ravel-graph
+git add ravel-graph
+```
+
+The bundle contains `graph.json`, `report.md`, `graph.html`, and a safety manifest. Review inferred content before committing it.
+
 The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, Markdown parser, and SQL schema parser add deterministic facts. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:
 
 ```sh
@@ -134,10 +168,12 @@ ravel ingest fragment.json
 
 ## Audit-first safety
 
-RepoRavel is deliberately small and local.
+Ravel is local-first and audit-first.
 
 - `ravel audit .` lists what will be analyzed and ignored.
-- Network access, shell execution, LLM calls, and subagents are not used.
+- Analysis, graph, query, dashboard, and corpus commands make no network requests and never call an LLM. Only the explicit `ravel self-update` command accesses the release server.
+- `ravel extract` may execute a discovered, allowlisted local extractor (`pdftotext`, `mutool`, or `pandoc`) only when the user invokes that command.
+- Agent roles run only through the installed skill and the host assistant's normal permission model.
 - `.env` files, private-key formats, databases, archives, binary media, dependency folders, and common build output are ignored by default.
 - Default limits are 1 MiB per file and 100 MiB total input.
 - Output goes to `.reporavel/` unless another directory is explicitly selected.
@@ -172,26 +208,35 @@ Configuration is strict: unknown settings, invalid values, and options that are 
 
 ## Agent workflow
 
-The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a progressive agent workflow for technical maps, architecture understanding, business domains, change impact, documents, schemas, and dependency-ordered learning tours.
+The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a progressive agent workflow for technical maps, architecture understanding, business domains, change impact, documents, PDFs, schemas, articles, and dependency-ordered learning tours. Installers and marketplace packages publish it as the required uppercase `SKILL.md`.
 
 The intended loop is:
 
 1. Audit the repository or corpus.
 2. Build deterministic graph facts with user consent.
-3. Use specialized agents for language-independent code, architecture, domain, tour, and document analysis.
-4. Validate and merge every agent fragment with `ravel ingest`.
+3. Run `ravel plan <route> --json` to create bounded, dependency-aware agent tasks.
+4. Dispatch the seven packaged agents in ready waves and validate every returned fragment with `ravel ingest`.
 5. Use `query`, `explain`, `path`, and `dashboard` for exploration.
 
-### Always-on integration and hooks
+Use `ravel tools` before document, PDF, or schema work. It discovers local extractors and database clients without executing them. `ravel extract <audited-file>` then processes PDF, DOCX, ODT, RTF, Markdown, or text locally into `.reporavel/corpus/`; it refuses unaudited paths. PDF content stays local unless the user separately authorizes an external service.
 
-Skill installation and hooks are separate. A project-scoped Codex install writes the skill, a marked section in `AGENTS.md`, and a `PreToolUse` entry in `.codex/hooks.json`. The hook reminds Codex to query an existing graph before broad source searches. It does not build a graph by itself. Codex may ask you to review and trust the new hook before it runs.
+### Native integrations and hooks
 
-These equivalent commands manage only the Codex always-on files:
+Project installs place the portable skill in the platform's native directory. For Codex, Claude Code, Cursor, VS Code/Copilot, Gemini CLI, and OpenCode, Ravel also installs owned project instructions, rules, or hooks. Existing configuration is preserved, repeated installs are idempotent, and uninstall removes only Ravel-owned content.
+
+Manage a native integration directly:
 
 ```sh
 ravel codex install
 ravel codex uninstall
+ravel claude install
+ravel cursor install
+ravel vscode install
+ravel gemini install
+ravel opencode install
 ```
+
+The Claude marketplace package lives in [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json), and the Codex marketplace package lives in [`.agents/plugins/marketplace.json`](.agents/plugins/marketplace.json). Both packages are validator-clean. The direct CLI installer remains available for every supported assistant destination.
 
 Automatic graph refresh is opt-in. Install Git `post-commit` and `post-checkout` hooks from the repository:
 
@@ -203,34 +248,45 @@ ravel hook uninstall
 
 The Git hooks launch `ravel update .` in the background and write failures to the temporary `ravel-hook.log` file. Existing hook content is preserved.
 
-## Current scope
+For live work without Git events, use polling watch mode:
 
-RepoRavel currently provides:
+```sh
+ravel watch --interval 2s .
+```
 
-- Popular-language file and directory topology without a language allowlist at the agent layer.
-- Go AST plus deterministic Markdown heading/link and SQL table/column extraction.
-- Validated graph-fragment ingestion for agent analysis of any programming language.
-- Code, document, PDF-corpus, schema, concept, domain, flow, step, and tour node vocabularies.
-- Natural-language lexical search, complete relationship explanations, and shortest-path queries.
-- Incremental graph maintenance that preserves unchanged agent enrichment.
-- A self-contained interactive HTML dashboard that needs no server or AI.
-- Seven specialized agent roles: scanner, code, architecture, tour, review, domain, and document.
-- JSON output for tools and Markdown output for humans.
-- Deterministic artifact ordering for reviewable results.
-- Global/project skill installation, Codex hooks, and opt-in Git update hooks.
+Only changed hashes trigger an update. The update invalidates stale agent enrichment and records changed paths for `ravel diff`.
 
-Not implemented yet:
+### Updating Ravel
 
-- Built-in deterministic AST analyzers for popular languages beyond Go; agents currently provide those semantics.
-- Full Go type resolution across every call form.
-- Filesystem watch mode and truly incremental parser execution.
-- Built-in PDF text extraction; the document agent currently uses host-local PDF tooling.
-- Automatic execution of the specialized agents from the standalone CLI.
-- Native integration tests for every supported assistant platform.
-- Prebuilt release binaries, Claude marketplace publishing, and a Codex skills marketplace package.
-- LOCOMO, LongMemEval, and code-graph benchmark suites.
-- An MCP server or editor integration.
-- A production SQLite index.
+Binary and manual skill installations can update together:
+
+```sh
+ravel self-update --platforms codex,claude
+ravel self-update --platforms codex,claude --project
+```
+
+The command downloads the selected release archive and checksum, verifies it, atomically replaces the binary, then refreshes only the explicitly listed skill destinations. Marketplace-managed skills update through their marketplace client.
+
+Maintainers prepare a synchronized release with `scripts/release.sh 0.2.0`. It updates CLI, Claude, and Codex versions, synchronizes every packaged skill resource, runs tests and validators, and verifies that no package drift remains. Committing and pushing tag `v0.2.0` triggers the binary release workflow.
+
+## Capability layers
+
+| Capability | Offline Go binary | Agent skill |
+| --- | --- | --- |
+| Popular languages | Safe file topology and language inventory | Symbols, references, architecture, intent, and explanations across languages |
+| Code structure | Native Go AST | Language-independent specialized code analyzer |
+| Docs and schemas | Markdown and SQL extraction | Rich document, PDF, article, and schema semantics |
+| Domains and flows | Validated graph model and focused views | Domain, flow, process-step, and actor inference |
+| Learning | Centrality and tour graph views | Generated onboarding guides and dependency-ordered tours |
+| Queries | Lexical search, explain, shortest path, traversal, impact | Natural-language synthesis grounded in graph evidence |
+| Updates | Hash-aware update, Git hooks, and watch mode | Stale enrichment invalidation and targeted re-analysis |
+| Dashboard | Self-contained read-only HTML | Optional generated explanations and tours |
+
+The distinction is intentional: a skill does not need a language allowlist, but users still need to know which facts are reproducibly parsed and which are inferred by an agent.
+
+## Benchmarks
+
+Run the local build/query performance suite with `./benchmarks/run.sh`. Run retrieval-quality evaluation with `ravel benchmark --dataset cases.jsonl`. [`benchmarks/datasets.json`](benchmarks/datasets.json) defines the common adapter contract for repository questions, LOCOMO, and LongMemEval; the executable runner reports recall, precision, reciprocal rank, latency, and graph size. External datasets and model credentials are never fetched automatically, and every published score must record dataset revision, adapter, model, configuration, and raw results.
 
 ## Development
 
@@ -245,4 +301,4 @@ The test fixture under `testdata/simple-go-service/` covers repository topology 
 
 ## License
 
-RepoRavel is available under the [MIT License](LICENSE).
+Ravel is available under the [MIT License](LICENSE).
