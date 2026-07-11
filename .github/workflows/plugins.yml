@@ -1,0 +1,90 @@
+name: Plugin packages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  package-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Rebuild marketplace packages
+        run: python3 scripts/sync-packages.py
+      - name: Reject stale bundled binaries or skill files
+        run: |
+          git diff --exit-code -- \
+            plugins/ravel/skills/ravel \
+            .agents/plugins/plugins/ravel/skills/ravel \
+            ':(exclude)plugins/ravel/skills/ravel/bin/ravel_darwin_*' \
+            ':(exclude).agents/plugins/plugins/ravel/skills/ravel/bin/ravel_darwin_*'
+      - name: Validate synchronized packages
+        run: python3 scripts/test_release.py
+
+  claude-validator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Validate Claude marketplace package
+        run: npx --yes @anthropic-ai/claude-code@2.1.207 plugin validate .
+
+  launcher-smoke:
+    name: Launcher smoke (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux amd64
+            os: ubuntu-latest
+            shell: bash
+            command: ./plugins/ravel/skills/ravel/scripts/ravel.sh version
+          - name: Windows amd64
+            os: windows-latest
+            shell: pwsh
+            command: '& "plugins/ravel/skills/ravel/scripts/ravel.ps1" version'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run bundled launcher
+        shell: ${{ matrix.shell }}
+        run: ${{ matrix.command }}
+
+  macos-security:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Rebuild signed macOS package binaries
+        run: python3 scripts/sync-packages.py
+      - name: Reject stale macOS binaries
+        run: |
+          git diff --exit-code -- \
+            plugins/ravel/skills/ravel/bin/ravel_darwin_amd64 \
+            plugins/ravel/skills/ravel/bin/ravel_darwin_arm64 \
+            .agents/plugins/plugins/ravel/skills/ravel/bin/ravel_darwin_amd64 \
+            .agents/plugins/plugins/ravel/skills/ravel/bin/ravel_darwin_arm64
+      - name: Verify embedded code signatures
+        run: |
+          codesign --verify --strict --verbose=2 plugins/ravel/skills/ravel/bin/ravel_darwin_amd64
+          codesign --verify --strict --verbose=2 plugins/ravel/skills/ravel/bin/ravel_darwin_arm64
+      - name: Run bundled launcher
+        run: plugins/ravel/skills/ravel/scripts/ravel.sh version
