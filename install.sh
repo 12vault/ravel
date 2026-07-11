@@ -32,3 +32,19 @@ tar -xzf "$tmp/$asset" -C "$tmp" ravel
 mkdir -p "$install_dir"
 install -m 0755 "$tmp/ravel" "$install_dir/ravel"
 echo "Installed ravel to $install_dir/ravel"
+
+case ":${PATH:-}:" in
+  *":$install_dir:"*) ;;
+  *)
+    echo ""
+    echo "ravel: $install_dir is not on PATH." >&2
+    echo "Run this now:" >&2
+    printf '  export PATH="%s:$PATH"\n' "$install_dir" >&2
+    case "${SHELL:-}" in
+      */zsh) profile="$HOME/.zshrc" ;;
+      */bash) profile="$HOME/.bashrc" ;;
+      *) profile="your shell profile" ;;
+    esac
+    echo "Then add the same line to $profile and open a new terminal." >&2
+    ;;
+esac

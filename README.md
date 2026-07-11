@@ -32,11 +32,15 @@ Install the latest checksum-verified release on macOS or Linux:
 curl -fsSL https://raw.githubusercontent.com/12vault/ravel/main/install.sh | sh
 ```
 
+The installer writes to `~/.local/bin` by default. If that directory is not on `PATH`, it prints the exact command to enable it. Run that command before using `ravel`, then add it to your shell profile so future terminals can find the binary.
+
 On Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/12vault/ravel/main/install.ps1 | iex
 ```
+
+PowerShell prints the equivalent `PATH` command when `~/.local/bin` is not already available.
 
 Release archives also contain a portable `ravel` binary that can run in place without installation. To build from source, install Go 1.26.5 or newer and clone the repository:
 
@@ -44,6 +48,12 @@ Release archives also contain a portable `ravel` binary that can run in place wi
 git clone https://github.com/12vault/ravel.git
 cd ravel
 go install ./cmd/ravel
+```
+
+`go install` writes to `GOBIN`, or to `$(go env GOPATH)/bin` when `GOBIN` is unset. Make sure that directory is on `PATH`. To install the project-local Codex skill straight from this checkout without installing a global binary, run:
+
+```sh
+go run ./cmd/ravel install --project --platform codex
 ```
 
 Register the bundled skill with your AI coding assistant:

@@ -21,6 +21,13 @@ try {
   New-Item -ItemType Directory -Force -Path $installDir | Out-Null
   Copy-Item (Join-Path $tmp "ravel.exe") (Join-Path $installDir "ravel.exe") -Force
   Write-Output "Installed ravel to $installDir\ravel.exe"
+  $pathEntries = $env:Path -split [IO.Path]::PathSeparator
+  if ($pathEntries -notcontains $installDir) {
+    Write-Warning "$installDir is not on PATH."
+    Write-Output "Run this now:"
+    Write-Output ('  $env:Path = "{0};$env:Path"' -f $installDir)
+    Write-Output 'Then add the same line to your PowerShell profile and open a new terminal.'
+  }
 } finally {
   Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
