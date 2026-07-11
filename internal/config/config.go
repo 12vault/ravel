@@ -22,6 +22,8 @@ type ScanConfig struct {
 
 type AnalysisConfig struct {
 	Go             bool
+	Documents      bool
+	Schemas        bool
 	CallGraph      bool
 	TypeResolution bool
 }
@@ -43,6 +45,8 @@ func Default() Config {
 		},
 		Analysis: AnalysisConfig{
 			Go:             true,
+			Documents:      true,
+			Schemas:        true,
 			CallGraph:      true,
 			TypeResolution: false,
 		},
@@ -149,6 +153,18 @@ func applyValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		cfg.Analysis.Go = parsed
+	case "analysis.documents":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Analysis.Documents = parsed
+	case "analysis.schemas":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Analysis.Schemas = parsed
 	case "analysis.callGraph":
 		parsed, err := parseBool(value)
 		if err != nil {
@@ -288,6 +304,8 @@ scan:
 
 analysis:
   go: true
+  documents: true
+  schemas: true
   callGraph: true
   typeResolution: false
 

@@ -132,6 +132,8 @@ func LanguageForPath(path string) string {
 		return "java"
 	case ".kt", ".kts":
 		return "kotlin"
+	case ".scala", ".sc":
+		return "scala"
 	case ".rs":
 		return "rust"
 	case ".rb":
@@ -144,8 +146,34 @@ func LanguageForPath(path string) string {
 		return "cpp"
 	case ".cs":
 		return "csharp"
+	case ".fs", ".fsx":
+		return "fsharp"
+	case ".vb":
+		return "visual-basic"
+	case ".dart":
+		return "dart"
+	case ".ex", ".exs":
+		return "elixir"
+	case ".erl", ".hrl":
+		return "erlang"
+	case ".clj", ".cljs", ".cljc":
+		return "clojure"
+	case ".lua", ".luau":
+		return "lua"
+	case ".r":
+		return "r"
+	case ".m", ".mm":
+		return "objective-c"
+	case ".pl", ".pm":
+		return "perl"
+	case ".groovy":
+		return "groovy"
+	case ".sol":
+		return "solidity"
 	case ".sh", ".bash", ".zsh":
 		return "shell"
+	case ".ps1", ".psm1":
+		return "powershell"
 	case ".sql":
 		return "sql"
 	case ".yaml", ".yml":
@@ -158,12 +186,26 @@ func LanguageForPath(path string) string {
 		return "xml"
 	case ".html", ".htm":
 		return "html"
+	case ".vue":
+		return "vue"
+	case ".svelte":
+		return "svelte"
 	case ".css", ".scss", ".sass":
 		return "css"
 	case ".md", ".mdx":
 		return "markdown"
+	case ".rst", ".adoc", ".asciidoc":
+		return "documentation"
 	case ".txt":
 		return "text"
+	case ".pdf":
+		return "pdf"
+	case ".tf", ".tfvars", ".hcl":
+		return "terraform"
+	case ".proto":
+		return "protobuf"
+	case ".graphql", ".gql":
+		return "graphql"
 	case ".mod", ".sum":
 		return "go"
 	}

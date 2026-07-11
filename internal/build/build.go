@@ -7,6 +7,7 @@ import (
 	"github.com/12ya/reporavel/internal/config"
 	"github.com/12ya/reporavel/internal/graph"
 	"github.com/12ya/reporavel/internal/lang"
+	"github.com/12ya/reporavel/internal/lang/contentanalyzer"
 	"github.com/12ya/reporavel/internal/lang/goanalyzer"
 	"github.com/12ya/reporavel/internal/scan"
 )
@@ -28,6 +29,12 @@ func Run(ctx context.Context, root string, cfg config.Config) (Result, error) {
 	registry := lang.NewRegistry()
 	if cfg.Analysis.Go {
 		registry.Register(goanalyzer.New(cfg.Analysis.CallGraph))
+	}
+	if cfg.Analysis.Documents {
+		registry.Register(contentanalyzer.Markdown())
+	}
+	if cfg.Analysis.Schemas {
+		registry.Register(contentanalyzer.SQL())
 	}
 
 	filesByLanguage := map[string][]scan.File{}

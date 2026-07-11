@@ -24,6 +24,18 @@ const (
 	NodeFunction  NodeKind = "function"
 	NodeMethod    NodeKind = "method"
 	NodeVariable  NodeKind = "variable"
+	NodeModule    NodeKind = "module"
+	NodeClass     NodeKind = "class"
+	NodeDocument  NodeKind = "document"
+	NodeSection   NodeKind = "section"
+	NodeSchema    NodeKind = "schema"
+	NodeTable     NodeKind = "table"
+	NodeColumn    NodeKind = "column"
+	NodeConcept   NodeKind = "concept"
+	NodeDomain    NodeKind = "domain"
+	NodeFlow      NodeKind = "flow"
+	NodeStep      NodeKind = "step"
+	NodeTour      NodeKind = "tour"
 )
 
 type EdgeKind string
@@ -37,6 +49,14 @@ const (
 	EdgeImplements EdgeKind = "implements"
 	EdgeUsesType   EdgeKind = "uses_type"
 	EdgeTestedBy   EdgeKind = "tested_by"
+	EdgeInherits   EdgeKind = "inherits"
+	EdgeDependsOn  EdgeKind = "depends_on"
+	EdgeBelongsTo  EdgeKind = "belongs_to"
+	EdgeExplains   EdgeKind = "explains"
+	EdgeCites      EdgeKind = "cites"
+	EdgeFlowsTo    EdgeKind = "flows_to"
+	EdgeAffects    EdgeKind = "affects"
+	EdgePartOf     EdgeKind = "part_of"
 )
 
 type Node struct {
@@ -218,6 +238,17 @@ func UnresolvedCallID(name string) string {
 	return "unresolved-call://" + hex.EncodeToString(sum[:8])
 }
 
+func ContentID(scheme string, parts ...string) string {
+	clean := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(filepath.ToSlash(part))
+		if part != "" {
+			clean = append(clean, part)
+		}
+	}
+	return scheme + "://" + strings.Join(clean, "#")
+}
+
 func EdgeID(kind EdgeKind, from, to string) string {
 	sum := sha1.Sum([]byte(string(kind) + "\x00" + from + "\x00" + to))
 	return string(kind) + "://" + hex.EncodeToString(sum[:12])
@@ -225,7 +256,7 @@ func EdgeID(kind EdgeKind, from, to string) string {
 
 func SymbolKind(k NodeKind) bool {
 	switch k {
-	case NodeType, NodeStruct, NodeInterface, NodeFunction, NodeMethod, NodeVariable:
+	case NodeType, NodeStruct, NodeInterface, NodeFunction, NodeMethod, NodeVariable, NodeModule, NodeClass:
 		return true
 	default:
 		return false

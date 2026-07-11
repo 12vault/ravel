@@ -18,6 +18,10 @@ func Markdown(g graph.Graph) string {
 	fmt.Fprintf(&b, "- Functions: %d\n", g.Metrics.NodesByKind[graph.NodeFunction])
 	fmt.Fprintf(&b, "- Methods: %d\n", g.Metrics.NodesByKind[graph.NodeMethod])
 	fmt.Fprintf(&b, "- Types: %d\n", typeCount(g))
+	fmt.Fprintf(&b, "- Documents: %d\n", g.Metrics.NodesByKind[graph.NodeDocument])
+	fmt.Fprintf(&b, "- Schema tables: %d\n", g.Metrics.NodesByKind[graph.NodeTable])
+	fmt.Fprintf(&b, "- Business domains: %d\n", g.Metrics.NodesByKind[graph.NodeDomain])
+	fmt.Fprintf(&b, "- Business flows: %d\n", g.Metrics.NodesByKind[graph.NodeFlow])
 	fmt.Fprintf(&b, "- Edges: %d\n\n", len(g.Edges))
 
 	b.WriteString("## Languages\n")
@@ -34,6 +38,10 @@ func Markdown(g graph.Graph) string {
 	writeNodeList(&b, "Core Packages", corePackages(g), 20)
 	writeNodeList(&b, "High Fan-In Symbols", highFan(g, true), 20)
 	writeNodeList(&b, "High Fan-Out Symbols", highFan(g, false), 20)
+	writeNodeList(&b, "Business Domains", nodesOfKind(g, graph.NodeDomain), 20)
+	writeNodeList(&b, "Business Flows", nodesOfKind(g, graph.NodeFlow), 20)
+	writeNodeList(&b, "Documents", nodesOfKind(g, graph.NodeDocument), 20)
+	writeNodeList(&b, "Schema Tables", nodesOfKind(g, graph.NodeTable), 20)
 	writeImportList(&b, g)
 	writeDiagnostics(&b, g)
 	writeReadingOrder(&b, g)
@@ -53,8 +61,22 @@ func entryPoints(g graph.Graph) []graph.Node {
 		if n.Kind == graph.NodeFunction && n.Name == "main" {
 			out = append(out, n)
 		}
+		if n.Meta != nil && n.Meta["entrypoint"] == "true" {
+			out = append(out, n)
+		}
 	}
 	return uniqueNodes(out)
+}
+
+func nodesOfKind(g graph.Graph, kind graph.NodeKind) []graph.Node {
+	var nodes []graph.Node
+	for _, node := range g.Nodes {
+		if node.Kind == kind && (node.Meta == nil || node.Meta["reference"] != "true") {
+			nodes = append(nodes, node)
+		}
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+	return nodes
 }
 
 func corePackages(g graph.Graph) []graph.Node {

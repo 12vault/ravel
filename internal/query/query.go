@@ -23,16 +23,27 @@ type Explanation struct {
 	CalledBy  []graph.Node `json:"calledBy,omitempty"`
 	Contained []graph.Node `json:"contained,omitempty"`
 	DefinedIn []graph.Node `json:"definedIn,omitempty"`
+	Outgoing  []Relation   `json:"outgoing,omitempty"`
+	Incoming  []Relation   `json:"incoming,omitempty"`
+}
+
+type Relation struct {
+	Kind graph.EdgeKind    `json:"kind"`
+	Node graph.Node        `json:"node"`
+	Meta map[string]string `json:"meta,omitempty"`
 }
 
 func Search(g graph.Graph, term string, limit int) []SearchResult {
-	needle := strings.ToLower(strings.TrimSpace(term))
-	if needle == "" {
+	needles := queryTerms(term)
+	if len(needles) == 0 {
 		return nil
 	}
 	var out []SearchResult
 	for _, n := range g.Nodes {
-		score := nodeScore(n, needle)
+		score := 0
+		for _, needle := range needles {
+			score += nodeScore(n, needle)
+		}
 		if score == 0 {
 			continue
 		}
@@ -77,6 +88,9 @@ func Explain(g graph.Graph, target string) (Explanation, bool) {
 	ex := Explanation{Target: n}
 	for _, e := range g.Edges {
 		if e.From == n.ID {
+			if related := byID[e.To]; related.ID != "" {
+				ex.Outgoing = append(ex.Outgoing, Relation{Kind: e.Kind, Node: related, Meta: e.Meta})
+			}
 			switch e.Kind {
 			case graph.EdgeDefines:
 				ex.Defines = appendNode(ex.Defines, byID[e.To])
@@ -89,6 +103,9 @@ func Explain(g graph.Graph, target string) (Explanation, bool) {
 			}
 		}
 		if e.To == n.ID {
+			if related := byID[e.From]; related.ID != "" {
+				ex.Incoming = append(ex.Incoming, Relation{Kind: e.Kind, Node: related, Meta: e.Meta})
+			}
 			switch e.Kind {
 			case graph.EdgeCalls:
 				ex.CalledBy = appendNode(ex.CalledBy, byID[e.From])
@@ -119,6 +136,8 @@ func WriteExplanation(w io.Writer, ex Explanation, jsonOut bool) error {
 	writeNodeSection(w, "Called by", ex.CalledBy)
 	writeNodeSection(w, "Contained", ex.Contained)
 	writeNodeSection(w, "Defined in", ex.DefinedIn)
+	writeRelationSection(w, "Outgoing relationships", ex.Outgoing)
+	writeRelationSection(w, "Incoming relationships", ex.Incoming)
 	return nil
 }
 
@@ -164,10 +183,13 @@ func FindBest(g graph.Graph, query string) (graph.Node, bool) {
 			return n, true
 		}
 	}
-	lower := strings.ToLower(q)
+	needles := queryTerms(q)
 	var matches []SearchResult
 	for _, n := range g.Nodes {
-		score := nodeScore(n, lower)
+		score := 0
+		for _, needle := range needles {
+			score += nodeScore(n, needle)
+		}
 		if score > 0 {
 			matches = append(matches, SearchResult{Node: n, Score: score})
 		}
@@ -283,6 +305,8 @@ func sortExplanation(ex *Explanation) {
 	sortNodes(ex.CalledBy)
 	sortNodes(ex.Contained)
 	sortNodes(ex.DefinedIn)
+	sortRelations(ex.Outgoing)
+	sortRelations(ex.Incoming)
 }
 
 func sortNodes(nodes []graph.Node) {
@@ -297,6 +321,41 @@ func writeNodeSection(w io.Writer, title string, nodes []graph.Node) {
 	for _, n := range nodes {
 		fmt.Fprintf(w, "- %s\t%s\n", n.Kind, display(n))
 	}
+}
+
+func writeRelationSection(w io.Writer, title string, relations []Relation) {
+	if len(relations) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%s:\n", title)
+	for _, relation := range relations {
+		fmt.Fprintf(w, "- %s\t%s\n", relation.Kind, display(relation.Node))
+	}
+}
+
+func sortRelations(relations []Relation) {
+	sort.Slice(relations, func(i, j int) bool {
+		if relations[i].Kind == relations[j].Kind {
+			return relations[i].Node.ID < relations[j].Node.ID
+		}
+		return relations[i].Kind < relations[j].Kind
+	})
+}
+
+func queryTerms(value string) []string {
+	stop := map[string]bool{"a": true, "an": true, "and": true, "are": true, "do": true, "does": true, "how": true, "in": true, "is": true, "of": true, "the": true, "to": true, "what": true, "where": true, "which": true, "with": true}
+	seen := map[string]bool{}
+	var terms []string
+	for _, field := range strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+	}) {
+		if len(field) < 2 || stop[field] || seen[field] {
+			continue
+		}
+		seen[field] = true
+		terms = append(terms, field)
+	}
+	return terms
 }
 
 func display(n graph.Node) string {
