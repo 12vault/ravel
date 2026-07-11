@@ -27,4 +27,18 @@ for target in [root / "plugins/ravel/skills/ravel", root / ".agents/plugins/plug
         comparison = filecmp.dircmp(source / directory, target / directory)
         if comparison.left_only or comparison.right_only or comparison.diff_files or comparison.funny_files:
             raise SystemExit(f"{target / directory}: package drift")
+    expected = {
+        "ravel_darwin_amd64", "ravel_darwin_arm64",
+        "ravel_linux_amd64", "ravel_linux_arm64",
+        "ravel_windows_amd64.exe", "ravel_windows_arm64.exe",
+    }
+    actual = {path.name for path in (target / "bin").iterdir() if path.is_file()}
+    if actual != expected:
+        raise SystemExit(f"{target / 'bin'}: expected {sorted(expected)}, found {sorted(actual)}")
+
+left = root / "plugins/ravel/skills/ravel/bin"
+right = root / ".agents/plugins/plugins/ravel/skills/ravel/bin"
+for name in expected:
+    if not filecmp.cmp(left / name, right / name, shallow=False):
+        raise SystemExit(f"bundled binary differs: {name}")
 print(f"Release versions synchronized at {version}")

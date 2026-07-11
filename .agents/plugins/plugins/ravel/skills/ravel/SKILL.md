@@ -43,7 +43,7 @@ Keep each role scoped to explicit files from the audited corpus. Do not let agen
 
 ## Bootstrap
 
-If `ravel version` fails, locate the packaged bootstrap script. Explain that it downloads a checksum-verified release, ask for explicit permission, and only then run it. Marketplace installation itself must never execute downloads. After installation, continue from `ravel audit`.
+If `ravel version` fails, use the packaged launcher at `scripts/ravel.sh` on macOS/Linux or `scripts/ravel.ps1` on Windows for every Ravel command. The launcher selects the bundled binary for the current operating system and architecture. It runs in place: do not download or install anything. After resolving the command, continue from `ravel audit`.
 
 ## Safety
 

@@ -3,6 +3,10 @@
 
 from pathlib import Path
 import shutil
+import os
+import re
+import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "skills" / "ravel"
@@ -22,8 +26,46 @@ def copy_tree(target: Path) -> None:
     shutil.copy2(SOURCE / "skill.md", target / "SKILL.md")
 
 
-for destination in TARGETS:
-    copy_tree(destination)
+def build_binaries(destination: Path, cache: Path) -> None:
+    destination.mkdir()
+    source = (ROOT / "internal" / "cli" / "commands.go").read_text()
+    match = re.search(r'var Version = "([^"]+)"', source)
+    if not match:
+        raise SystemExit("cannot find CLI version")
+    version = match.group(1)
+    for system, arch, suffix in (
+        ("darwin", "amd64", ""),
+        ("darwin", "arm64", ""),
+        ("linux", "amd64", ""),
+        ("linux", "arm64", ""),
+        ("windows", "amd64", ".exe"),
+        ("windows", "arm64", ".exe"),
+    ):
+        output = destination / f"ravel_{system}_{arch}{suffix}"
+        env = os.environ | {
+            "GOOS": system,
+            "GOARCH": arch,
+            "CGO_ENABLED": "0",
+            "GOCACHE": str(cache),
+        }
+        subprocess.run(
+            ["go", "build", "-trimpath", "-ldflags", f"-s -w -X github.com/12ya/reporavel/internal/cli.Version={version}", "-o", output, "./cmd/ravel"],
+            cwd=ROOT,
+            env=env,
+            check=True,
+        )
+        output.chmod(0o755)
+
+
+with tempfile.TemporaryDirectory(prefix="ravel-go-cache-") as cache:
+    binaries = Path(cache) / "bin"
+    build_binaries(binaries, Path(cache))
+    for destination in TARGETS:
+        copy_tree(destination)
+        packaged_binaries = destination / "bin"
+        if packaged_binaries.exists():
+            shutil.rmtree(packaged_binaries)
+        shutil.copytree(binaries, packaged_binaries)
 
 # Claude discovers plugin-native subagents from the plugin root.
 claude_agents = ROOT / "plugins" / "ravel" / "agents"
