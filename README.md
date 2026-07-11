@@ -70,6 +70,9 @@ ravel build .
 
 # Print the generated overview.
 ravel report
+
+# Generate a self-contained interactive graph.
+ravel dashboard
 ```
 
 Or build a local binary:
@@ -100,6 +103,12 @@ ravel path "main" "CreateSession"
 
 Add `--json` to `query`, `explain`, or `path` when another tool will consume the result.
 
+Natural-language wording is accepted for lexical graph search:
+
+```sh
+ravel query "which parts handle authentication?"
+```
+
 ## Generated artifacts
 
 `ravel build .` writes these files to `.reporavel/` by default:
@@ -111,7 +120,13 @@ Add `--json` to `query`, `explain`, or `path` when another tool will consume the
 | `files.json` | Scanned files, hashes, sizes, languages, and ignored paths |
 | `symbols.json` | Extracted functions, methods, types, variables, and related symbols |
 
-The graph models repository containment plus Go packages, imports, definitions, and resolved or unresolved calls.
+`ravel dashboard` additionally creates `graph.html`, a dependency-free local dashboard with search, kind filters, node details, and relationship navigation.
+
+The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, Markdown parser, and SQL schema parser add deterministic facts. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:
+
+```sh
+ravel ingest fragment.json
+```
 
 ## Audit-first safety
 
@@ -146,21 +161,22 @@ Useful command-line overrides include:
 ravel audit --max-file-size 2097152 .
 ravel build --out /tmp/ravel-output .
 ravel build --no-call-graph .
+ravel update .
 ```
 
 Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` for topology-only output. The `output.json` and `output.markdownReport` switches control which artifacts are written.
 
 ## Agent workflow
 
-The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a small agent workflow that prefers generated graph evidence before broad source reads.
+The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a progressive agent workflow for technical maps, architecture understanding, business domains, change impact, documents, schemas, and dependency-ordered learning tours.
 
 The intended loop is:
 
-1. Audit the repository.
-2. Build the graph with user consent.
-3. Read `.reporavel/report.md`.
-4. Use `query`, `explain`, and `path` for focused questions.
-5. Open source files only when graph evidence is not enough.
+1. Audit the repository or corpus.
+2. Build deterministic graph facts with user consent.
+3. Use specialized agents for language-independent code, architecture, domain, tour, and document analysis.
+4. Validate and merge every agent fragment with `ravel ingest`.
+5. Use `query`, `explain`, `path`, and `dashboard` for exploration.
 
 ### Always-on integration and hooks
 
@@ -181,23 +197,34 @@ ravel hook status
 ravel hook uninstall
 ```
 
-The Git hooks launch `ravel build .` in the background and write failures to the temporary `ravel-hook.log` file. Existing hook content is preserved.
+The Git hooks launch `ravel update .` in the background and write failures to the temporary `ravel-hook.log` file. Existing hook content is preserved.
 
 ## Current scope
 
 RepoRavel currently provides:
 
-- Cross-language file and directory topology.
-- Go package, import, function, method, type, variable, and call extraction.
-- Search, relationship explanations, and shortest-path queries.
+- Popular-language file and directory topology without a language allowlist at the agent layer.
+- Go AST plus deterministic Markdown heading/link and SQL table/column extraction.
+- Validated graph-fragment ingestion for agent analysis of any programming language.
+- Code, document, PDF-corpus, schema, concept, domain, flow, step, and tour node vocabularies.
+- Natural-language lexical search, complete relationship explanations, and shortest-path queries.
+- Incremental graph maintenance that preserves unchanged agent enrichment.
+- A self-contained interactive HTML dashboard that needs no server or AI.
+- Seven specialized agent roles: scanner, code, architecture, tour, review, domain, and document.
 - JSON output for tools and Markdown output for humans.
 - Deterministic artifact ordering for reviewable results.
+- Global/project skill installation, Codex hooks, and opt-in Git update hooks.
 
 Not implemented yet:
 
-- Semantic analyzers for languages other than Go.
+- Built-in deterministic AST analyzers for popular languages beyond Go; agents currently provide those semantics.
 - Full Go type resolution across every call form.
-- Incremental rebuilds or watch mode.
+- Filesystem watch mode and truly incremental parser execution.
+- Built-in PDF text extraction; the document agent currently uses host-local PDF tooling.
+- Automatic execution of the specialized agents from the standalone CLI.
+- Native integration tests for every supported assistant platform.
+- Prebuilt release binaries, Claude marketplace publishing, and a Codex skills marketplace package.
+- LOCOMO, LongMemEval, and code-graph benchmark suites.
 - An MCP server or editor integration.
 - A production SQLite index.
 

@@ -37,6 +37,9 @@ func TestInstallAndUninstallSkillForEveryPlatform(t *testing.T) {
 				if string(data) != string(skills.Ravel) {
 					t.Fatalf("installed skill differs from embedded skill")
 				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "references", "workflows.md")); err != nil {
+					t.Fatalf("installed references missing: %v", err)
+				}
 				if _, removed, err := UninstallSkill(opts); err != nil || !removed {
 					t.Fatalf("UninstallSkill() = removed %v, err %v", removed, err)
 				}

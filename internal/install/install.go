@@ -78,6 +78,27 @@ func InstallSkill(opts SkillOptions) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", err
 	}
+	references, err := skills.ReferenceFiles()
+	if err != nil {
+		return "", err
+	}
+	referencesDir := filepath.Join(filepath.Dir(dst), "references")
+	if err := os.RemoveAll(referencesDir); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(referencesDir, 0o755); err != nil {
+		return "", err
+	}
+	names := make([]string, 0, len(references))
+	for name := range references {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(referencesDir, name), references[name], 0o644); err != nil {
+			return "", err
+		}
+	}
 	tmp := dst + ".tmp"
 	if err := os.WriteFile(tmp, skills.Ravel, 0o644); err != nil {
 		return "", err
@@ -101,14 +122,23 @@ func UninstallSkill(opts SkillOptions) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	if err := os.Remove(dst); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return dst, false, nil
-		}
+	removed := false
+	if err := os.Remove(dst); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return dst, false, err
+	} else if err == nil {
+		removed = true
+	}
+	referencesDir := filepath.Join(filepath.Dir(dst), "references")
+	if _, err := os.Stat(referencesDir); err == nil {
+		removed = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return dst, false, err
+	}
+	if err := os.RemoveAll(referencesDir); err != nil {
 		return dst, false, err
 	}
 	removeEmptyParents(filepath.Dir(dst), scopeRoot(opts))
-	return dst, true, nil
+	return dst, removed, nil
 }
 
 func skillDestination(opts SkillOptions) (string, error) {
