@@ -19,6 +19,7 @@ func TestLanguageForPathRecognizesPopularAgentLanguages(t *testing.T) {
 		"infra.tf":     "terraform",
 		"query.gql":    "graphql",
 		"paper.pdf":    "pdf",
+		"guide.docx":   "document",
 	}
 	for path, want := range tests {
 		if got := LanguageForPath(path); got != want {

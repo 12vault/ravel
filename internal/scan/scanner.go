@@ -219,6 +219,8 @@ func LanguageForPath(path string) string {
 		return "text"
 	case ".pdf":
 		return "pdf"
+	case ".docx", ".odt", ".rtf":
+		return "document"
 	case ".tf", ".tfvars", ".hcl":
 		return "terraform"
 	case ".proto":
@@ -239,7 +241,7 @@ func LanguageForPath(path string) string {
 
 func ignoreDir(path, name string) string {
 	switch name {
-	case ".git", "node_modules", "vendor", "Pods", "DerivedData", ".build", "dist", "build", "coverage", ".next", ".nuxt", "target", ".idea", ".vscode", ".reporavel":
+	case ".git", "node_modules", "vendor", "Pods", "DerivedData", ".build", "dist", "build", "coverage", ".next", ".nuxt", "target", ".idea", ".vscode", ".reporavel", "ravel-graph":
 		return "default ignored directory"
 	}
 	if strings.HasPrefix(name, ".") && (name == ".cache" || strings.HasSuffix(name, "_cache")) {
