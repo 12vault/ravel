@@ -19,10 +19,10 @@ func TestInstallStatusAndUninstallPreserveExistingHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Install(root, "/opt/reporavel tools/reporavel"); err != nil {
+	if _, err := Install(root, "/opt/ravel tools/ravel"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Install(root, "/opt/reporavel tools/reporavel"); err != nil {
+	if _, err := Install(root, "/opt/ravel tools/ravel"); err != nil {
 		t.Fatal(err)
 	}
 	status, err := Check(root)

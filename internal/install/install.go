@@ -15,32 +15,32 @@ import (
 )
 
 const (
-	agentsStart = "<!-- reporavel:start -->"
-	agentsEnd   = "<!-- reporavel:end -->"
+	agentsStart = "<!-- ravel:start -->"
+	agentsEnd   = "<!-- ravel:end -->"
 )
 
 var platformPaths = map[string]string{
-	"agents":      ".agents/skills/reporavel/SKILL.md",
-	"antigravity": ".agents/skills/reporavel/SKILL.md",
-	"aider":       ".aider/reporavel/SKILL.md",
-	"claude":      ".claude/skills/reporavel/SKILL.md",
-	"codebuddy":   ".codebuddy/skills/reporavel/SKILL.md",
-	"codex":       ".codex/skills/reporavel/SKILL.md",
-	"copilot":     ".copilot/skills/reporavel/SKILL.md",
-	"cursor":      ".cursor/skills/reporavel/SKILL.md",
-	"devin":       ".config/devin/skills/reporavel/SKILL.md",
-	"droid":       ".factory/skills/reporavel/SKILL.md",
-	"gemini":      ".gemini/skills/reporavel/SKILL.md",
-	"hermes":      ".hermes/skills/reporavel/SKILL.md",
-	"kilo":        ".config/kilo/skills/reporavel/SKILL.md",
-	"kimi":        ".kimi/skills/reporavel/SKILL.md",
-	"kiro":        ".kiro/skills/reporavel/SKILL.md",
-	"openclaw":    ".openclaw/skills/reporavel/SKILL.md",
-	"opencode":    ".config/opencode/skills/reporavel/SKILL.md",
-	"pi":          ".pi/agent/skills/reporavel/SKILL.md",
-	"trae":        ".trae/skills/reporavel/SKILL.md",
-	"trae-cn":     ".trae-cn/skills/reporavel/SKILL.md",
-	"vscode":      ".copilot/skills/reporavel/SKILL.md",
+	"agents":      ".agents/skills/ravel/SKILL.md",
+	"antigravity": ".agents/skills/ravel/SKILL.md",
+	"aider":       ".aider/ravel/SKILL.md",
+	"claude":      ".claude/skills/ravel/SKILL.md",
+	"codebuddy":   ".codebuddy/skills/ravel/SKILL.md",
+	"codex":       ".codex/skills/ravel/SKILL.md",
+	"copilot":     ".copilot/skills/ravel/SKILL.md",
+	"cursor":      ".cursor/skills/ravel/SKILL.md",
+	"devin":       ".config/devin/skills/ravel/SKILL.md",
+	"droid":       ".factory/skills/ravel/SKILL.md",
+	"gemini":      ".gemini/skills/ravel/SKILL.md",
+	"hermes":      ".hermes/skills/ravel/SKILL.md",
+	"kilo":        ".config/kilo/skills/ravel/SKILL.md",
+	"kimi":        ".kimi/skills/ravel/SKILL.md",
+	"kiro":        ".kiro/skills/ravel/SKILL.md",
+	"openclaw":    ".openclaw/skills/ravel/SKILL.md",
+	"opencode":    ".config/opencode/skills/ravel/SKILL.md",
+	"pi":          ".pi/agent/skills/ravel/SKILL.md",
+	"trae":        ".trae/skills/ravel/SKILL.md",
+	"trae-cn":     ".trae-cn/skills/ravel/SKILL.md",
+	"vscode":      ".copilot/skills/ravel/SKILL.md",
 }
 
 var platformAliases = map[string]string{
@@ -79,7 +79,7 @@ func InstallSkill(opts SkillOptions) (string, error) {
 		return "", err
 	}
 	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, skills.RepoRavel, 0o644); err != nil {
+	if err := os.WriteFile(tmp, skills.Ravel, 0o644); err != nil {
 		return "", err
 	}
 	if err := os.Rename(tmp, dst); err != nil {
@@ -131,22 +131,22 @@ func skillDestination(opts SkillOptions) (string, error) {
 	if opts.Project {
 		switch platform {
 		case "opencode":
-			rel = ".opencode/skills/reporavel/SKILL.md"
+			rel = ".opencode/skills/ravel/SKILL.md"
 		case "devin":
-			rel = ".devin/skills/reporavel/SKILL.md"
+			rel = ".devin/skills/ravel/SKILL.md"
 		case "kilo":
-			rel = ".kilo/skills/reporavel/SKILL.md"
+			rel = ".kilo/skills/ravel/SKILL.md"
 		}
 	}
 	if platform == "agents" && !opts.Project && strings.EqualFold(opts.Platform, "amp") {
-		rel = ".config/agents/skills/reporavel/SKILL.md"
+		rel = ".config/agents/skills/ravel/SKILL.md"
 	}
 	if platform == "antigravity" && !opts.Project {
-		rel = ".gemini/config/skills/reporavel/SKILL.md"
+		rel = ".gemini/config/skills/ravel/SKILL.md"
 	}
 	if platform == "hermes" && !opts.Project && runtime.GOOS == "windows" {
 		if local := os.Getenv("LOCALAPPDATA"); local != "" {
-			return filepath.Join(local, "hermes", "skills", "reporavel", "SKILL.md"), nil
+			return filepath.Join(local, "hermes", "skills", "ravel", "SKILL.md"), nil
 		}
 	}
 	return filepath.Join(root, filepath.FromSlash(rel)), nil
@@ -233,14 +233,14 @@ func AssistantHook(root string) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(map[string]string{
-		"systemMessage": "RepoRavel graph found. Prefer reporavel query, explain, and path before broad source searches.",
+		"systemMessage": "RepoRavel graph found. Prefer ravel query, explain, and path before broad source searches.",
 	})
 }
 
 func codexInstructions() string {
 	return agentsStart + "\n" +
 		"## RepoRavel\n\n" +
-		"When `.reporavel/graph.json` exists, use `reporavel query`, `reporavel explain`, and `reporavel path` before broad source searches. " +
+		"When `.reporavel/graph.json` exists, use `ravel query`, `ravel explain`, and `ravel path` before broad source searches. " +
 		"Read `.reporavel/report.md` for an architecture overview. Treat unresolved calls as unresolved.\n" +
 		agentsEnd + "\n"
 }
@@ -304,7 +304,7 @@ func installCodexHook(path, executable string) error {
 	}
 	hooks := objectAt(root, "hooks")
 	current := arrayAt(hooks, "PreToolUse")
-	filtered := withoutRepoRavel(current)
+	filtered := withoutRavel(current)
 	filtered = append(filtered, map[string]any{
 		"matcher": "Bash",
 		"hooks": []any{map[string]any{
@@ -329,7 +329,7 @@ func uninstallCodexHook(path string) error {
 	if !ok {
 		return nil
 	}
-	remaining := withoutRepoRavel(arrayAt(hooks, "PreToolUse"))
+	remaining := withoutRavel(arrayAt(hooks, "PreToolUse"))
 	if len(remaining) == 0 {
 		delete(hooks, "PreToolUse")
 	} else {
@@ -392,11 +392,11 @@ func arrayAt(parent map[string]any, key string) []any {
 	return nil
 }
 
-func withoutRepoRavel(values []any) []any {
+func withoutRavel(values []any) []any {
 	result := make([]any, 0, len(values))
 	for _, value := range values {
 		data, _ := json.Marshal(value)
-		if !bytes.Contains(bytes.ToLower(data), []byte("reporavel")) {
+		if !bytes.Contains(bytes.ToLower(data), []byte("ravel")) {
 			result = append(result, value)
 		}
 	}

@@ -34,7 +34,7 @@ func TestInstallAndUninstallSkillForEveryPlatform(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(data) != string(skills.RepoRavel) {
+				if string(data) != string(skills.Ravel) {
 					t.Fatalf("installed skill differs from embedded skill")
 				}
 				if _, removed, err := UninstallSkill(opts); err != nil || !removed {
@@ -47,7 +47,7 @@ func TestInstallAndUninstallSkillForEveryPlatform(t *testing.T) {
 
 func TestUninstallCodexRemovesFilesItCreated(t *testing.T) {
 	root := t.TempDir()
-	if _, err := InstallCodex(CodexOptions{ProjectDir: root, Executable: "/opt/reporavel"}); err != nil {
+	if _, err := InstallCodex(CodexOptions{ProjectDir: root, Executable: "/opt/ravel"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := UninstallCodex(root); err != nil {
@@ -74,7 +74,7 @@ func TestInstallCodexPreservesExistingConfigurationAndIsIdempotent(t *testing.T)
 		t.Fatal(err)
 	}
 
-	opts := CodexOptions{ProjectDir: root, Executable: "/opt/tools/reporavel"}
+	opts := CodexOptions{ProjectDir: root, Executable: "/opt/tools/ravel"}
 	if _, err := InstallCodex(opts); err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestInstallCodexPreservesExistingConfigurationAndIsIdempotent(t *testing.T)
 	}
 	pre := hooks["hooks"].(map[string]any)["PreToolUse"].([]any)
 	if len(pre) != 2 {
-		t.Fatalf("expected one existing and one RepoRavel hook, got %d", len(pre))
+		t.Fatalf("expected one existing and one Ravel hook, got %d", len(pre))
 	}
 
 	if _, err := UninstallCodex(root); err != nil {
@@ -120,7 +120,7 @@ func TestInstallCodexPreservesExistingConfigurationAndIsIdempotent(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(strings.ToLower(string(data)), "reporavel") || !strings.Contains(string(data), "other-tool") {
+	if strings.Contains(strings.ToLower(string(data)), "ravel") || !strings.Contains(string(data), "other-tool") {
 		t.Fatalf("unexpected hooks after uninstall:\n%s", data)
 	}
 }

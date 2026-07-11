@@ -10,8 +10,8 @@ import (
 )
 
 const (
-	startMarker = "# reporavel-hook-start"
-	endMarker   = "# reporavel-hook-end"
+	startMarker = "# ravel-hook-start"
+	endMarker   = "# ravel-hook-end"
 )
 
 type Status struct {
@@ -133,8 +133,8 @@ func hookSection(executable string, checkout bool) string {
 	}
 	return startMarker + "\n" +
 		guard +
-		"REPORAVEL_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0\n" +
-		"(cd \"$REPORAVEL_ROOT\" && " + shellQuote(executable) + " build . >>\"${TMPDIR:-/tmp}/reporavel-hook.log\" 2>&1) &\n" +
+		"RAVEL_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0\n" +
+		"(cd \"$RAVEL_ROOT\" && " + shellQuote(executable) + " build . >>\"${TMPDIR:-/tmp}/ravel-hook.log\" 2>&1) &\n" +
 		endMarker + "\n"
 }
 
