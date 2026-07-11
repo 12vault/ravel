@@ -56,7 +56,7 @@ ravel install --platform codex
 ravel install --project --platform codex
 ```
 
-That command installs the complete skill bundle: orchestration instructions, seven role prompts, references, and consent-gated binary bootstrap scripts. Marketplace installation provides the same bundle. If the binary is absent, the skill explains the download and asks before running its checksum-verifying bootstrap; marketplace installation never executes downloads silently.
+That command installs the complete skill bundle: orchestration instructions, seven role prompts, references, and launchers. Marketplace packages also include native Ravel binaries for macOS, Linux, and Windows on amd64 and arm64. If `ravel` is not already on `PATH`, the skill uses the matching bundled binary in place, with no initial download or separate installation.
 
 Then invoke the skill in Codex:
 
@@ -267,7 +267,9 @@ ravel self-update --platforms codex,claude --project
 
 The command downloads the selected release archive and checksum, verifies it, atomically replaces the binary, then refreshes only the explicitly listed skill destinations. Marketplace-managed skills update through their marketplace client.
 
-Maintainers prepare a synchronized release with `scripts/release.sh 0.2.0`. It updates CLI, Claude, and Codex versions, synchronizes every packaged skill resource, runs tests and validators, and verifies that no package drift remains. Committing and pushing tag `v0.2.0` triggers the binary release workflow.
+After CLI changes, run `python3 scripts/sync-packages.py` to rebuild all six native binaries and copy the refreshed skill bundle into both marketplace packages. Validate the result with `python3 scripts/test_release.py`.
+
+Maintainers prepare a synchronized release with `scripts/release.sh 0.2.0`. It updates CLI, Claude, and Codex versions, rebuilds the bundled binaries, synchronizes every packaged skill resource, runs tests and validators, and verifies that no package drift remains. Committing and pushing tag `v0.2.0` triggers the binary release workflow.
 
 ## Capability layers
 
