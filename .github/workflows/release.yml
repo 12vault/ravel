@@ -33,7 +33,43 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
         run: |
-          go build -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
+          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
+      - name: Import Apple Developer ID certificate
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          test -n "$MACOS_CERTIFICATE_P12"
+          test -n "$MACOS_CERTIFICATE_PASSWORD"
+          KEYCHAIN_PATH="$RUNNER_TEMP/ravel-signing.keychain-db"
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/ravel-signing.p12"
+          security create-keychain -p runner "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p runner "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/ravel-signing.p12" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k runner "$KEYCHAIN_PATH"
+      - name: Sign and notarize macOS binary
+        if: matrix.os == 'darwin'
+        shell: bash
+        env:
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          test -n "$MACOS_SIGNING_IDENTITY"
+          test -n "$APPLE_ID"
+          test -n "$APPLE_APP_PASSWORD"
+          test -n "$APPLE_TEAM_ID"
+          codesign --force --options runtime --timestamp --sign "$MACOS_SIGNING_IDENTITY" ravel
+          codesign --verify --strict --verbose=2 ravel
+          ditto -c -k --keepParent ravel "$RUNNER_TEMP/ravel-notarization.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/ravel-notarization.zip" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          spctl --assess --type execute --verbose=4 ravel
           tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
       - name: Build Windows archive
         if: matrix.os == 'windows'
@@ -42,7 +78,7 @@ jobs:
           GOOS: windows
           GOARCH: ${{ matrix.arch }}
         run: |
-          go build -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=$env:GITHUB_REF_NAME" -o ravel.exe ./cmd/ravel
+          go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=$env:GITHUB_REF_NAME" -o ravel.exe ./cmd/ravel
           Compress-Archive -Path ravel.exe,LICENSE -DestinationPath "ravel_windows_$env:GOARCH.zip"
       - uses: actions/upload-artifact@v6
         with:
