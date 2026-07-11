@@ -33,7 +33,7 @@ import (
 	"github.com/12ya/reporavel/internal/workflow"
 )
 
-var Version = "v0.1.0"
+var Version = "v0.1.1"
 
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
