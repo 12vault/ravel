@@ -28,6 +28,14 @@ func TestWriteArtifactsHonorsOutputSettings(t *testing.T) {
 		for _, name := range []string{"graph.json", "files.json", "symbols.json", "index.db"} {
 			assertExists(t, outDir, name, false)
 		}
+		assertExists(t, filepath.Join(outDir, stateDir), "graph.json", true)
+		assertExists(t, filepath.Join(outDir, stateDir), "files.json", true)
+		if _, err := LoadGraph(outDir); err != nil {
+			t.Fatalf("LoadGraph() after markdown-only write: %v", err)
+		}
+		if _, err := LoadScan(outDir); err != nil {
+			t.Fatalf("LoadScan() after markdown-only write: %v", err)
+		}
 	})
 
 	t.Run("json only", func(t *testing.T) {

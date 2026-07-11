@@ -120,6 +120,8 @@ ravel query "which parts handle authentication?"
 | `files.json` | Scanned files, hashes, sizes, languages, and ignored paths |
 | `symbols.json` | Extracted functions, methods, types, variables, and related symbols |
 
+Ravel also keeps canonical update state under `.reporavel/.state/`. Disabling JSON output removes the public JSON exports but preserves this internal state so updates and queries continue to work.
+
 `ravel dashboard` additionally creates `graph.html`, a dependency-free local dashboard with search, kind filters, node details, and relationship navigation.
 
 The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, Markdown parser, and SQL schema parser add deterministic facts. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:

@@ -12,12 +12,24 @@ import (
 	"github.com/12ya/reporavel/internal/scan"
 )
 
+const stateDir = ".state"
+
 type SymbolsFile struct {
 	Symbols []graph.Node `json:"symbols"`
 }
 
 func WriteArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report string, output config.OutputConfig) error {
 	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+	statePath := filepath.Join(outDir, stateDir)
+	if err := os.MkdirAll(statePath, 0o755); err != nil {
+		return err
+	}
+	if err := WriteJSON(filepath.Join(statePath, "graph.json"), g); err != nil {
+		return err
+	}
+	if err := WriteJSON(filepath.Join(statePath, "files.json"), scanResult); err != nil {
 		return err
 	}
 	jsonFiles := []string{"graph.json", "files.json", "symbols.json"}
@@ -63,7 +75,7 @@ func WriteJSON(path string, value any) error {
 }
 
 func LoadGraph(outDir string) (graph.Graph, error) {
-	data, err := os.ReadFile(filepath.Join(outDir, "graph.json"))
+	data, err := readState(outDir, "graph.json")
 	if err != nil {
 		return graph.Graph{}, fmt.Errorf("load graph: %w", err)
 	}
@@ -75,7 +87,7 @@ func LoadGraph(outDir string) (graph.Graph, error) {
 }
 
 func LoadScan(outDir string) (scan.Result, error) {
-	data, err := os.ReadFile(filepath.Join(outDir, "files.json"))
+	data, err := readState(outDir, "files.json")
 	if err != nil {
 		return scan.Result{}, fmt.Errorf("load files: %w", err)
 	}
@@ -84,6 +96,14 @@ func LoadScan(outDir string) (scan.Result, error) {
 		return scan.Result{}, err
 	}
 	return result, nil
+}
+
+func readState(outDir, name string) ([]byte, error) {
+	data, err := os.ReadFile(filepath.Join(outDir, name))
+	if err == nil || !os.IsNotExist(err) {
+		return data, err
+	}
+	return os.ReadFile(filepath.Join(outDir, stateDir, name))
 }
 
 func RewriteGraphViews(outDir string, g graph.Graph, markdown string) error {
