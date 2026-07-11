@@ -33,26 +33,26 @@ Install the CLI from a clone:
 ```sh
 git clone https://github.com/12vault/ravel.git
 cd ravel
-go install ./cmd/reporavel
+go install ./cmd/ravel
 ```
 
 Register the bundled skill with your AI coding assistant:
 
 ```sh
 # Codex user-wide install
-reporavel install --platform codex
+ravel install --platform codex
 
 # Or keep the skill and integration files inside the current project
-reporavel install --project --platform codex
+ravel install --project --platform codex
 ```
 
 Then invoke the skill in Codex:
 
 ```text
-$reporavel .
+$ravel .
 ```
 
-Assistants that use slash commands accept `/reporavel .` instead. The installer also supports `claude`, `codebuddy`, `opencode`, `kilo`, `copilot`, `vscode`, `aider`, `openclaw`, `droid`, `trae`, `trae-cn`, `gemini`, `hermes`, `kimi`, `amp`, `agents`, `kiro`, `pi`, `cursor`, `devin`, and `antigravity` skill locations. Use `--project` for a repository-scoped installation.
+Assistants that use slash commands accept `/ravel .` instead. The installer also supports `claude`, `codebuddy`, `opencode`, `kilo`, `copilot`, `vscode`, `aider`, `openclaw`, `droid`, `trae`, `trae-cn`, `gemini`, `hermes`, `kimi`, `amp`, `agents`, `kiro`, `pi`, `cursor`, `devin`, and `antigravity` skill locations. Use `--project` for a repository-scoped installation.
 
 Then run it from a repository:
 
@@ -60,22 +60,22 @@ Then run it from a repository:
 cd your-repository
 
 # Confirm the installed version.
-reporavel version
+ravel version
 
 # Preview which files RepoRavel will read.
-reporavel audit .
+ravel audit .
 
 # Build the local graph in .reporavel/.
-reporavel build .
+ravel build .
 
 # Print the generated overview.
-reporavel report
+ravel report
 ```
 
 Or build a local binary:
 
 ```sh
-go build -o reporavel ./cmd/reporavel
+go build -o ravel ./cmd/ravel
 ```
 
 ## Explore the graph
@@ -83,26 +83,26 @@ go build -o reporavel ./cmd/reporavel
 Search for files, packages, types, functions, or methods:
 
 ```sh
-reporavel query "SessionManager"
+ravel query "SessionManager"
 ```
 
 Explain a file or symbol and show its immediate relationships:
 
 ```sh
-reporavel explain "internal/auth/session.go"
+ravel explain "internal/auth/session.go"
 ```
 
 Find a path between two graph nodes:
 
 ```sh
-reporavel path "main" "CreateSession"
+ravel path "main" "CreateSession"
 ```
 
 Add `--json` to `query`, `explain`, or `path` when another tool will consume the result.
 
 ## Generated artifacts
 
-`reporavel build .` writes these files to `.reporavel/` by default:
+`ravel build .` writes these files to `.reporavel/` by default:
 
 | File | Purpose |
 | --- | --- |
@@ -117,7 +117,7 @@ The graph models repository containment plus Go packages, imports, definitions, 
 
 RepoRavel is deliberately small and local.
 
-- `reporavel audit .` lists what will be analyzed and ignored.
+- `ravel audit .` lists what will be analyzed and ignored.
 - Network access, shell execution, LLM calls, and subagents are not used.
 - `.env` files, private-key formats, databases, archives, binary media, dependency folders, and common build output are ignored by default.
 - Default limits are 1 MiB per file and 100 MiB total input.
@@ -127,7 +127,7 @@ RepoRavel is deliberately small and local.
 Check the active defaults at any time:
 
 ```sh
-reporavel doctor
+ravel doctor
 ```
 
 These defaults reduce accidental exposure; they are not a substitute for reviewing what exists in a repository before processing or sharing generated artifacts.
@@ -137,22 +137,22 @@ These defaults reduce accidental exposure; they are not a substitute for reviewi
 Create `.reporavel.yaml` with documented defaults:
 
 ```sh
-reporavel init
+ravel init
 ```
 
 Useful command-line overrides include:
 
 ```sh
-reporavel audit --max-file-size 2097152 .
-reporavel build --out /tmp/reporavel-output .
-reporavel build --no-call-graph .
+ravel audit --max-file-size 2097152 .
+ravel build --out /tmp/ravel-output .
+ravel build --no-call-graph .
 ```
 
 Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` for topology-only output. The `output.json` and `output.markdownReport` switches control which artifacts are written.
 
 ## Agent workflow
 
-The repository includes [`skills/reporavel/skill.md`](skills/reporavel/skill.md), a small agent workflow that prefers generated graph evidence before broad source reads.
+The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a small agent workflow that prefers generated graph evidence before broad source reads.
 
 The intended loop is:
 
@@ -169,19 +169,19 @@ Skill installation and hooks are separate. A project-scoped Codex install writes
 These equivalent commands manage only the Codex always-on files:
 
 ```sh
-reporavel codex install
-reporavel codex uninstall
+ravel codex install
+ravel codex uninstall
 ```
 
 Automatic graph refresh is opt-in. Install Git `post-commit` and `post-checkout` hooks from the repository:
 
 ```sh
-reporavel hook install
-reporavel hook status
-reporavel hook uninstall
+ravel hook install
+ravel hook status
+ravel hook uninstall
 ```
 
-The Git hooks launch `reporavel build .` in the background and write failures to the temporary `reporavel-hook.log` file. Existing hook content is preserved.
+The Git hooks launch `ravel build .` in the background and write failures to the temporary `ravel-hook.log` file. Existing hook content is preserved.
 
 ## Current scope
 
