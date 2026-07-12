@@ -34,14 +34,14 @@ func newIgnoreMatcher(root string) (*ignoreMatcher, error) {
 
 func (m *ignoreMatcher) loadDir(relativeDir string) error {
 	path := filepath.Join(m.root, filepath.FromSlash(relativeDir), ".gitignore")
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")), err)
 	}
-	if info.IsDir() || info.Size() > maxIgnoreFileSize {
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxIgnoreFileSize {
 		return nil
 	}
 	file, err := os.Open(path)
@@ -49,6 +49,13 @@ func (m *ignoreMatcher) loadDir(relativeDir string) error {
 		return fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")), err)
 	}
 	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")), err)
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return fmt.Errorf("read %s: file changed while opening", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")))
+	}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 16<<10), maxIgnoreFileSize)
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {

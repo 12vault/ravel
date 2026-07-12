@@ -92,6 +92,64 @@ func TestScanRejectsSymlinksBeforeReadingTargets(t *testing.T) {
 	}
 }
 
+func TestScanNeverLoadsSymlinkedGitignore(t *testing.T) {
+	for _, nested := range []bool{false, true} {
+		name := "root"
+		if nested {
+			name = "nested"
+		}
+		t.Run(name, func(t *testing.T) {
+			outside := filepath.Join(t.TempDir(), "outside-ignore")
+			if err := os.WriteFile(outside, []byte("ignored-by-outside.go\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			directory := root
+			relativeFile := "ignored-by-outside.go"
+			if nested {
+				directory = filepath.Join(root, "nested")
+				relativeFile = "nested/ignored-by-outside.go"
+				if err := os.MkdirAll(directory, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(directory, "ignored-by-outside.go"), []byte("package safe\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, filepath.Join(directory, ".gitignore")); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+
+			result, err := Scan(root, config.Default())
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, file := range result.Files {
+				if file.Path == relativeFile {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("symlink target supplied ignore rules: files=%#v ignored=%#v", result.Files, result.Ignored)
+			}
+			ignorePath := ".gitignore"
+			if nested {
+				ignorePath = "nested/.gitignore"
+			}
+			ignoredLink := false
+			for _, ignored := range result.Ignored {
+				if ignored.Path == ignorePath && ignored.Reason == "symbolic link" {
+					ignoredLink = true
+				}
+			}
+			if !ignoredLink {
+				t.Fatalf("symlinked gitignore not reported: %#v", result.Ignored)
+			}
+		})
+	}
+}
+
 func TestScanCanonicalizesSymlinkedRootBeforeSensitiveAncestorCheck(t *testing.T) {
 	parent := t.TempDir()
 	sensitive := filepath.Join(parent, ".ssh", "fixture")
