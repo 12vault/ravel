@@ -230,6 +230,9 @@ ravel ingest fragment.json
 
 Ravel is local-first and audit-first.
 
+See [`SECURITY.md`](SECURITY.md) for supported versions, private vulnerability
+reporting, the threat model, and CI security controls.
+
 - `ravel audit .` lists what will be analyzed and ignored.
 - Analysis, graph, query, dashboard, and corpus commands make no network requests and never call an LLM. Only the explicit `ravel update-check` and `ravel self-update` commands access the release server.
 - `ravel extract` may execute a discovered, allowlisted local extractor (`pdftotext`, `mutool`, or `pandoc`) only when the user invokes that command.
