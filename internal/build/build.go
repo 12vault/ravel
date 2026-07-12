@@ -9,6 +9,7 @@ import (
 	"github.com/12ya/reporavel/internal/lang"
 	"github.com/12ya/reporavel/internal/lang/contentanalyzer"
 	"github.com/12ya/reporavel/internal/lang/goanalyzer"
+	"github.com/12ya/reporavel/internal/lang/treeanalyzer"
 	"github.com/12ya/reporavel/internal/scan"
 )
 
@@ -43,6 +44,9 @@ func Run(ctx context.Context, root string, cfg config.Config) (Result, error) {
 	}
 	for language, files := range filesByLanguage {
 		analyzer, ok := registry.ForLanguage(language)
+		if !ok && cfg.Analysis.Polyglot && treeanalyzer.Supports(language, files) {
+			analyzer, ok = treeanalyzer.New(language), true
+		}
 		if !ok {
 			continue
 		}

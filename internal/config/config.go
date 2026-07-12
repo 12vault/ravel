@@ -23,6 +23,7 @@ type ScanConfig struct {
 
 type AnalysisConfig struct {
 	Go             bool
+	Polyglot       bool
 	Documents      bool
 	Schemas        bool
 	CallGraph      bool
@@ -59,6 +60,7 @@ func Default() Config {
 		},
 		Analysis: AnalysisConfig{
 			Go:             true,
+			Polyglot:       true,
 			Documents:      true,
 			Schemas:        true,
 			CallGraph:      true,
@@ -189,6 +191,12 @@ func applyValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		cfg.Analysis.Go = parsed
+	case "analysis.polyglot":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Analysis.Polyglot = parsed
 	case "analysis.documents":
 		parsed, err := parseBool(value)
 		if err != nil {
@@ -415,6 +423,7 @@ scan:
 
 analysis:
   go: true
+  polyglot: true
   documents: true
   schemas: true
   callGraph: true

@@ -12,6 +12,7 @@ func TestLoadHonorsAnalysisAndOutputSettings(t *testing.T) {
 mode: offline
 analysis:
   go: false
+  polyglot: false
   callGraph: false
   typeResolution: false
 output:
@@ -27,6 +28,9 @@ output:
 	}
 	if cfg.Analysis.Go {
 		t.Fatal("Analysis.Go = true, want false")
+	}
+	if cfg.Analysis.Polyglot {
+		t.Fatal("Analysis.Polyglot = true, want false")
 	}
 	if cfg.Analysis.CallGraph {
 		t.Fatal("Analysis.CallGraph = true, want false")

@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -44,6 +45,43 @@ func TestRunCanDisableGoAnalysis(t *testing.T) {
 	for _, node := range result.Graph.Nodes {
 		if node.Kind == graph.NodePackage || graph.SymbolKind(node.Kind) {
 			t.Fatalf("found semantic node %s with Go analysis disabled", node.ID)
+		}
+	}
+}
+
+func TestRunBuildsAndCanDisablePolyglotGraph(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "service.py")
+	if err := os.WriteFile(path, []byte("def helper():\n    pass\n\ndef run():\n    helper()\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Run(context.Background(), root, config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var helper, run string
+	for _, node := range result.Graph.Nodes {
+		switch node.Name {
+		case "helper":
+			helper = node.ID
+		case "run":
+			run = node.ID
+		}
+	}
+	if helper == "" || run == "" || !hasEdge(result.Graph, graph.EdgeCalls, run, helper) {
+		t.Fatalf("polyglot graph missing definitions/call: nodes=%#v edges=%#v", result.Graph.Nodes, result.Graph.Edges)
+	}
+
+	cfg := config.Default()
+	cfg.Analysis.Polyglot = false
+	result, err = Run(context.Background(), root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range result.Graph.Nodes {
+		if graph.SymbolKind(node.Kind) {
+			t.Fatalf("found semantic node %s with polyglot analysis disabled", node.ID)
 		}
 	}
 }
