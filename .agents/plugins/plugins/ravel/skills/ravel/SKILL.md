@@ -24,13 +24,15 @@ Use the Go CLI for deterministic scanning, storage, queries, and validation. Use
 
 ## Core workflow
 
-1. Read `.reporavel/report.md` when present. Before broad source search, use `ravel context "<question>"`; use `ravel query` when only a symbol or path lookup is needed.
-2. Run `ravel audit <target>` before a first build and show the user what will be read.
-3. Ask before building a missing or stale graph.
-4. Run `ravel build <target>` after consent.
-5. Read `references/orchestration.md`, run `ravel plan <route> --json`, and dispatch every ready role. Parallelize only tasks whose dependencies are complete.
+1. After bootstrap, check for `.reporavel/graph.json`. When it exists, run `ravel update <target>` once before reading or querying the graph. This local, hash-aware refresh needs no additional consent; report changed paths or refresh failures, and never hide a stale-graph warning.
+2. Read `.reporavel/report.md` after the refresh. Before broad source search, use `ravel context "<question>"`; use `ravel query` when only a symbol or path lookup is needed.
+3. When no graph exists, run `ravel audit <target>`, show the user what will be read, and ask before the initial `ravel build <target>`.
+4. When an update invalidates agent enrichment needed by the request, read `references/workflows.md` and `references/orchestration.md`, use the changed paths recorded by the update, and rerun only the affected roles. Do not redo unaffected enrichment.
+5. For enrichment workflows, run `ravel plan <route> --json` and dispatch every ready role. Parallelize only tasks whose dependencies are complete.
 6. Require each role to return one fragment file. Run `ravel ingest` after each wave; stop the workflow if validation fails.
 7. Answer from graph evidence and cite `path:startLine` when available.
+
+Do not start `ravel watch`, install Git hooks, or leave background processes running automatically. Suggest `ravel watch --interval 2s <target>` for saved-file refresh during active development and `ravel hook install <target>` for opt-in post-commit/post-checkout refresh. Both require explicit user consent.
 
 ## Specialized roles
 

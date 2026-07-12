@@ -334,6 +334,8 @@ ravel watch --interval 2s .
 
 Only changed hashes trigger an update. The update invalidates stale agent enrichment and records changed paths for `ravel diff`.
 
+The installed Ravel skill runs one local, hash-aware `ravel update .` at the beginning of a task whenever an existing `.reporavel/graph.json` is present. Missing graphs still require an audited, consented first build. The skill never starts watch mode, installs Git hooks, or leaves a background process running without explicit consent.
+
 ### Updating Ravel
 
 Check for a newer release without downloading or changing anything:

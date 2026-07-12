@@ -30,4 +30,6 @@
 
 ## `update`
 
-Use file hashes from `.reporavel/files.json` to scope re-analysis. Rebuild deterministic data first, then rerun only agent roles whose source files changed. Git hooks are opt-in via `ravel hook install`.
+At the beginning of each skill task, run `ravel update <target>` once when `.reporavel/graph.json` already exists. The update is local and hash-aware: use `.reporavel/files.json` and the changed paths recorded by the command to scope re-analysis. Rebuild deterministic data first, then rerun only agent roles whose evidence files changed. Do not rebuild a missing graph without consent.
+
+Continuous refresh remains opt-in. Use `ravel watch --interval 2s <target>` for saved-file changes during an active coding session, or `ravel hook install <target>` for post-commit and post-checkout refresh. Never start either automatically from the skill.

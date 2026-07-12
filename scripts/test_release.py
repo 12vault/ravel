@@ -32,6 +32,14 @@ for path in paths:
 
 source = root / "skills/ravel"
 targets = [root / "plugins/ravel/skills/ravel", root / ".agents/plugins/plugins/ravel/skills/ravel"]
+skill_text = (source / "skill.md").read_text()
+for required_instruction in (
+    "run `ravel update <target>` once before reading or querying the graph",
+    "Do not start `ravel watch`, install Git hooks, or leave background processes running automatically",
+    "ask before the initial `ravel build <target>`",
+):
+    if required_instruction not in skill_text:
+        raise SystemExit(f"canonical skill omits graph-refresh policy: {required_instruction}")
 expected_platforms = {
     "ravel_darwin_amd64": ("darwin", "amd64"),
     "ravel_darwin_arm64": ("darwin", "arm64"),
