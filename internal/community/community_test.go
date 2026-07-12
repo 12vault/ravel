@@ -3,6 +3,7 @@ package community
 import (
 	"reflect"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/12vault/ravel/internal/graph"
@@ -26,6 +27,47 @@ func TestAssignFindsSeparateCommunities(t *testing.T) {
 	}
 	if communities["a"] == communities["x"] {
 		t.Fatalf("disconnected components share a community: %#v", communities)
+	}
+}
+
+func TestAssignNamesSummarizesAndRemovesCommunities(t *testing.T) {
+	g := graph.Graph{
+		Nodes: []graph.Node{{ID: "a", Kind: graph.NodeFile, Name: "a.go", Path: "internal/query/a.go"}, {ID: "b", Kind: graph.NodeFunction, Name: "Run", Path: "internal/query/a.go"}},
+		Edges: []graph.Edge{{From: "a", To: "b", Kind: graph.EdgeDefines}},
+	}
+	assigned := Assign(g)
+	if got := assigned.Nodes[0].Meta[MetaNameKey]; got != "internal/query" {
+		t.Fatalf("community name = %q", got)
+	}
+	if got := assigned.Nodes[0].Meta[MetaSizeKey]; got != "2" {
+		t.Fatalf("community size = %q", got)
+	}
+	summaries := Summaries(assigned)
+	if len(summaries) != 1 || summaries[0].Name != "internal/query" || summaries[0].Size != 2 {
+		t.Fatalf("summaries = %#v", summaries)
+	}
+	removed := Remove(assigned)
+	if _, ok := removed.Nodes[0].Meta[MetaKey]; ok {
+		t.Fatal("Remove retained community metadata")
+	}
+}
+
+func BenchmarkAssignLargeGraph(b *testing.B) {
+	const nodes = 10_000
+	g := graph.Graph{Nodes: make([]graph.Node, nodes), Edges: make([]graph.Edge, 0, nodes*3)}
+	for i := 0; i < nodes; i++ {
+		id := "n" + strconv.Itoa(i)
+		g.Nodes[i] = graph.Node{ID: id, Kind: graph.NodeFunction, Name: id, Path: "internal/p" + strconv.Itoa(i/100) + "/file.go"}
+		if i > 0 {
+			g.Edges = append(g.Edges, graph.Edge{From: "n" + strconv.Itoa(i-1), To: id, Kind: graph.EdgeCalls})
+		}
+		if i >= 100 {
+			g.Edges = append(g.Edges, graph.Edge{From: "n" + strconv.Itoa(i-100), To: id, Kind: graph.EdgeReferences})
+		}
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = Assign(g)
 	}
 }
 
