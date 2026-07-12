@@ -231,7 +231,7 @@ ravel ingest fragment.json
 Ravel is local-first and audit-first.
 
 - `ravel audit .` lists what will be analyzed and ignored.
-- Analysis, graph, query, dashboard, and corpus commands make no network requests and never call an LLM. Only the explicit `ravel self-update` command accesses the release server.
+- Analysis, graph, query, dashboard, and corpus commands make no network requests and never call an LLM. Only the explicit `ravel update-check` and `ravel self-update` commands access the release server.
 - `ravel extract` may execute a discovered, allowlisted local extractor (`pdftotext`, `mutool`, or `pandoc`) only when the user invokes that command.
 - Agent roles run only through the installed skill and the host assistant's normal permission model.
 - `.gitignore` rules, symlinks, `.env` files, private-key formats, credential directories, databases, archives, binary media, dependency folders, and common build output are rejected before file content is read.
@@ -336,7 +336,16 @@ Only changed hashes trigger an update. The update invalidates stale agent enrich
 
 ### Updating Ravel
 
-Binary and manual skill installations can update together:
+Check for a newer release without downloading or changing anything:
+
+```sh
+ravel update-check
+ravel update-check --json
+```
+
+`update-check` makes one explicit release-metadata request. Ravel does not check for updates in the background and never updates itself during a skill tool call.
+
+Binary and manual skill installations can then update together:
 
 ```sh
 ravel self-update --platforms codex,claude
@@ -344,6 +353,8 @@ ravel self-update --platforms codex,claude --project
 ```
 
 The command downloads the selected release archive and checksum, verifies it, atomically replaces the binary, then refreshes only the explicitly listed skill destinations. Marketplace-managed skills update through their marketplace client.
+
+Installed Ravel skills perform a zero-network local version handshake on their first invocation. Their launcher compares the global CLI with the skill's `VERSION`; when the global CLI is older, it uses the bundled binary and prints a non-blocking update hint. It does not run `update-check` or `self-update` automatically.
 
 After CLI changes, run `python3 scripts/sync-packages.py` to rebuild all six native binaries and copy the refreshed skill bundle into both marketplace packages. Validate the result with `python3 scripts/test_release.py`.
 
