@@ -29,6 +29,25 @@ Ravel creates that missing map:
 - Give coding agents compact, local repository context.
 - Audit what will be read before building anything.
 
+### Ravel and Graphify
+
+[Graphify](https://github.com/safishamsi/graphify) aims for a broad knowledge-graph product with rich visualization, clustering, exports, and many integrations. Ravel has a narrower systems goal: provide secure, fast, deterministic code intelligence as a small, embeddable Go binary.
+
+| Area | Ravel | Graphify |
+| --- | --- | --- |
+| Primary goal | Secure, portable evidence and retrieval for coding agents | Broad graph generation, visualization, and ecosystem features |
+| Distribution | Prebuilt single binary for supported platforms | Python application and package environment |
+| Runtime | Compiled Go; no Python runtime required | Python runtime plus its package dependencies |
+| Dependency surface | Small compiled runtime surface with pinned parser inputs | Larger application dependency tree and optional AI-provider integrations |
+| Code analysis | Offline, deterministic Go AST, pure-Go Tree-sitter, Markdown, and SQL extraction | Local Tree-sitter extraction with more language- and ecosystem-specific passes |
+| Trust model | Every relationship distinguishes extracted, inferred, ambiguous, and unresolved evidence | Optimizes for a broad, connected graph and higher-level analysis |
+| Safety boundary | Audit before build; ignored files, credential directories, and key material are excluded | Local code parsing; semantic processing of non-code sources can use a configured model provider |
+| Embedding | Go packages, CLI, and read-only MCP server | CLI, MCP, assistant integrations, and export targets |
+| Visualization | Self-contained local dashboard | Rich interactive visualization, clustering, wiki, and graph-database exports |
+| Best fit | CI, local agents, Go systems, constrained environments, and products that need an embeddable graph engine | Polyglot projects that prioritize feature breadth, community clustering, and human-facing graph exploration |
+
+Ravel does not try to win by having the longest feature list. It prioritizes a small attack and dependency surface, predictable local execution, explicit provenance, and release binaries that users can run without building the project or managing a language environment.
+
 ## Quick start
 
 Install the latest checksum-verified release on macOS or Linux:
