@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "measuredAt": "2026-07-12",
+  "metric": "compact_context_payload_estimated_tokens",
+  "tokenEstimate": "ceil(UTF-8 bytes / 3)",
+  "tokenBudget": 800,
+  "cases": 10,
+  "repository": "t3tools/t3code",
+  "revision": "c1ec1915fc16f3dc1ec5d47d9a97f6210a574526",
+  "machine": {
+    "cpu": "Apple M1 Pro",
+    "os": "darwin",
+    "architecture": "arm64"
+  },
+  "ravelVersion": "ravel v0.2.4",
+  "graphifyVersion": "graphify 0.9.12",
+  "ravelGraphNodes": 296964,
+  "ravelGraphEdges": 367445,
+  "graphifyGraphNodes": 49517,
+  "graphifyGraphEdges": 104160,
+  "build": {
+    "ravelFilesAnalyzed": 5630,
+    "ravelSeconds": 148.95,
+    "graphifyCodeFilesScanned": 5448,
+    "graphifySeconds": 90.52,
+    "graphifyRawEdges": 123747,
+    "graphifyZeroNodeFiles": 805,
+    "graphifySkippedSQLFiles": 11
+  },
+  "reclustering": {
+    "ravelSeconds": 13.18,
+    "graphifySeconds": 19.71,
+    "graphifyBackend": "networkx-louvain",
+    "graphifyNetworkxVersion": "3.6.1"
+  },
+  "ravelEstimatedTokens": 6851,
+  "graphifyEstimatedTokens": 9009,
+  "limitations": "Payload size only; this does not measure answer correctness or model billing.",
+  "results": [
+    {
+      "id": "websocket-reconnect",
+      "question": "How does the web client connect to the server and recover from WebSocket disconnects?",
+      "ravelBytes": 2159,
+      "ravelEstimatedTokens": 720,
+      "graphifyBytes": 2629,
+      "graphifyEstimatedTokens": 877
+    },
+    {
+      "id": "provider-session-lifecycle",
+      "question": "Where are coding-agent provider sessions created, resumed, and terminated?",
+      "ravelBytes": 2271,
+      "ravelEstimatedTokens": 757,
+      "graphifyBytes": 2685,
+      "graphifyEstimatedTokens": 895
+    },
+    {
+      "id": "provider-event-translation",
+      "question": "How are Codex app-server events translated into the shared client protocol?",
+      "ravelBytes": 2056,
+      "ravelEstimatedTokens": 686,
+      "graphifyBytes": 2822,
+      "graphifyEstimatedTokens": 941
+    },
+    {
+      "id": "conversation-restoration",
+      "question": "How are conversations persisted and restored after the server restarts?",
+      "ravelBytes": 1981,
+      "ravelEstimatedTokens": 661,
+      "graphifyBytes": 2749,
+      "graphifyEstimatedTokens": 917
+    },
+    {
+      "id": "git-worktree-flow",
+      "question": "How does Git worktree creation and branch switching flow through the system?",
+      "ravelBytes": 2186,
+      "ravelEstimatedTokens": 729,
+      "graphifyBytes": 2734,
+      "graphifyEstimatedTokens": 912
+    },
+    {
+      "id": "approval-flow",
+      "question": "How are tool approval or permission requests sent to the UI and resolved?",
+      "ravelBytes": 1841,
+      "ravelEstimatedTokens": 614,
+      "graphifyBytes": 2741,
+      "graphifyEstimatedTokens": 914
+    },
+    {
+      "id": "shared-client-runtime",
+      "question": "How does client-runtime share behavior between the web and mobile clients?",
+      "ravelBytes": 2149,
+      "ravelEstimatedTokens": 717,
+      "graphifyBytes": 2730,
+      "graphifyEstimatedTokens": 910
+    },
+    {
+      "id": "streaming-output",
+      "question": "How does the server stream tool calls and partial assistant output to clients?",
+      "ravelBytes": 1949,
+      "ravelEstimatedTokens": 650,
+      "graphifyBytes": 2667,
+      "graphifyEstimatedTokens": 889
+    },
+    {
+      "id": "protocol-schemas",
+      "question": "Where are WebSocket request and event schemas defined and validated?",
+      "ravelBytes": 2034,
+      "ravelEstimatedTokens": 678,
+      "graphifyBytes": 2603,
+      "graphifyEstimatedTokens": 868
+    },
+    {
+      "id": "multi-session-ui",
+      "question": "How does the frontend manage multiple agent sessions and the selected conversation?",
+      "ravelBytes": 1916,
+      "ravelEstimatedTokens": 639,
+      "graphifyBytes": 2657,
+      "graphifyEstimatedTokens": 886
+    }
+  ]
+}

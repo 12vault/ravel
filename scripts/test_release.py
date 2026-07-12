@@ -192,4 +192,11 @@ if os.name != "nt" and comparison.stat().st_mode & 0o111 == 0:
 comparison_help = subprocess.run([sys.executable, str(comparison), "--help"], check=False, capture_output=True, text=True)
 if comparison_help.returncode != 0 or "--graphify-graph" not in comparison_help.stdout:
     raise SystemExit(f"Graphify comparison adapter help smoke test failed: {comparison_help.stdout}{comparison_help.stderr}")
+
+payload_comparison = root / "benchmarks/compare_context_payloads.py"
+if os.name != "nt" and payload_comparison.stat().st_mode & 0o111 == 0:
+    raise SystemExit(f"payload comparison adapter is not executable: {payload_comparison}")
+payload_help = subprocess.run([sys.executable, str(payload_comparison), "--help"], check=False, capture_output=True, text=True)
+if payload_help.returncode != 0 or "--questions" not in payload_help.stdout:
+    raise SystemExit(f"payload comparison adapter help smoke test failed: {payload_help.stdout}{payload_help.stderr}")
 print(f"Release versions synchronized at {version}")

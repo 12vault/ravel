@@ -1,0 +1,42 @@
+[
+  {
+    "id": "websocket-reconnect",
+    "question": "How does the web client connect to the server and recover from WebSocket disconnects?"
+  },
+  {
+    "id": "provider-session-lifecycle",
+    "question": "Where are coding-agent provider sessions created, resumed, and terminated?"
+  },
+  {
+    "id": "provider-event-translation",
+    "question": "How are Codex app-server events translated into the shared client protocol?"
+  },
+  {
+    "id": "conversation-restoration",
+    "question": "How are conversations persisted and restored after the server restarts?"
+  },
+  {
+    "id": "git-worktree-flow",
+    "question": "How does Git worktree creation and branch switching flow through the system?"
+  },
+  {
+    "id": "approval-flow",
+    "question": "How are tool approval or permission requests sent to the UI and resolved?"
+  },
+  {
+    "id": "shared-client-runtime",
+    "question": "How does client-runtime share behavior between the web and mobile clients?"
+  },
+  {
+    "id": "streaming-output",
+    "question": "How does the server stream tool calls and partial assistant output to clients?"
+  },
+  {
+    "id": "protocol-schemas",
+    "question": "Where are WebSocket request and event schemas defined and validated?"
+  },
+  {
+    "id": "multi-session-ui",
+    "question": "How does the frontend manage multiple agent sessions and the selected conversation?"
+  }
+]
