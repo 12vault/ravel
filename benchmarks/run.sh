@@ -2,7 +2,7 @@
 set -eu
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$root"
-go test -run '^$' -bench . -benchmem ./internal/build ./internal/query
+go test -run '^$' -bench . -benchmem ./internal/build ./internal/lang/treeanalyzer ./internal/query
 
 out=${RAVEL_BENCH_OUT:-${TMPDIR:-/tmp}/ravel-benchmarks-$$}
 mkdir -p "$out"

@@ -2,13 +2,36 @@ package treeanalyzer
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/12ya/reporavel/internal/graph"
 	"github.com/12ya/reporavel/internal/scan"
 )
+
+func BenchmarkAnalyzePythonHundredFunctions(b *testing.B) {
+	root := b.TempDir()
+	path := filepath.Join(root, "service.py")
+	var source strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&source, "def function_%d():\n    return %d\n\n", i, i)
+	}
+	if err := os.WriteFile(path, []byte(source.String()), 0o644); err != nil {
+		b.Fatal(err)
+	}
+	files := []scan.File{{Path: "service.py", AbsPath: path, Language: "python"}}
+	analyzer := New("python")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := analyzer.Analyze(context.Background(), root, files); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func TestPythonExtractsDefinitionsCallsHeritageAndImports(t *testing.T) {
 	result := analyzeSources(t, "python", map[string]string{
