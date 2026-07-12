@@ -36,7 +36,7 @@ import (
 	"github.com/12vault/ravel/internal/workflow"
 )
 
-var Version = "v0.2.4"
+var Version = "v0.2.5"
 
 var checkForUpdate = selfupdate.Check
 
