@@ -9,12 +9,23 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/12vault/ravel" alt="MIT License"></a>
 </p>
 
-Ravel builds a local knowledge graph of code and documents so developers and coding agents can understand a system before reading files one by one.
+<p align="center">
+  <strong>Secure, local code intelligence in a single Go binary.</strong>
+</p>
 
-The Go binary provides a fast, offline evidence layer. The bundled skill adds language-independent agent analysis for architecture, domains, flows, tours, documents, PDFs, and schemas. Agent enrichment is optional, validated, provenance-tagged, and never confused with parser-extracted facts.
+Ravel turns code and documents into a local knowledge graph. Developers and coding agents can find the right files, trace relationships, and understand a system without scanning the repository from scratch.
 
-> [!NOTE]
-> Native deterministic extraction uses Go AST, a pinned pure-Go Tree-sitter runtime for broad polyglot definitions and call sites, Markdown headings and links, plus SQL tables, views, columns, indexes, foreign keys, and conservative `FROM`/`JOIN` references. Tree-sitter syntax facts are tagged `extracted`; name-based target resolution is explicitly tagged `inferred`, and ambiguous targets remain unresolved. The scanner still inventories safe files whose grammar has no useful structural query. Ravel states inventory, deterministic evidence, and inference separately because they have different confidence and safety properties.
+**What you get:**
+
+- One prebuilt binary with no Python runtime.
+- Fast, offline analysis for Go and a broad set of Tree-sitter grammars.
+- Evidence labels that separate parsed facts from inferred relationships.
+- Audit-first scanning that excludes secrets, dependencies, and ignored files.
+- Compact graph context for coding agents through the CLI or MCP.
+- Optional agent enrichment for architecture, domains, flows, documents, and learning tours.
+
+> [!IMPORTANT]
+> Ravel keeps evidence levels separate. Parser facts are `extracted`, name-based matches are `inferred`, and unsafe matches remain unresolved. Optional agent enrichment is validated and provenance-tagged; it is never presented as parser output.
 
 ## Why Ravel?
 
@@ -40,7 +51,7 @@ Ravel creates that missing map:
 | Runtime | Compiled Go; no Python runtime required | Python runtime plus its package dependencies |
 | Dependency surface | Small compiled runtime surface with pinned parser inputs | Larger application dependency tree and optional AI-provider integrations |
 | Code analysis | Offline, deterministic Go AST, pure-Go Tree-sitter, Markdown, and SQL extraction | Local Tree-sitter extraction with more language- and ecosystem-specific passes |
-| Trust model | Every relationship distinguishes extracted, inferred, ambiguous, and unresolved evidence | Optimizes for a broad, connected graph and higher-level analysis |
+| Evidence quality | Shows which relationships are parser-proven, inferred, or not safely resolvable | Optimizes for a broad, connected graph and higher-level analysis |
 | Safety boundary | Audit before build; ignored files, credential directories, and key material are excluded | Local code parsing; semantic processing of non-code sources can use a configured model provider |
 | Embedding | Go packages, CLI, and read-only MCP server | CLI, MCP, assistant integrations, and export targets |
 | Visualization | Self-contained local dashboard | Rich interactive visualization, clustering, wiki, and graph-database exports |
@@ -48,7 +59,25 @@ Ravel creates that missing map:
 
 Ravel does not try to win by having the longest feature list. It prioritizes a small attack and dependency surface, predictable local execution, explicit provenance, and release binaries that users can run without building the project or managing a language environment.
 
+## Contents
+
+- [Quick start](#quick-start)
+- [Explore the graph](#explore-the-graph)
+- [MCP server](#mcp-server)
+- [Generated artifacts](#generated-artifacts)
+- [Safety](#audit-first-safety)
+- [Configuration](#configuration)
+- [Agent workflow](#agent-workflow)
+- [Integrations and hooks](#native-integrations-and-hooks)
+- [Updating Ravel](#updating-ravel)
+- [Capability layers](#capability-layers)
+- [Benchmarks](#benchmarks)
+- [Development](#development)
+- [License](#license)
+
 ## Quick start
+
+### Install a release binary
 
 Install the latest checksum-verified release on macOS or Linux:
 
@@ -66,7 +95,11 @@ irm https://raw.githubusercontent.com/12vault/ravel/main/install.ps1 | iex
 
 PowerShell prints the equivalent `PATH` command when `~/.local/bin` is not already available.
 
-Release archives also contain a portable `ravel` binary that can run in place without installation. To build from source, install Go 1.26.5 or newer and clone the repository:
+Release archives also contain a portable `ravel` binary that runs in place without installation.
+
+### Build from source
+
+Install Go 1.26.5 or newer, then run:
 
 ```sh
 git clone https://github.com/12vault/ravel.git
@@ -74,7 +107,17 @@ cd ravel
 go install ./cmd/ravel
 ```
 
-`go install` writes to `GOBIN`, or to `$(go env GOPATH)/bin` when `GOBIN` is unset. Make sure that directory is on `PATH`. To install the project-local Codex skill straight from this checkout without installing a global binary, run:
+`go install` writes to `GOBIN`, or to `$(go env GOPATH)/bin` when `GOBIN` is unset. Make sure that directory is on `PATH`.
+
+To build a portable binary in the current directory instead:
+
+```sh
+go build -o ravel ./cmd/ravel
+```
+
+### Connect a coding assistant
+
+Install the project-local Codex skill directly from a source checkout:
 
 ```sh
 go run ./cmd/ravel install --project --platform codex
@@ -100,7 +143,9 @@ $ravel .
 
 Assistants that use slash commands accept `/ravel .` instead. The installer also supports `claude`, `codebuddy`, `opencode`, `kilo`, `copilot`, `vscode`, `aider`, `openclaw`, `droid`, `trae`, `trae-cn`, `gemini`, `hermes`, `kimi`, `amp`, `agents`, `kiro`, `pi`, `cursor`, `devin`, and `antigravity` skill locations. Use `--project` for a repository-scoped installation.
 
-Then run it from a repository:
+### Build your first graph
+
+Run these commands from the repository you want to analyze:
 
 ```sh
 cd your-repository
@@ -121,13 +166,9 @@ ravel report
 ravel dashboard
 ```
 
-Or build a local binary:
-
-```sh
-go build -o ravel ./cmd/ravel
-```
-
 ## Explore the graph
+
+### Search and retrieve context
 
 Search for files, packages, types, functions, or methods:
 
@@ -155,6 +196,8 @@ ravel context --json "what imports the storage package?"
 When no explicit `--relations` filter is supplied, Ravel can infer one from words such as “called,” “imports,” “inherits,” or “tested.” Use `--infer-relations=false` to traverse every available relationship. `--json` returns the same selected context in a machine-readable envelope; `estimatedTokens` measures the compact text payload, so JSON field-name and formatting overhead is intentionally not included.
 
 Compact output reports every truncation cause. `token_budget` can be addressed by raising `--token-budget` or narrowing the output. `branch_limit` happens earlier during traversal: narrow relations/depth or raise `--branch-fanout`; more output tokens alone cannot recover a pruned branch. The default branch fanout of `0` chooses a safe automatic cap from the node, seed, and depth limits.
+
+### Trace relationships
 
 Explain a file or symbol and show its immediate relationships:
 
@@ -188,6 +231,8 @@ ravel query "which parts handle authentication?"
 
 Use `query` when a short ranked list is enough. Use `context` when the relationships around the matches are part of the answer.
 
+### Run focused workflows
+
 Focused graph workflows are first-class commands:
 
 ```sh
@@ -203,7 +248,7 @@ ravel diff internal/api.go # impact from explicit paths
 
 In an agent session, these routes also activate the specialized semantic roles and merge their evidence-tagged fragments.
 
-### MCP server
+## MCP server
 
 Expose the existing graph to MCP-capable coding agents without a network service or additional dependencies:
 
@@ -288,7 +333,11 @@ ravel update .
 
 Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json` and `output.markdownReport` switches control which artifacts are written.
 
+### Supported languages
+
 Packaged binaries embed a curated, self-contained grammar set for JavaScript/TypeScript/TSX, Swift, Python, Java, Kotlin, Scala, Rust, Ruby, PHP, C/C++, C#, F#, Dart, Elixir, Erlang, Clojure, Lua, R, Objective-C, Perl, Groovy, Solidity, shell, PowerShell, HCL, Protocol Buffers, and GraphQL. Source builds without release tags embed gotreesitter's complete registry. Grammar loading is lazy in both cases; Ravel only emits semantics when a grammar provides a compilable structural tags query.
+
+### Retrieval defaults
 
 The connected retriever can also be configured once for agents and benchmarks:
 
@@ -320,7 +369,7 @@ The intended loop is:
 
 Use `ravel tools` before document, PDF, or schema work. It discovers local extractors and database clients without executing them. `ravel extract <audited-file>` then processes PDF, DOCX, ODT, RTF, Markdown, or text locally into `.reporavel/corpus/`; it refuses unaudited paths. PDF content stays local unless the user separately authorizes an external service.
 
-### Native integrations and hooks
+## Native integrations and hooks
 
 Project installs place the portable skill in the platform's native directory. For Codex, Claude Code, Cursor, VS Code/Copilot, Gemini CLI, and OpenCode, Ravel also installs owned project instructions, rules, or hooks. Existing configuration is preserved, repeated installs are idempotent, and uninstall removes only Ravel-owned content.
 
@@ -358,7 +407,7 @@ Only changed hashes trigger an update. The update invalidates stale agent enrich
 
 The installed Ravel skill runs one local, hash-aware `ravel update .` at the beginning of a task whenever an existing `.reporavel/graph.json` is present. Missing graphs still require an audited, consented first build. The skill never starts watch mode, installs Git hooks, or leaves a background process running without explicit consent.
 
-### Updating Ravel
+## Updating Ravel
 
 Check for a newer release without downloading or changing anything:
 
