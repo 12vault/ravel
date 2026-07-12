@@ -794,7 +794,8 @@ func normalizeName(name string) string {
 }
 
 func byteLineColumn(source []byte, offset uint32) (int, int) {
-	if int(offset) > len(source) {
+	if uint64(offset) > uint64(len(source)) {
+		// #nosec G115 -- the branch proves len(source) is smaller than a uint32.
 		offset = uint32(len(source))
 	}
 	line, column := 1, 1
