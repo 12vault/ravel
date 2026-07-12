@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/12vault/ravel/internal/config"
 )
@@ -116,6 +115,14 @@ func ScanWithProgress(root string, cfg config.Config, visit func(path string, fi
 			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "gitignored"})
 			return nil
 		}
+		lang := LanguageForPath(relPath)
+		if lang == "" {
+			lang = languageFromShebang(path)
+		}
+		if lang == "" {
+			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "unsupported file type"})
+			return nil
+		}
 		info, err := entry.Info()
 		if err != nil {
 			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: err.Error()})
@@ -128,14 +135,6 @@ func ScanWithProgress(root string, cfg config.Config, visit func(path string, fi
 		if result.TotalBytes+info.Size() > cfg.Scan.MaxTotalBytes {
 			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "over max total size"})
 			return nil
-		}
-		lang := LanguageForPath(relPath)
-		if lang == "" {
-			if !isTextFile(path) {
-				result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "binary or unsupported file type"})
-				return nil
-			}
-			lang = "unknown"
 		}
 		hash, err := fileHash(path)
 		if err != nil {
@@ -165,19 +164,69 @@ func ScanWithProgress(root string, cfg config.Config, visit func(path string, fi
 	return result, nil
 }
 
-func isTextFile(path string) bool {
+func languageFromShebang(path string) string {
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return ""
 	}
 	defer f.Close()
-	buf := make([]byte, 8192)
+	buf := make([]byte, 256)
 	n, err := f.Read(buf)
 	if err != nil && !errors.Is(err, io.EOF) {
-		return false
+		return ""
 	}
-	buf = buf[:n]
-	return !strings.ContainsRune(string(buf), '\x00') && utf8.Valid(buf)
+	line := string(buf[:n])
+	if !strings.HasPrefix(line, "#!") {
+		return ""
+	}
+	if index := strings.IndexByte(line, '\n'); index >= 0 {
+		line = line[:index]
+	}
+	fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(line, "#!")))
+	if len(fields) == 0 {
+		return ""
+	}
+	interpreter := filepath.Base(fields[0])
+	if interpreter == "env" {
+		for index := 1; index < len(fields); index++ {
+			field := fields[index]
+			if field == "--" {
+				continue
+			}
+			if field == "-u" || field == "--unset" || field == "-C" || field == "--chdir" || field == "-P" || field == "--path" {
+				index++
+				continue
+			}
+			if strings.HasPrefix(field, "-") || strings.Contains(field, "=") {
+				continue
+			}
+			interpreter = filepath.Base(field)
+			break
+		}
+	}
+	interpreter = strings.Trim(interpreter, `"'`)
+	switch {
+	case strings.HasPrefix(interpreter, "python"):
+		return "python"
+	case interpreter == "node", interpreter == "nodejs", interpreter == "deno", interpreter == "bun":
+		return "javascript"
+	case interpreter == "sh", interpreter == "bash", interpreter == "zsh", interpreter == "dash", interpreter == "ksh", interpreter == "fish":
+		return "shell"
+	case interpreter == "ruby":
+		return "ruby"
+	case interpreter == "php":
+		return "php"
+	case interpreter == "perl":
+		return "perl"
+	case interpreter == "pwsh", interpreter == "powershell":
+		return "powershell"
+	case interpreter == "lua", interpreter == "luajit":
+		return "lua"
+	case interpreter == "elixir":
+		return "elixir"
+	default:
+		return ""
+	}
 }
 
 func LanguageForPath(path string) string {
@@ -186,9 +235,9 @@ func LanguageForPath(path string) string {
 	switch ext {
 	case ".go":
 		return "go"
-	case ".js", ".jsx":
+	case ".js", ".jsx", ".mjs", ".cjs", ".ejs":
 		return "javascript"
-	case ".ts", ".tsx":
+	case ".ts", ".tsx", ".mts", ".cts":
 		return "typescript"
 	case ".swift":
 		return "swift"
@@ -232,7 +281,7 @@ func LanguageForPath(path string) string {
 		return "objective-c"
 	case ".pl", ".pm":
 		return "perl"
-	case ".groovy":
+	case ".groovy", ".gradle":
 		return "groovy"
 	case ".sol":
 		return "solidity"
@@ -254,6 +303,8 @@ func LanguageForPath(path string) string {
 		return "html"
 	case ".vue":
 		return "vue"
+	case ".astro":
+		return "astro"
 	case ".svelte":
 		return "svelte"
 	case ".css", ".scss", ".sass":
@@ -282,6 +333,11 @@ func LanguageForPath(path string) string {
 		return "dockerfile"
 	case "Makefile":
 		return "make"
+	case "Brewfile":
+		return "ruby"
+	}
+	if strings.HasSuffix(strings.ToLower(base), ".podspec") {
+		return "ruby"
 	}
 	return ""
 }
@@ -291,7 +347,16 @@ func ignoreDir(path, name string) string {
 		return "sensitive credential directory"
 	}
 	switch name {
-	case ".git", "node_modules", "vendor", "Pods", "DerivedData", ".build", "dist", "coverage", ".next", ".nuxt", "target", ".idea", ".vscode", ".reporavel", "ravel-graph":
+	case ".git", "node_modules", "vendor", "Pods", "DerivedData", ".build", "dist", "coverage", ".next", ".nuxt", "target", ".idea", ".vscode", ".reporavel", "ravel-graph",
+		"venv", ".venv", "env", ".env", "__pycache__", "out", "site-packages", "lib64", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".eggs",
+		"graphify-out", ".graphify", "lcov-report", "visual-tests", "visual-test", "__snapshots__", "storybook-static", "dist-protected",
+		".turbo", ".angular", ".cache", ".parcel-cache", ".svelte-kit", ".terraform", ".serverless", ".worktrees":
+		return "default ignored directory"
+	}
+	if strings.HasSuffix(name, "_venv") || strings.HasSuffix(name, "_env") || strings.HasSuffix(name, ".egg-info") {
+		return "default ignored directory"
+	}
+	if name == "worktrees" && strings.HasPrefix(filepath.Base(filepath.Dir(path)), ".") {
 		return "default ignored directory"
 	}
 	if strings.HasPrefix(name, ".") && (name == ".cache" || strings.HasSuffix(name, "_cache")) {
@@ -306,6 +371,8 @@ func ignoreFile(path, name string) string {
 		return "secret-like environment file"
 	}
 	switch {
+	case defaultIgnoredFile(lower):
+		return "generated dependency lockfile"
 	case strings.HasSuffix(lower, ".pem"), strings.HasSuffix(lower, ".key"), strings.HasSuffix(lower, ".p8"), strings.HasSuffix(lower, ".der"), strings.HasSuffix(lower, ".crt"), strings.HasSuffix(lower, ".cer"), strings.HasSuffix(lower, ".p12"), strings.HasSuffix(lower, ".pfx"), strings.HasSuffix(lower, ".jks"), strings.HasSuffix(lower, ".keystore"):
 		return "secret-like key material"
 	case isSensitiveFilename(name):
@@ -324,6 +391,15 @@ func ignoreFile(path, name string) string {
 		return "database file"
 	}
 	return ""
+}
+
+func defaultIgnoredFile(lower string) bool {
+	switch lower {
+	case "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "cargo.lock", "poetry.lock", "gemfile.lock", "composer.lock", "go.sum", "go.work.sum":
+		return true
+	default:
+		return false
+	}
 }
 
 func sensitiveAncestorReason(path string) string {

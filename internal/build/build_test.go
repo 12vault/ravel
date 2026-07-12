@@ -77,8 +77,8 @@ func TestRunSkipsUnsupportedAndZeroContributionFiles(t *testing.T) {
 			t.Errorf("non-contributing file %q was graphified", path)
 		}
 	}
-	if len(result.Skipped) != 3 {
-		t.Fatalf("Skipped = %#v, want 3 files", result.Skipped)
+	if len(result.Skipped) != 2 {
+		t.Fatalf("Skipped = %#v, want 2 analyzer-skipped files; LICENSE is rejected during scan", result.Skipped)
 	}
 }
 

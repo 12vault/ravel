@@ -33,42 +33,52 @@ func newIgnoreMatcher(root string) (*ignoreMatcher, error) {
 }
 
 func (m *ignoreMatcher) loadDir(relativeDir string) error {
-	path := filepath.Join(m.root, filepath.FromSlash(relativeDir), ".gitignore")
+	for _, name := range []string{".gitignore", ".ravelignore"} {
+		if err := m.loadFile(relativeDir, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ignoreMatcher) loadFile(relativeDir, name string) error {
+	path := filepath.Join(m.root, filepath.FromSlash(relativeDir), name)
+	displayPath := filepath.ToSlash(filepath.Join(relativeDir, name))
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")), err)
+		return fmt.Errorf("read %s: %w", displayPath, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() > maxIgnoreFileSize {
 		return nil
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")), err)
+		return fmt.Errorf("read %s: %w", displayPath, err)
 	}
 	defer file.Close()
 	openedInfo, err := file.Stat()
 	if err != nil {
-		return fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")), err)
+		return fmt.Errorf("read %s: %w", displayPath, err)
 	}
 	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
-		return fmt.Errorf("read %s: file changed while opening", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")))
+		return fmt.Errorf("read %s: file changed while opening", displayPath)
 	}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 16<<10), maxIgnoreFileSize)
 	for lineNumber := 1; scanner.Scan(); lineNumber++ {
 		rule, ok, err := parseIgnoreRule(relativeDir, scanner.Text())
 		if err != nil {
-			return fmt.Errorf("parse %s:%d: %w", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")), lineNumber, err)
+			return fmt.Errorf("parse %s:%d: %w", displayPath, lineNumber, err)
 		}
 		if ok {
 			m.rules = append(m.rules, rule)
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read %s: %w", filepath.ToSlash(filepath.Join(relativeDir, ".gitignore")), err)
+		return fmt.Errorf("read %s: %w", displayPath, err)
 	}
 	return nil
 }

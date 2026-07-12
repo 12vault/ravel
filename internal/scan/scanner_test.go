@@ -14,6 +14,12 @@ func TestLanguageForPathRecognizesPopularAgentLanguages(t *testing.T) {
 	tests := map[string]string{
 		"app.py":       "python",
 		"app.tsx":      "typescript",
+		"app.mts":      "typescript",
+		"app.mjs":      "javascript",
+		"plugin.cjs":   "javascript",
+		"site.astro":   "astro",
+		"Pod.podspec":  "ruby",
+		"build.gradle": "groovy",
 		"main.rs":      "rust",
 		"App.vue":      "vue",
 		"main.dart":    "dart",
@@ -30,7 +36,7 @@ func TestLanguageForPathRecognizesPopularAgentLanguages(t *testing.T) {
 	}
 }
 
-func TestScanAdmitsUnknownTextAndRejectsUnknownBinary(t *testing.T) {
+func TestScanRejectsUnsupportedFilesAndAdmitsSupportedShebangs(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "program.wren"), []byte("class App {}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -38,15 +44,74 @@ func TestScanAdmitsUnknownTextAndRejectsUnknownBinary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "blob.custom"), []byte{'a', 0, 'b'}, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "tool"), []byte("#!/usr/bin/env python3\nprint('ok')\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	result, err := Scan(root, config.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Files) != 1 || result.Files[0].Path != "program.wren" || result.Files[0].Language != "unknown" {
+	if len(result.Files) != 1 || result.Files[0].Path != "tool" || result.Files[0].Language != "python" {
 		t.Fatalf("files = %#v", result.Files)
 	}
-	if len(result.Ignored) != 1 || result.Ignored[0].Path != "blob.custom" {
+	if len(result.Ignored) != 2 || result.Ignored[0].Reason != "unsupported file type" || result.Ignored[1].Reason != "unsupported file type" {
 		t.Fatalf("ignored = %#v", result.Ignored)
+	}
+}
+
+func TestScanUsesGraphifyCompatibleNoiseExclusions(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"node_modules", ".venv", "__pycache__", ".turbo", ".svelte-kit", "storybook-static", "pkg.egg-info"} {
+		path := filepath.Join(root, dir)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(path, "generated.py"), []byte("def generated(): pass\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"package-lock.json", "pnpm-lock.yaml", "go.sum"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("generated\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.py"), []byte("def main(): pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Scan(root, config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 || result.Files[0].Path != "main.py" {
+		t.Fatalf("files = %#v, ignored = %#v", result.Files, result.Ignored)
+	}
+}
+
+func TestScanRecognizesEnvShebangOptions(t *testing.T) {
+	root := t.TempDir()
+	for name, shebang := range map[string]string{
+		"split":  "#!/usr/bin/env -S python3 -u\n",
+		"unset":  "#!/usr/bin/env -u DEBUG node\n",
+		"assign": "#!/usr/bin/env DEBUG=1 bash\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(shebang), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := Scan(root, config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	languages := map[string]string{}
+	for _, file := range result.Files {
+		languages[file.Path] = file.Language
+	}
+	for path, want := range map[string]string{"split": "python", "unset": "javascript", "assign": "shell"} {
+		if got := languages[path]; got != want {
+			t.Errorf("language for %s = %q, want %q", path, got, want)
+		}
 	}
 }
 
@@ -375,7 +440,7 @@ logs/
 		included = append(included, file.Path)
 	}
 	sort.Strings(included)
-	want := []string{".gitignore", "keep.local", "nested/.gitignore", "nested/public.txt", "visible.go"}
+	want := []string{"nested/public.txt", "visible.go"}
 	if strings.Join(included, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("included = %q, want %q", included, want)
 	}
@@ -387,6 +452,44 @@ logs/
 		if ignored[path] != "gitignored" {
 			t.Errorf("ignored[%q] = %q, want gitignored", path, ignored[path])
 		}
+	}
+}
+
+func TestScanMergesNestedRavelignoreAfterGitignore(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("shared.go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".ravelignore"), []byte("!shared.go\nravel-only.go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"shared.go", "ravel-only.go", "visible.go"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("package fixture\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nested := filepath.Join(root, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, ".ravelignore"), []byte("hidden.go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "hidden.go"), []byte("package fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Scan(root, config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var included []string
+	for _, file := range result.Files {
+		included = append(included, file.Path)
+	}
+	want := []string{"shared.go", "visible.go"}
+	if strings.Join(included, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("included = %q, want %q; ignored = %#v", included, want, result.Ignored)
 	}
 }
 
