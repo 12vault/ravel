@@ -135,10 +135,16 @@ def main() -> int:
         })
 
     output = {
-        "version": 1,
+        "version": 2,
         "metric": "normalized_expected_symbol_name_recall",
         "tokenBudget": args.token_budget,
         "cases": len(results),
+        "ravelVersion": run([args.ravel, "version"]).strip(),
+        "graphifyVersion": run([args.graphify, "--version"]).strip(),
+        "ravelGraphNodes": len(ravel_graph.get("nodes", [])),
+        "ravelGraphEdges": len(ravel_graph.get("edges", [])),
+        "graphifyGraphNodes": len(graphify_graph.get("nodes", [])),
+        "graphifyGraphEdges": len(graphify_graph.get("links", [])),
         "ravelMeanNameRecall": sum(row["ravelNameRecall"] for row in results) / len(results),
         "graphifyMeanNameRecall": sum(row["graphifyNameRecall"] for row in results) / len(results),
         "limitations": "Compatibility metric only: different graph IDs prevent evidence-ID comparison; no model answers or judge are used.",

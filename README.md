@@ -298,6 +298,8 @@ ravel community describe community-descriptions.json
 
 The import rejects unknown or duplicate community IDs and never lets AI output change membership, stable IDs, or deterministic names. Descriptions are automatically discarded if later clustering changes the community ID.
 
+Across updates, membership-hashed IDs remain authoritative while display labels are remapped by Jaccard overlap. Exact membership keeps both label and description. At least `0.70` overlap keeps the previous label; `0.40–0.70` keeps it provisionally and marks it for review; weaker matches receive the new deterministic label. On a split, only the strongest child inherits. A merge with multiple substantial parents receives a new label. Descriptions never transfer across changed membership.
+
 Create a reviewable team bundle that omits raw source and private scanner state:
 
 ```sh
@@ -489,6 +491,28 @@ The distinction is intentional: a skill does not need a language allowlist, but 
 ## Benchmarks
 
 Run the local build/query performance suite with `./benchmarks/run.sh`. Run the checked-in relationship suite with `ravel benchmark --dataset benchmarks/ravel-retrieval.jsonl --retriever context`; use `--retriever flat` for the ranked-list baseline. [`benchmarks/datasets.json`](benchmarks/datasets.json) defines the implemented repository-question contract. Version 3 reports node recall/precision, evidence recall/precision, reciprocal rank, p50/p95 latency, compact context tokens, node and evidence recall per 1,000 tokens, truncation rate, index-build time, logical graph and dataset hashes/revisions, adapter version, Ravel version, Go version, and platform. An optional strict `--answers` ledger adds externally adjudicated accuracy, rubric key-fact coverage, total agent tokens, total spend, and provenance without retaining raw answers; see the [benchmark guide](benchmarks/README.md). Ravel does not claim native LOCOMO/LongMemEval corpus adapters and never invokes a model or judge. Every published score must retain the raw result file and configuration.
+
+### Local Ravel vs Graphify snapshot
+
+Measured on 2026-07-12 on an Apple M1 Pro (`darwin/arm64`) with Ravel v0.2.0 from this worktree and Graphify 0.9.12:
+
+| Benchmark | Ravel | Graphify | Scope |
+| --- | ---: | ---: | --- |
+| Normalized expected-name recall | 0.722 | 0.575 | Same 10 repository questions and 800-token budget; each tool used its own graph schema |
+| Core clustering mean | 26.99 ms | 1,465.94 ms | Same synthetic 10,000-node, 19,899-edge topology; one warm-up and 10 measured runs |
+
+The clustering snapshot makes Ravel 54.3x faster for this input and installation. Graphify used its installed NetworkX 3.6.1 Louvain fallback because the optional Leiden backend was unavailable. This is a speed measurement, not a partition-quality ranking; different algorithms may produce different communities. The retrieval adapter compares normalized symbol names only because graph and evidence IDs are incompatible. Raw results: [retrieval comparison](benchmarks/results/ravel-vs-graphify-2026-07-12.json) and [clustering comparison](benchmarks/results/clustering-ravel-vs-graphify-2026-07-12.json).
+
+The same installation was also run end to end against the T3 Code monorepo (5,554 files and 47.3 MB accepted by Ravel's audit):
+
+| T3 Code measurement | Ravel | Graphify | Scope |
+| --- | ---: | ---: | --- |
+| Graph build | 147.90 s | 98.94 s | Cold local extraction; Ravel analyzed code and supported repository documents, while Graphify used `--code-only` |
+| Resulting graph | 296,011 nodes / 366,102 edges | 49,047 nodes / 122,358 edges | Tool-native schemas and extractors; coverage is not equivalent |
+| Tool-native reclustering | 15.72 s | 25.90 s | Each tool clustered its own resulting graph; Graphify used NetworkX Louvain |
+| Compact context, 10 questions | 6,088 estimated tokens | 8,697 estimated tokens | Same questions and 800-token setting; three UTF-8 bytes per estimated token |
+
+On these ten T3 Code questions, Ravel returned 30.0% fewer estimated context tokens. This measures retrieval payload size, not model input billing, answer quality, or factual accuracy. Graphify skipped non-code inputs, 36 source files that produced no nodes, and 11 SQL files because its optional SQL parser was not installed. The build and tool-native clustering rows therefore describe observed end-to-end behavior, not equal-graph algorithm microbenchmarks.
 
 ## Development
 

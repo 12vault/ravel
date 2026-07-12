@@ -77,3 +77,21 @@ python3 benchmarks/compare_graphify.py \
 ```
 
 The adapter reports normalized expected symbol-name recall because Ravel and Graphify use incompatible node and edge ID schemes. It does not compare evidence recall, model answers, or judge scores and must not be presented as a universal quality ranking. Keep the raw graphs, tool versions, dataset, and output with any published result.
+
+## Recorded local comparison
+
+The 2026-07-12 snapshot used an Apple M1 Pro (`darwin/arm64`), Go 1.26.5, Ravel v0.2.0 from commit `286ab51a69172a1f798fdc61c51cd9a0ad3fa597` plus the current worktree, and Graphify 0.9.12.
+
+| Measurement | Ravel | Graphify |
+| --- | ---: | ---: |
+| Normalized expected-name recall, 10 questions, 800-token budget | 0.7217 | 0.5750 |
+| Graph nodes used by retrieval adapter | 2,731 | 1,305 |
+| Graph edges used by retrieval adapter | 8,767 | 3,713 |
+| Core clustering mean, 10 measured runs | 26.9943 ms | 1,465.9370 ms |
+
+The clustering comparison constructed the same undirected 10,000-node, 19,899-edge topology in memory for each implementation. Graph construction was outside the timer; both tools received one warm-up followed by ten measured runs. Graphify used NetworkX 3.6.1 Louvain because its optional `graspologic`/Leiden backend was not installed. Ravel's mean was 54.3054x faster for this specific topology and environment. Do not generalize that ratio to Leiden, other graphs, end-to-end extraction, or partition quality.
+
+Raw records:
+
+- [`results/ravel-vs-graphify-2026-07-12.json`](results/ravel-vs-graphify-2026-07-12.json)
+- [`results/clustering-ravel-vs-graphify-2026-07-12.json`](results/clustering-ravel-vs-graphify-2026-07-12.json)

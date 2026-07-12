@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "measuredAt": "2026-07-12",
+  "machine": {
+    "cpu": "Apple M1 Pro",
+    "os": "darwin",
+    "architecture": "arm64"
+  },
+  "topology": {
+    "nodes": 10000,
+    "edges": 19899,
+    "description": "n(i-1)-n(i) chain edges plus n(i-100)-n(i) cross edges"
+  },
+  "method": {
+    "warmupRuns": 1,
+    "measuredRuns": 10,
+    "scope": "in-memory core community detection; graph construction excluded"
+  },
+  "ravel": {
+    "version": "v0.2.0 current worktree",
+    "baseCommit": "286ab51a69172a1f798fdc61c51cd9a0ad3fa597",
+    "goVersion": "go1.26.5",
+    "benchmark": "BenchmarkAssignLargeGraph",
+    "meanMs": 26.9943,
+    "bytesPerOperation": 17440049,
+    "allocationsPerOperation": 115908
+  },
+  "graphify": {
+    "version": "0.9.12",
+    "pythonVersion": "3.13",
+    "backend": "networkx-louvain",
+    "networkxVersion": "3.6.1",
+    "runsMs": [1478.698, 1558.364, 1453.390, 1424.003, 1414.816, 1439.343, 1452.167, 1465.398, 1503.068, 1470.121],
+    "meanMs": 1465.937,
+    "medianMs": 1459.394,
+    "minimumMs": 1414.816,
+    "communities": 366
+  },
+  "graphifyToRavelMeanTimeRatio": 54.3054,
+  "limitations": "This measures clustering speed, not partition quality. Graphify used its installed Louvain fallback because optional graspologic/Leiden was unavailable. The implementations use different algorithms and may produce different partitions."
+}

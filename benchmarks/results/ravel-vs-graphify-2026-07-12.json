@@ -1,0 +1,124 @@
+{
+  "version": 2,
+  "metric": "normalized_expected_symbol_name_recall",
+  "tokenBudget": 800,
+  "cases": 10,
+  "ravelVersion": "ravel v0.2.0",
+  "graphifyVersion": "graphify 0.9.12",
+  "ravelGraphNodes": 2731,
+  "ravelGraphEdges": 8767,
+  "graphifyGraphNodes": 1305,
+  "graphifyGraphEdges": 3713,
+  "ravelMeanNameRecall": 0.7216666666666667,
+  "graphifyMeanNameRecall": 0.575,
+  "limitations": "Compatibility metric only: different graph IDs prevent evidence-ID comparison; no model answers or judge are used.",
+  "results": [
+    {
+      "id": "query-call-chain",
+      "expectedNames": [
+        "runQuery",
+        "Search",
+        "(*Index).Search",
+        "WriteSearch"
+      ],
+      "ravelNameRecall": 0.75,
+      "graphifyNameRecall": 0.75
+    },
+    {
+      "id": "context-benchmark-pipeline",
+      "expectedNames": [
+        "runBenchmark",
+        "RunWithOptions",
+        "(*Index).Retrieve",
+        "scoreRetrieval",
+        "aggregate"
+      ],
+      "ravelNameRecall": 0.4,
+      "graphifyNameRecall": 0.4
+    },
+    {
+      "id": "incremental-update-rebuild",
+      "expectedNames": [
+        "Run",
+        "Run",
+        "changes",
+        "preserveEnrichment"
+      ],
+      "ravelNameRecall": 1.0,
+      "graphifyNameRecall": 0.5
+    },
+    {
+      "id": "scan-ignore-bootstrap",
+      "expectedNames": [
+        "Scan",
+        "newIgnoreMatcher"
+      ],
+      "ravelNameRecall": 1.0,
+      "graphifyNameRecall": 0.5
+    },
+    {
+      "id": "integration-instructions-caller",
+      "expectedNames": [
+        "integrationInstructions",
+        "InstallIntegration",
+        "instructionBody"
+      ],
+      "ravelNameRecall": 1.0,
+      "graphifyNameRecall": 0.6666666666666666
+    },
+    {
+      "id": "dashboard-load-render",
+      "expectedNames": [
+        "runDashboard",
+        "LoadGraph",
+        "Write"
+      ],
+      "ravelNameRecall": 0.6666666666666666,
+      "graphifyNameRecall": 0.6666666666666666
+    },
+    {
+      "id": "evaluation-index-and-score",
+      "expectedNames": [
+        "RunWithOptions",
+        "NewIndex",
+        "(*Index).Retrieve",
+        "scoreRetrieval",
+        "aggregate"
+      ],
+      "ravelNameRecall": 0.4,
+      "graphifyNameRecall": 0.6
+    },
+    {
+      "id": "go-local-import-resolution",
+      "expectedNames": [
+        "Analyzer.Analyze",
+        "moduleRoots",
+        "packagesByImportPath",
+        "resolveCall"
+      ],
+      "ravelNameRecall": 0.5,
+      "graphifyNameRecall": 0.5
+    },
+    {
+      "id": "search-wrapper-index",
+      "expectedNames": [
+        "Search",
+        "NewIndex",
+        "(*Index).Search"
+      ],
+      "ravelNameRecall": 1.0,
+      "graphifyNameRecall": 0.6666666666666666
+    },
+    {
+      "id": "retrieval-config-loading",
+      "expectedNames": [
+        "runContext",
+        "loadCommandConfig",
+        "LoadRequired",
+        "Load"
+      ],
+      "ravelNameRecall": 0.5,
+      "graphifyNameRecall": 0.5
+    }
+  ]
+}
