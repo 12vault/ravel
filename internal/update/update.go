@@ -22,7 +22,11 @@ func Run(ctx context.Context, root string, cfg config.Config, previous graph.Gra
 }
 
 func RunWithProgress(ctx context.Context, root string, cfg config.Config, previous graph.Graph, previousScan scan.Result, progress func(buildrunner.Progress)) (Result, error) {
-	built, err := buildrunner.RunWithProgress(ctx, root, cfg, progress)
+	return RunWithCache(ctx, root, cfg, previous, previousScan, progress, buildrunner.CacheOptions{})
+}
+
+func RunWithCache(ctx context.Context, root string, cfg config.Config, previous graph.Graph, previousScan scan.Result, progress func(buildrunner.Progress), cacheOptions buildrunner.CacheOptions) (Result, error) {
+	built, err := buildrunner.RunWithCache(ctx, root, cfg, progress, cacheOptions)
 	if err != nil {
 		return Result{}, err
 	}

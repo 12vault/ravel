@@ -280,7 +280,7 @@ Configure a client to launch the local process with `ravel` as the command and `
 | `files.json` | Scanned files, hashes, sizes, languages, and ignored paths |
 | `symbols.json` | Extracted functions, methods, types, variables, and related symbols |
 
-Ravel also keeps canonical update state under `.reporavel/.state/`. Disabling JSON output removes the public JSON exports but preserves this internal state so updates and queries continue to work.
+Ravel also keeps canonical update state under `.reporavel/.state/`. Its private `cache/analysis-v1/` entries reuse analysis for unchanged content: Markdown is cached per file, while Go, SQL, and each Tree-sitter language use cross-file-safe analyzer batches. Cache keys include source hashes, analyzer settings, the Ravel version, and the cache schema. These entries only accelerate builds and updates; queries continue to use the single canonical graph. Disabling JSON output removes the public JSON exports but preserves this internal state so updates and queries continue to work.
 
 `ravel dashboard` additionally creates `graph.html`, a dependency-free local dashboard with search, kind and community filters, a community legend, node details, and relationship navigation. Ravel assigns stable community IDs, names, and sizes from graph structure, stores them in node metadata, and uses them to group and color related nodes. Clustering is deterministic and runs locally without an LLM. High-degree utility hubs are automatically down-weighted at the graph's p99 degree threshold (with a floor of 50) so they do not pull unrelated subsystems together.
 

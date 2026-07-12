@@ -621,7 +621,7 @@ func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writ
 	}
 	progress := newTraversalProgress(progressOutput)
 	defer progress.Close()
-	result, err := buildrunner.RunWithProgress(ctx, root, cfg, progress.Build)
+	result, err := buildrunner.RunWithCache(ctx, root, cfg, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version})
 	if err != nil {
 		return err
 	}
@@ -680,7 +680,7 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	}
 	progress := newTraversalProgress(progressOutput)
 	defer progress.Close()
-	result, err := updater.RunWithProgress(ctx, root, cfg, previous, previousScan, progress.Build)
+	result, err := updater.RunWithCache(ctx, root, cfg, previous, previousScan, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version})
 	if err != nil {
 		return err
 	}
