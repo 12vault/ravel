@@ -31,6 +31,16 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      - name: Static security analysis
+        uses: securego/gosec@v2
+        with:
+          args: -severity high -exclude-dir=testdata ./...
+
+      - name: Vulnerability scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+
       - name: Test
         run: go test -race ./...
 
@@ -45,3 +55,16 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: moderate
