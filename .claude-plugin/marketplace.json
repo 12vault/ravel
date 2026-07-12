@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "ravel",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Safe local knowledge graphs for coding agents",
   "owner": {
     "name": "Ravel Labs"
@@ -10,7 +10,7 @@
     {
       "name": "ravel",
       "description": "Map, explain, and teach codebases and document corpora with local knowledge graphs.",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "author": {
         "name": "Ravel Labs"
       },
