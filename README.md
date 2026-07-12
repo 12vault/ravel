@@ -60,7 +60,7 @@ Ravel creates that missing map:
 | Embeddable Go packages | ✅ | — |
 | Read-only MCP server | ✅ | ✅ |
 | Self-contained HTML visualization | ✅ | ✅ |
-| Automatic community clustering | — | ✅ |
+| Automatic community clustering | ✅ | ✅ |
 | Wiki and graph-database exports | — | ✅ |
 | Optional semantic document enrichment | ✅ | ✅ |
 
@@ -282,7 +282,7 @@ Configure a client to launch the local process with `ravel` as the command and `
 
 Ravel also keeps canonical update state under `.reporavel/.state/`. Disabling JSON output removes the public JSON exports but preserves this internal state so updates and queries continue to work.
 
-`ravel dashboard` additionally creates `graph.html`, a dependency-free local dashboard with search, kind filters, node details, and relationship navigation.
+`ravel dashboard` additionally creates `graph.html`, a dependency-free local dashboard with search, kind filters, node details, relationship navigation, and automatic community grouping. Ravel assigns stable community IDs from graph structure, stores them in node metadata, and uses them to group and color related nodes without changing query behavior.
 
 Create a reviewable team bundle that omits raw source and private scanner state:
 

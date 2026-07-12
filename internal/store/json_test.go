@@ -61,6 +61,24 @@ func TestWriteArtifactsHonorsOutputSettings(t *testing.T) {
 	})
 }
 
+func TestWriteArtifactsAddsCommunityMetadata(t *testing.T) {
+	outDir := t.TempDir()
+	g := graph.Graph{Nodes: []graph.Node{{ID: "file://a", Kind: graph.NodeFile, Name: "a"}}}
+	if err := WriteArtifacts(outDir, g, scan.Result{}, "# Report\n", config.Default().Output); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := LoadGraph(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.Nodes[0].Meta["community"]; !strings.HasPrefix(got, "c-") {
+		t.Fatalf("community metadata = %q", got)
+	}
+	if g.Nodes[0].Meta != nil {
+		t.Fatal("WriteArtifacts mutated its input graph")
+	}
+}
+
 func TestWriteJSONReplacesAtomicallyAndCleansTemporaryFiles(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "graph.json")

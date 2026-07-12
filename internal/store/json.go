@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sort"
 
+	"github.com/12vault/ravel/internal/community"
 	"github.com/12vault/ravel/internal/config"
 	"github.com/12vault/ravel/internal/graph"
 	"github.com/12vault/ravel/internal/scan"
@@ -27,6 +28,7 @@ type ChangesFile struct {
 }
 
 func WriteArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report string, output config.OutputConfig) error {
+	g = community.Assign(g)
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
@@ -226,6 +228,7 @@ func readState(outDir, name string) ([]byte, error) {
 }
 
 func RewriteGraphViews(outDir string, g graph.Graph, markdown string) error {
+	g = community.Assign(g)
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}

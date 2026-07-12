@@ -23,4 +23,7 @@ func TestWriteCreatesSelfContainedDashboard(t *testing.T) {
 	if !strings.Contains(text, "Ravel Graph") || strings.Contains(text, "safe</script") {
 		t.Fatalf("unexpected dashboard output")
 	}
+	if !strings.Contains(text, `"community":"c-`) {
+		t.Fatal("dashboard did not embed automatic community metadata")
+	}
 }

@@ -6,10 +6,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/12vault/ravel/internal/community"
 	"github.com/12vault/ravel/internal/graph"
 )
 
 func Write(path string, g graph.Graph) error {
+	g = community.Assign(g)
 	data, err := json.Marshal(g)
 	if err != nil {
 		return err
@@ -37,14 +39,15 @@ const document = `<!doctype html>
 <main class="layout"><canvas id="graph"></canvas><aside id="detail"><h2>Knowledge graph</h2><p class="muted">Search or click a node to inspect its relationships.</p></aside></main>
 <script>const G=__GRAPH_DATA__;
 const canvas=document.querySelector('#graph'),ctx=canvas.getContext('2d'),search=document.querySelector('#search'),kind=document.querySelector('#kind'),view=document.querySelector('#view'),detail=document.querySelector('#detail'),count=document.querySelector('#count');
-const palette={file:'#60a5fa',function:'#34d399',method:'#22d3ee',class:'#c084fc',domain:'#fb7185',flow:'#fbbf24',document:'#a3e635',table:'#f97316',concept:'#e879f9'};let visible=[],selected=null,points=[];
+const palette=['#60a5fa','#34d399','#c084fc','#fb7185','#fbbf24','#22d3ee','#a3e635','#f97316','#e879f9','#f472b6','#2dd4bf','#818cf8'];let visible=[],selected=null,points=[];
 const viewKinds={architecture:new Set(['package','module','class','domain','flow','step','concept']),learning:new Set(['tour','concept','domain','flow','file']),documents:new Set(['document','section','concept','file']),schemas:new Set(['schema','table','column'])};
 const byId=new Map(G.nodes.map(n=>[n.id,n]));const edgesBy=new Map;for(const e of G.edges){for(const id of[e.from,e.to]){if(!edgesBy.has(id))edgesBy.set(id,[]);edgesBy.get(id).push(e)}}
 for(const k of [...new Set(G.nodes.map(n=>n.kind))].sort()){const o=document.createElement('option');o.value=k;o.textContent=k;kind.append(o)}
 function resize(){const r=canvas.getBoundingClientRect(),d=devicePixelRatio||1;canvas.width=r.width*d;canvas.height=r.height*d;ctx.setTransform(d,0,0,d,0,0);layout()}
 function filter(){const q=search.value.toLowerCase(),k=kind.value,v=viewKinds[view.value];visible=G.nodes.filter(n=>(!v||v.has(n.kind))&&(!k||n.kind===k)&&(!q||JSON.stringify(n).toLowerCase().includes(q))).slice(0,1200);count.textContent=visible.length+'/'+G.nodes.length;layout()}
-function layout(){const w=canvas.clientWidth,h=canvas.clientHeight,cols=Math.max(1,Math.ceil(Math.sqrt(visible.length*w/Math.max(h,1))));points=visible.map((n,i)=>({n,x:35+(i%cols)*(w-70)/Math.max(cols-1,1),y:35+Math.floor(i/cols)*(h-70)/Math.max(Math.ceil(visible.length/cols)-1,1)}));draw()}
-function draw(){const w=canvas.clientWidth,h=canvas.clientHeight;ctx.clearRect(0,0,w,h);const pmap=new Map(points.map(p=>[p.n.id,p]));ctx.strokeStyle='#263451';ctx.globalAlpha=.45;for(const e of G.edges){const a=pmap.get(e.from),b=pmap.get(e.to);if(a&&b){ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}}ctx.globalAlpha=1;for(const p of points){ctx.beginPath();ctx.fillStyle=palette[p.n.kind]||'#94a3b8';ctx.arc(p.x,p.y,p.n.id===selected?7:4,0,Math.PI*2);ctx.fill()}}
+function community(n){return n.meta&&n.meta.community||n.id}function color(n){let h=2166136261;for(const c of community(n)){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return palette[(h>>>0)%palette.length]}
+function layout(){const w=canvas.clientWidth,h=canvas.clientHeight,ordered=[...visible].sort((a,b)=>community(a).localeCompare(community(b))||a.id.localeCompare(b.id)),cols=Math.max(1,Math.ceil(Math.sqrt(ordered.length*w/Math.max(h,1))));points=ordered.map((n,i)=>({n,x:35+(i%cols)*(w-70)/Math.max(cols-1,1),y:35+Math.floor(i/cols)*(h-70)/Math.max(Math.ceil(ordered.length/cols)-1,1)}));draw()}
+function draw(){const w=canvas.clientWidth,h=canvas.clientHeight;ctx.clearRect(0,0,w,h);const pmap=new Map(points.map(p=>[p.n.id,p]));ctx.strokeStyle='#263451';ctx.globalAlpha=.45;for(const e of G.edges){const a=pmap.get(e.from),b=pmap.get(e.to);if(a&&b){ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke()}}ctx.globalAlpha=1;for(const p of points){ctx.beginPath();ctx.fillStyle=color(p.n);ctx.arc(p.x,p.y,p.n.id===selected?7:4,0,Math.PI*2);ctx.fill()}}
 function show(id){selected=id;const n=byId.get(id),relations=edgesBy.get(id)||[];detail.innerHTML='<h2>'+esc(n.name)+'</h2><p><span class="tag">'+esc(n.kind)+'</span></p><p><code>'+esc(n.id)+'</code></p>'+(n.path?'<p>'+esc(n.path)+(n.startLine?':'+n.startLine:'')+'</p>':'')+(n.meta?'<pre>'+esc(JSON.stringify(n.meta,null,2))+'</pre>':'')+'<h3>Relationships ('+relations.length+')</h3>'+relations.map(e=>{const other=byId.get(e.from===id?e.to:e.from);return other?'<div class="relation" data-id="'+esc(other.id)+'"><b>'+esc(e.kind)+'</b> '+esc(other.name)+'</div>':''}).join('');detail.querySelectorAll('[data-id]').forEach(el=>el.onclick=()=>show(el.dataset.id));draw()}
 function esc(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 canvas.onclick=e=>{const r=canvas.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;let best=null,d=14;for(const p of points){const n=Math.hypot(p.x-x,p.y-y);if(n<d){d=n;best=p}}if(best)show(best.n.id)};search.oninput=filter;kind.onchange=filter;view.onchange=filter;addEventListener('resize',resize);filter();resize();
