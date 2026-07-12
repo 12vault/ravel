@@ -101,6 +101,8 @@ jobs:
         if: matrix.os == 'darwin' && steps.apple-signing.outputs.enabled == 'true'
         shell: bash
         env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -119,6 +121,9 @@ jobs:
       - name: Ad-hoc sign macOS binary
         if: matrix.os == 'darwin' && steps.apple-signing.outputs.enabled != 'true'
         shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
         run: |
           codesign --force --sign - ravel
           codesign --verify --strict --verbose=2 ravel
