@@ -22,6 +22,10 @@ const (
 	MetaDescriptionSourceKey     = "communityDescriptionSource"
 	MetaDescriptionConfidenceKey = "communityDescriptionConfidence"
 	MetaDescriptionRationaleKey  = "communityDescriptionRationale"
+	MetaLabelKey                 = "communityLabel"
+	MetaLabelStatusKey           = "communityLabelStatus"
+	MetaLabelOverlapKey          = "communityLabelOverlap"
+	MetaPreviousIDKey            = "communityPreviousId"
 )
 
 type Preset string
@@ -53,11 +57,14 @@ func ParsePreset(value string) (Preset, error) {
 }
 
 type Summary struct {
-	ID          string           `json:"id"`
-	Name        string           `json:"name"`
-	Size        int              `json:"size"`
-	TopKinds    []graph.NodeKind `json:"topKinds"`
-	Description string           `json:"description,omitempty"`
+	ID                string           `json:"id"`
+	Name              string           `json:"name"`
+	DeterministicName string           `json:"deterministicName"`
+	Size              int              `json:"size"`
+	TopKinds          []graph.NodeKind `json:"topKinds"`
+	Description       string           `json:"description,omitempty"`
+	LabelStatus       string           `json:"labelStatus,omitempty"`
+	LabelOverlap      string           `json:"labelOverlap,omitempty"`
 }
 
 // Assign returns a copy of g whose nodes carry deterministic community IDs.
@@ -213,6 +220,12 @@ func AssignWithOptions(g graph.Graph, options Options) graph.Graph {
 		}
 		meta[MetaKey] = newCommunity
 		meta[MetaNameKey] = names[labels[out.Nodes[i].ID]]
+		if oldCommunity != newCommunity || meta[MetaLabelKey] == "" {
+			meta[MetaLabelKey] = names[labels[out.Nodes[i].ID]]
+			meta[MetaLabelStatusKey] = "deterministic"
+			delete(meta, MetaLabelOverlapKey)
+			delete(meta, MetaPreviousIDKey)
+		}
 		meta[MetaSizeKey] = strconv.Itoa(len(members[labels[out.Nodes[i].ID]]))
 		meta[MetaGranularityKey] = string(options.Granularity)
 		meta[MetaHubThresholdKey] = strconv.Itoa(hubThreshold)
@@ -285,7 +298,11 @@ func Summaries(g graph.Graph) []Summary {
 	for _, node := range g.Nodes {
 		id := node.Meta[MetaKey]
 		if byID[id] == nil {
-			byID[id] = &Summary{ID: id, Name: node.Meta[MetaNameKey], Description: node.Meta[MetaDescriptionKey]}
+			label := node.Meta[MetaLabelKey]
+			if label == "" {
+				label = node.Meta[MetaNameKey]
+			}
+			byID[id] = &Summary{ID: id, Name: label, DeterministicName: node.Meta[MetaNameKey], Description: node.Meta[MetaDescriptionKey], LabelStatus: node.Meta[MetaLabelStatusKey], LabelOverlap: node.Meta[MetaLabelOverlapKey]}
 			kinds[id] = map[graph.NodeKind]int{}
 		}
 		byID[id].Size++
@@ -358,7 +375,8 @@ func assigned(g graph.Graph) bool {
 func generatedMetaKey(key string) bool {
 	switch key {
 	case MetaKey, MetaNameKey, MetaSizeKey, MetaGranularityKey, MetaHubThresholdKey,
-		MetaDescriptionKey, MetaDescriptionSourceKey, MetaDescriptionConfidenceKey, MetaDescriptionRationaleKey:
+		MetaDescriptionKey, MetaDescriptionSourceKey, MetaDescriptionConfidenceKey, MetaDescriptionRationaleKey,
+		MetaLabelKey, MetaLabelStatusKey, MetaLabelOverlapKey, MetaPreviousIDKey:
 		return true
 	default:
 		return false
