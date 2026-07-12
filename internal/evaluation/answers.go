@@ -3,6 +3,7 @@ package evaluation
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,15 +66,30 @@ type AnswerMetrics struct {
 // rejected so misspelled judgment or accounting fields cannot silently skew a
 // published result.
 func LoadAnswerJSONL(path string) ([]AnswerRecord, error) {
+	records, _, err := LoadAnswerJSONLWithHash(path)
+	return records, err
+}
+
+// LoadAnswerJSONLWithHash parses and hashes one byte stream so the attached
+// judgments and their provenance hash always describe the same ledger.
+func LoadAnswerJSONLWithHash(path string) ([]AnswerRecord, string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer file.Close()
+	hasher := sha256.New()
+	records, err := loadAnswerJSONL(io.TeeReader(file, hasher))
+	if err != nil {
+		return nil, "", err
+	}
+	return records, fmt.Sprintf("%x", hasher.Sum(nil)), nil
+}
 
+func loadAnswerJSONL(reader io.Reader) ([]AnswerRecord, error) {
 	seen := map[string]bool{}
 	var records []AnswerRecord
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), 4<<20)
 	for line := 1; scanner.Scan(); line++ {
 		data := bytes.TrimSpace(scanner.Bytes())
@@ -81,6 +97,9 @@ func LoadAnswerJSONL(path string) ([]AnswerRecord, error) {
 			continue
 		}
 		if err := ensureUniqueJSONFields(data); err != nil {
+			return nil, fmt.Errorf("answer ledger line %d: %w", line, err)
+		}
+		if err := ensureAllowedJSONFields(data, "id", "correct", "keyFactsFound", "inputTokens", "outputTokens", "toolTokens", "costUsd", "model", "judge", "runId"); err != nil {
 			return nil, fmt.Errorf("answer ledger line %d: %w", line, err)
 		}
 		var record AnswerRecord
@@ -212,10 +231,9 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 	return err
 }
 
-// ensureUniqueJSONFields rejects duplicate top-level object keys before
-// encoding/json can silently let the last value win. Benchmark records are
-// intentionally flat objects, so checking the top level protects every field
-// that can affect retrieval or answer-quality scoring.
+// ensureUniqueJSONFields rejects duplicate object keys before encoding/json
+// can silently let the last value win. Benchmark records are currently flat,
+// but walking nested values keeps strict decoding safe if their schema grows.
 func ensureUniqueJSONFields(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	token, err := decoder.Token()
@@ -226,7 +244,30 @@ func ensureUniqueJSONFields(data []byte) error {
 	if !ok || opening != '{' {
 		return errors.New("record must be a JSON object")
 	}
+	if err := ensureUniqueJSONObjectFields(decoder); err != nil {
+		return err
+	}
+	return ensureJSONEOF(decoder)
+}
 
+func ensureAllowedJSONFields(data []byte, allowed ...string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, name := range allowed {
+		allowedSet[name] = true
+	}
+	for name := range fields {
+		if !allowedSet[name] {
+			return fmt.Errorf("unknown field %q", name)
+		}
+	}
+	return nil
+}
+
+func ensureUniqueJSONObjectFields(decoder *json.Decoder) error {
 	seen := map[string]bool{}
 	for decoder.More() {
 		token, err := decoder.Token()
@@ -241,15 +282,49 @@ func ensureUniqueJSONFields(data []byte) error {
 			return fmt.Errorf("duplicate field %q", name)
 		}
 		seen[name] = true
-		var value json.RawMessage
-		if err := decoder.Decode(&value); err != nil {
+		if err := ensureUniqueJSONValue(decoder); err != nil {
 			return err
 		}
 	}
-	if _, err := decoder.Token(); err != nil {
+	closing, err := decoder.Token()
+	if err != nil {
 		return err
 	}
-	return ensureJSONEOF(decoder)
+	if closing != json.Delim('}') {
+		return errors.New("invalid JSON object terminator")
+	}
+	return nil
+}
+
+func ensureUniqueJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		return ensureUniqueJSONObjectFields(decoder)
+	case '[':
+		for decoder.More() {
+			if err := ensureUniqueJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if closing != json.Delim(']') {
+			return errors.New("invalid JSON array terminator")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
 }
 
 func validateAnswerRecord(record AnswerRecord) error {

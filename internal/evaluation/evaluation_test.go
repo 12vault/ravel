@@ -131,10 +131,30 @@ func TestDatasetHashIsStable(t *testing.T) {
 	}
 }
 
+func TestLoadJSONLWithHashMatchesParsedBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cases.jsonl")
+	data := []byte(`{"id":"one","dataset":"repo","question":"where","expectedNodeIds":["node://one"]}` + "\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases, got, err := LoadJSONLWithHash(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := DatasetHash(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cases) != 1 || got == "" || got != want {
+		t.Fatalf("cases=%#v hash=%q want=%q", cases, got, want)
+	}
+}
+
 func TestLoadJSONLRejectsAmbiguousOrMisspelledCases(t *testing.T) {
 	valid := `{"id":"one","dataset":"repo","question":"where","expectedNodeIds":["node://one"],"expectedKeyFacts":["One is the entry point."]}`
 	for name, content := range map[string]string{
 		"unknown-field":      `{"id":"one","dataset":"repo","question":"where","expectedNodeIds":["node://one"],"expectedKeyFact":["typo"]}`,
+		"wrong-field-case":   `{"ID":"one","dataset":"repo","question":"where","expectedNodeIds":["node://one"]}`,
 		"duplicate-id":       valid + "\n" + valid,
 		"duplicate-node":     `{"id":"one","dataset":"repo","question":"where","expectedNodeIds":["node://one","node://one"]}`,
 		"duplicate-evidence": `{"id":"one","dataset":"repo","question":"where","expectedEvidence":["edge://one","edge://one"]}`,

@@ -10,13 +10,9 @@ func attachAnswerLedger(report *evaluation.Report, cases []evaluation.Case, path
 	if path == "" {
 		return nil
 	}
-	records, err := evaluation.LoadAnswerJSONL(path)
+	records, hash, err := evaluation.LoadAnswerJSONLWithHash(path)
 	if err != nil {
 		return fmt.Errorf("load answer ledger: %w", err)
-	}
-	hash, err := evaluation.DatasetHash(path)
-	if err != nil {
-		return fmt.Errorf("hash answer ledger: %w", err)
 	}
 	if err := evaluation.AttachAnswerQuality(report, cases, records); err != nil {
 		return fmt.Errorf("attach answer ledger: %w", err)

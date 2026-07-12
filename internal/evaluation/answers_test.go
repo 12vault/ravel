@@ -25,14 +25,26 @@ func TestLoadAnswerJSONLIsStrictAndRejectsDuplicates(t *testing.T) {
 	if len(records) != 2 || records[0].Correct == nil || !*records[0].Correct || records[1].KeyFactsFound == nil {
 		t.Fatalf("records = %#v", records)
 	}
+	hashedRecords, gotHash, err := LoadAnswerJSONLWithHash(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHash, err := DatasetHash(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hashedRecords) != len(records) || gotHash == "" || gotHash != wantHash {
+		t.Fatalf("hashed records=%#v hash=%q want=%q", hashedRecords, gotHash, wantHash)
+	}
 
 	for name, content := range map[string]string{
-		"unknown-field":   `{"id":"one","correct":true,"rawAnswer":"must not be stored"}`,
-		"duplicate":       "{\"id\":\"one\",\"correct\":true}\n{\"id\":\"one\",\"correct\":false}",
-		"no-score":        `{"id":"one","inputTokens":1}`,
-		"negative":        `{"id":"one","correct":true,"inputTokens":-1}`,
-		"duplicate-field": `{"id":"one","correct":true,"correct":false}`,
-		"multiple-json":   `{"id":"one","correct":true} {"id":"two","correct":true}`,
+		"unknown-field":    `{"id":"one","correct":true,"rawAnswer":"must not be stored"}`,
+		"wrong-field-case": `{"id":"one","Correct":true}`,
+		"duplicate":        "{\"id\":\"one\",\"correct\":true}\n{\"id\":\"one\",\"correct\":false}",
+		"no-score":         `{"id":"one","inputTokens":1}`,
+		"negative":         `{"id":"one","correct":true,"inputTokens":-1}`,
+		"duplicate-field":  `{"id":"one","correct":true,"correct":false}`,
+		"multiple-json":    `{"id":"one","correct":true} {"id":"two","correct":true}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "answers.jsonl")
@@ -43,6 +55,15 @@ func TestLoadAnswerJSONLIsStrictAndRejectsDuplicates(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestEnsureUniqueJSONFieldsRejectsNestedDuplicates(t *testing.T) {
+	if err := ensureUniqueJSONFields([]byte(`{"outer":{"value":1,"value":2}}`)); err == nil || !strings.Contains(err.Error(), `duplicate field "value"`) {
+		t.Fatalf("error = %v, want nested duplicate-field error", err)
+	}
+	if err := ensureUniqueJSONFields([]byte(`{"outer":[{"value":1},{"value":2}]}`)); err != nil {
+		t.Fatalf("distinct nested fields: %v", err)
 	}
 }
 

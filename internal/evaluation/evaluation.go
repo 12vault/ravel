@@ -105,14 +105,30 @@ type RunOptions struct {
 }
 
 func LoadJSONL(path string) ([]Case, error) {
+	cases, _, err := LoadJSONLWithHash(path)
+	return cases, err
+}
+
+// LoadJSONLWithHash parses and hashes the exact same byte stream so benchmark
+// provenance cannot drift if a dataset file is replaced during a run.
+func LoadJSONLWithHash(path string) ([]Case, string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer file.Close()
+	hasher := sha256.New()
+	cases, err := loadCasesJSONL(io.TeeReader(file, hasher))
+	if err != nil {
+		return nil, "", err
+	}
+	return cases, fmt.Sprintf("%x", hasher.Sum(nil)), nil
+}
+
+func loadCasesJSONL(reader io.Reader) ([]Case, error) {
 	var cases []Case
 	seen := map[string]bool{}
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), 4<<20)
 	for line := 1; scanner.Scan(); line++ {
 		data := bytes.TrimSpace(scanner.Bytes())
@@ -120,6 +136,9 @@ func LoadJSONL(path string) ([]Case, error) {
 			continue
 		}
 		if err := ensureUniqueJSONFields(data); err != nil {
+			return nil, fmt.Errorf("dataset line %d: %w", line, err)
+		}
+		if err := ensureAllowedJSONFields(data, "id", "dataset", "question", "expectedNodeIds", "expectedEvidence", "expectedKeyFacts"); err != nil {
 			return nil, fmt.Errorf("dataset line %d: %w", line, err)
 		}
 		var item Case
