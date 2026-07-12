@@ -73,6 +73,7 @@ func TestLoadHonorsRetrievalSettings(t *testing.T) {
   seedLimit: 5
   maxDepth: 4
   maxNodes: 250
+  branchFanout: 32
   hubDegreeThreshold: 75
   tokenBudget: 4096
 `)
@@ -80,7 +81,7 @@ func TestLoadHonorsRetrievalSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := RetrievalConfig{Traversal: "dfs", Direction: "in", InferRelations: false, Relations: "calls,references", SeedLimit: 5, MaxDepth: 4, MaxNodes: 250, HubDegreeThreshold: 75, TokenBudget: 4096}
+	want := RetrievalConfig{Traversal: "dfs", Direction: "in", InferRelations: false, Relations: "calls,references", SeedLimit: 5, MaxDepth: 4, MaxNodes: 250, BranchFanout: 32, HubDegreeThreshold: 75, TokenBudget: 4096}
 	if cfg.Retrieval != want {
 		t.Fatalf("Retrieval = %#v, want %#v", cfg.Retrieval, want)
 	}
@@ -98,6 +99,7 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		{name: "invalid integer", content: "scan:\n  maxFileSize: large\n", want: "expected an integer"},
 		{name: "invalid traversal", content: "retrieval:\n  traversal: sideways\n", want: "retrieval.traversal must be bfs or dfs"},
 		{name: "invalid direction", content: "retrieval:\n  direction: around\n", want: "retrieval.direction must be out, in, or both"},
+		{name: "invalid branch fanout", content: "retrieval:\n  branchFanout: -1\n", want: "retrieval.branchFanout must be 0 (automatic) or between"},
 		{name: "invalid retrieval budget", content: "retrieval:\n  tokenBudget: 12\n", want: "retrieval.tokenBudget must be between"},
 		{name: "unsafe permission", content: "permissions:\n  network: true\n", want: "permissions.network cannot be enabled"},
 		{name: "type resolution unavailable", content: "analysis:\n  typeResolution: true\n", want: "analysis.typeResolution is not implemented"},

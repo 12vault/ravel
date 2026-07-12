@@ -44,6 +44,7 @@ type RetrievalConfig struct {
 	SeedLimit          int
 	MaxDepth           int
 	MaxNodes           int
+	BranchFanout       int
 	HubDegreeThreshold int
 	TokenBudget        int
 }
@@ -71,6 +72,7 @@ func Default() Config {
 			SeedLimit:          3,
 			MaxDepth:           2,
 			MaxNodes:           100,
+			BranchFanout:       0,
 			HubDegreeThreshold: 0,
 			TokenBudget:        2000,
 		},
@@ -244,6 +246,12 @@ func applyValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		cfg.Retrieval.MaxNodes = int(parsed)
+	case "retrieval.branchFanout":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Retrieval.BranchFanout = int(parsed)
 	case "retrieval.hubDegreeThreshold":
 		parsed, err := parseInt(value)
 		if err != nil {
@@ -315,6 +323,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.Retrieval.MaxNodes < 1 || cfg.Retrieval.MaxNodes > 10000 {
 		return fmt.Errorf("retrieval.maxNodes must be between 1 and 10000")
+	}
+	if cfg.Retrieval.BranchFanout < 0 || cfg.Retrieval.BranchFanout > 10000 {
+		return fmt.Errorf("retrieval.branchFanout must be 0 (automatic) or between 1 and 10000")
 	}
 	if cfg.Retrieval.HubDegreeThreshold < -1 {
 		return fmt.Errorf("retrieval.hubDegreeThreshold must be -1, 0, or positive")
@@ -417,6 +428,7 @@ retrieval:
   seedLimit: 3
   maxDepth: 2
   maxNodes: 100
+  branchFanout: 0
   hubDegreeThreshold: 0
   tokenBudget: 2000
 

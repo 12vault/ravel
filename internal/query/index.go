@@ -17,6 +17,7 @@ const (
 	exactPhraseBonus     = 10_000.0
 	prefixPhraseBonus    = 1_000.0
 	exactNameBonus       = 1_000.0
+	qualifiedNameBonus   = 10_000.0
 	compoundNameBonus    = 1_000.0
 	prefixNameBonus      = 100.0
 	substringNameBonus   = 1.0
@@ -160,16 +161,21 @@ func (idx *Index) FindBest(query string) (graph.Node, bool) {
 }
 
 func (idx *Index) rank(text string) []rankedNode {
+	return idx.rankWithAnchors(text, text)
+}
+
+func (idx *Index) rankWithAnchors(text, anchorText string) []rankedNode {
 	terms := queryTerms(text)
 	if len(terms) == 0 {
 		return nil
 	}
 	candidates := idx.candidates(terms)
 	phrase := strings.Join(terms, " ")
+	rawTermCounts := termCounts(searchTokens(anchorText))
 	ranked := make([]rankedNode, 0, len(candidates))
 	for _, docIndex := range candidates {
 		doc := &idx.docs[docIndex]
-		score, matched := idx.score(doc, terms, phrase)
+		score, matched := idx.score(doc, terms, phrase, rawTermCounts)
 		if score > 0 {
 			ranked = append(ranked, rankedNode{index: docIndex, score: score, matchedTerms: matched})
 		}
@@ -188,7 +194,7 @@ func (idx *Index) rank(text string) []rankedNode {
 	return ranked
 }
 
-func (idx *Index) score(doc *indexedNode, terms []string, phrase string) (float64, map[string]bool) {
+func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTermCounts map[string]int) (float64, map[string]bool) {
 	matched := map[string]bool{}
 	score := 0.0
 	phraseWeight := 1.0
@@ -211,6 +217,23 @@ func (idx *Index) score(doc *indexedNode, terms []string, phrase string) (float6
 		switch {
 		case doc.nameText == term || strings.TrimSuffix(doc.nameText, " ()") == term:
 			tiered += exactNameBonus * idf
+			qualified := rawTermCounts[term] > 1 && (doc.pathTerms[term] > 0 || doc.packageTerms[term] > 0)
+			if !qualified {
+				for sourceTerm := range rawTermCounts {
+					if sourceTerm != term && doc.packageTerms[sourceTerm] > 0 {
+						qualified = true
+						break
+					}
+				}
+			}
+			if graph.SymbolKind(doc.node.Kind) && qualified {
+				// A repeated package/path + symbol token (for example
+				// "scan Scan"), or a package plus exact symbol (for
+				// example "query Search"), is a qualified-name signal.
+				// Keep it outside the broad-question coverage penalty so a
+				// verbose test name cannot displace the named symbol.
+				score += qualifiedNameBonus * idf
+			}
 			nameMatch = true
 		case strings.HasPrefix(doc.nameText, term):
 			tiered += prefixNameBonus * idf

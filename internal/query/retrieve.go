@@ -30,12 +30,17 @@ const (
 )
 
 const (
-	defaultSeedLimit   = 3
-	defaultMaxDepth    = 2
-	defaultMaxNodes    = 100
-	defaultTokenBudget = 2_000
-	minimumTokenBudget = 128
-	maximumTokenBudget = 100_000
+	defaultSeedLimit    = 3
+	defaultMaxDepth     = 2
+	defaultMaxNodes     = 100
+	defaultTokenBudget  = 2_000
+	minimumTokenBudget  = 128
+	maximumTokenBudget  = 100_000
+	maximumBranchFanout = 10_000
+	// Affected bootstrap seeds include the target plus bounded source/container
+	// and symbol nodes. This prevents very large files or packages from turning
+	// reverse-impact lookup into an unbounded traversal origin set.
+	maximumAffectedBootstrapSeeds = 20
 )
 
 // RetrieveOptions controls ranked seeding, graph traversal, and output bounds.
@@ -49,6 +54,7 @@ type RetrieveOptions struct {
 	SeedLimit                int              `json:"seedLimit"`
 	MaxDepth                 int              `json:"maxDepth"`
 	MaxNodes                 int              `json:"maxNodes"`
+	BranchFanout             int              `json:"branchFanout"`
 	HubDegreeThreshold       int              `json:"hubDegreeThreshold"`
 	TokenBudget              int              `json:"tokenBudget"`
 }
@@ -92,28 +98,32 @@ type ContextEdge struct {
 }
 
 type RetrievalStats struct {
-	Traversal          Traversal        `json:"traversal"`
-	Direction          Direction        `json:"direction"`
-	Depth              int              `json:"depth"`
-	SeedIDs            []string         `json:"seedIds"`
-	RelationFilters    []graph.EdgeKind `json:"relationFilters,omitempty"`
-	RelationFilterFrom string           `json:"relationFilterFrom,omitempty"`
-	TokenBudget        int              `json:"tokenBudget"`
-	EstimatedTokens    int              `json:"estimatedTokens"`
-	HubThreshold       int              `json:"hubThreshold,omitempty"`
-	HubsSuppressed     int              `json:"hubsSuppressed,omitempty"`
-	BranchesPruned     int              `json:"branchesPruned,omitempty"`
-	ExploredNodes      int              `json:"exploredNodes"`
-	OmittedNodes       int              `json:"omittedNodes,omitempty"`
-	OmittedEdges       int              `json:"omittedEdges,omitempty"`
-	Truncated          bool             `json:"truncated"`
-	TruncatedReason    []string         `json:"truncatedReason,omitempty"`
+	Traversal           Traversal        `json:"traversal"`
+	Direction           Direction        `json:"direction"`
+	DirectionPreference Direction        `json:"directionPreference,omitempty"`
+	Depth               int              `json:"depth"`
+	SeedIDs             []string         `json:"seedIds"`
+	RelationFilters     []graph.EdgeKind `json:"relationFilters,omitempty"`
+	RelationFilterFrom  string           `json:"relationFilterFrom,omitempty"`
+	TokenBudget         int              `json:"tokenBudget"`
+	EstimatedTokens     int              `json:"estimatedTokens"`
+	HubThreshold        int              `json:"hubThreshold,omitempty"`
+	BranchFanout        int              `json:"branchFanout,omitempty"`
+	HubsSuppressed      int              `json:"hubsSuppressed,omitempty"`
+	BranchesPruned      int              `json:"branchesPruned,omitempty"`
+	ExploredNodes       int              `json:"exploredNodes"`
+	OmittedNodes        int              `json:"omittedNodes,omitempty"`
+	OmittedEdges        int              `json:"omittedEdges,omitempty"`
+	Truncated           bool             `json:"truncated"`
+	TruncatedReason     []string         `json:"truncatedReason,omitempty"`
 }
 
 type normalizedRetrieveOptions struct {
 	RetrieveOptions
-	relationSet map[graph.EdgeKind]bool
-	filterFrom  string
+	relationSet         map[graph.EdgeKind]bool
+	filterFrom          string
+	filterEdges         bool
+	directionPreference Direction
 }
 
 type traversalResult struct {
@@ -121,6 +131,7 @@ type traversalResult struct {
 	distance       map[string]int
 	via            map[string]graph.Edge
 	hubThreshold   int
+	branchFanout   int
 	hubsSuppressed int
 	branchesPruned int
 	exploredLimit  bool
@@ -131,29 +142,62 @@ func Retrieve(g graph.Graph, text string, options RetrieveOptions) (Retrieval, e
 	return NewIndex(g).Retrieve(text, options)
 }
 
-// Affected retrieves incoming dependents for one resolved graph target. It is
-// intentionally reverse-only: callers, references, implementers, and other
-// incoming relationships are impact candidates, while the target's own
-// dependencies are not presented as affected consumers.
+// Affected retrieves dependents for one resolved graph target. Dependency
+// relations are traversed in reverse. Explicit affects/flows_to queries are
+// traversed forward because those edge kinds already point at affected nodes.
 func Affected(g graph.Graph, target string, options RetrieveOptions) (Retrieval, error) {
 	return NewIndex(g).Affected(target, options)
 }
 
-// Affected is the reusable-index form of reverse impact retrieval.
+// Affected is the reusable-index form of impact retrieval.
 func (idx *Index) Affected(target string, options RetrieveOptions) (Retrieval, error) {
-	node, ok := idx.FindBest(target)
-	if !ok {
-		return Retrieval{}, fmt.Errorf("affected target %q not found", strings.TrimSpace(target))
+	node, err := idx.ResolveTarget(target)
+	if err != nil {
+		return Retrieval{}, fmt.Errorf("affected: %w", err)
 	}
 	options.Traversal = TraversalBFS
-	options.Direction = DirectionIn
 	options.DisableRelationInference = true
-	options.SeedLimit = 1
-	return idx.Retrieve(node.ID, options)
+	defaultFilter := len(options.Relations) == 0
+	if defaultFilter {
+		impactKinds := []graph.EdgeKind{
+			graph.EdgeCalls, graph.EdgeReferences, graph.EdgeImplements, graph.EdgeInherits,
+			graph.EdgeUsesType, graph.EdgeImports, graph.EdgeDependsOn,
+		}
+		for _, kind := range impactKinds {
+			if idx.edgeKinds[kind] {
+				options.Relations = append(options.Relations, kind)
+			}
+		}
+	}
+	direction, err := affectedDirection(options.Relations)
+	if err != nil {
+		return Retrieval{}, err
+	}
+	options.Direction = direction
+	maxNodes := options.MaxNodes
+	if maxNodes == 0 {
+		maxNodes = defaultMaxNodes
+	}
+	tokenBudget := options.TokenBudget
+	if tokenBudget == 0 {
+		tokenBudget = defaultTokenBudget
+	}
+	// Keep at least half of a compact context available for actual dependents.
+	// A bootstrapped definition plus its evidence is conservatively budgeted at
+	// about 125 tokens, so one seed per 250 tokens leaves comparable headroom.
+	budgetSeedLimit := max(2, tokenBudget/250)
+	seedLimit := max(1, min(maximumAffectedBootstrapSeeds, maxNodes, budgetSeedLimit))
+	seedIDs, seedEvidence := idx.affectedBootstrap(node, seedLimit, idx.affectedImpactCounts(options.Relations, direction))
+	options.SeedLimit = min(20, max(1, len(seedIDs)))
+	return idx.retrieve(node.ID, options, seedIDs, seedEvidence, defaultFilter)
 }
 
 // Retrieve ranks multiple lexical seeds and expands their graph neighborhood.
 func (idx *Index) Retrieve(text string, options RetrieveOptions) (Retrieval, error) {
+	return idx.retrieve(text, options, nil, nil, false)
+}
+
+func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs []string, seedEvidence map[string]graph.Edge, forceRelationFilter bool) (Retrieval, error) {
 	question := strings.TrimSpace(text)
 	if question == "" {
 		return Retrieval{}, errors.New("context query must not be empty")
@@ -162,9 +206,13 @@ func (idx *Index) Retrieve(text string, options RetrieveOptions) (Retrieval, err
 	if err != nil {
 		return Retrieval{}, err
 	}
+	if forceRelationFilter {
+		normalized.filterEdges = true
+		normalized.filterFrom = "affected-default"
+	}
 	terms := retrievalTerms(question, normalized.Relations)
-	ranked := idx.rank(strings.Join(terms, " "))
-	if len(ranked) == 0 {
+	ranked := idx.rankWithAnchors(strings.Join(terms, " "), question)
+	if len(ranked) == 0 && len(forcedSeedIDs) == 0 {
 		return Retrieval{
 			Version: 1,
 			Query:   safeTextBytes(question, 256),
@@ -175,22 +223,199 @@ func (idx *Index) Retrieve(text string, options RetrieveOptions) (Retrieval, err
 			},
 		}, nil
 	}
-	seedIndexes := idx.pickSeeds(ranked, terms, normalized.SeedLimit)
-	seedIDs := make([]string, 0, len(seedIndexes))
+	seedIDs := append([]string(nil), forcedSeedIDs...)
 	seedSet := map[string]bool{}
-	for _, docIndex := range seedIndexes {
-		id := idx.docs[docIndex].node.ID
-		seedIDs = append(seedIDs, id)
+	if len(seedIDs) == 0 {
+		seedIndexes := idx.pickSeeds(ranked, terms, normalized.SeedLimit)
+		for _, docIndex := range seedIndexes {
+			seedIDs = append(seedIDs, idx.docs[docIndex].node.ID)
+		}
+	}
+	for _, id := range seedIDs {
 		seedSet[id] = true
 	}
 	scores := map[string]int{}
 	for _, item := range ranked {
 		scores[idx.docs[item.index].node.ID] = max(1, int(math.Round(item.score*1_000)))
 	}
+	for _, id := range seedIDs {
+		if scores[id] == 0 {
+			scores[id] = 1
+		}
+	}
 
 	adjacency, degree := idx.filteredAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, degree, normalized)
+	for seedID, edge := range seedEvidence {
+		if seedSet[seedID] {
+			walk.via[seedID] = cloneEdge(edge)
+		}
+	}
 	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, degree, walk), nil
+}
+
+func affectedDirection(relations []graph.EdgeKind) (Direction, error) {
+	forward := false
+	reverse := false
+	for _, relation := range relations {
+		relation = graph.EdgeKind(strings.TrimSpace(string(relation)))
+		switch relation {
+		case graph.EdgeAffects, graph.EdgeFlowsTo:
+			forward = true
+		default:
+			reverse = true
+		}
+	}
+	if forward && reverse {
+		return "", errors.New("affected cannot mix forward-oriented affects/flows_to with reverse dependency relations")
+	}
+	if forward {
+		return DirectionOut, nil
+	}
+	return DirectionIn, nil
+}
+
+type affectedFileBranch struct {
+	file        graph.Node
+	contains    graph.Edge
+	definitions []graph.Edge
+	admitted    bool
+}
+
+// affectedBootstrap crosses source ownership edges only while selecting
+// traversal origins. Those edges are kept as evidence but are not added to the
+// reverse-impact relation filter, so containment noise cannot spread further.
+func (idx *Index) affectedBootstrap(target graph.Node, limit int, impactCounts map[string]int) ([]string, map[string]graph.Edge) {
+	seedIDs := []string{target.ID}
+	evidence := map[string]graph.Edge{}
+	if limit <= 1 {
+		return seedIDs, evidence
+	}
+	add := func(nodeID string, edge graph.Edge) bool {
+		if len(seedIDs) >= limit {
+			return false
+		}
+		if _, ok := idx.byID[nodeID]; !ok {
+			return true
+		}
+		for _, existing := range seedIDs {
+			if existing == nodeID {
+				return true
+			}
+		}
+		seedIDs = append(seedIDs, nodeID)
+		evidence[nodeID] = cloneEdge(edge)
+		return true
+	}
+
+	directDefinitions := idx.outgoingEdges(target.ID, graph.EdgeDefines)
+	sortAffectedDefinitions(directDefinitions, impactCounts)
+	if target.Kind != graph.NodePackage && target.Kind != graph.NodeModule && target.Kind != graph.NodeDir {
+		for _, edge := range directDefinitions {
+			if !add(edge.To, edge) {
+				break
+			}
+		}
+		return seedIDs, evidence
+	}
+	for _, edge := range directDefinitions {
+		if !add(edge.To, edge) {
+			return seedIDs, evidence
+		}
+	}
+
+	contains := idx.outgoingEdges(target.ID, graph.EdgeContains)
+	branches := make([]affectedFileBranch, 0, len(contains))
+	for _, edge := range contains {
+		docIndex, ok := idx.byID[edge.To]
+		if !ok || idx.docs[docIndex].node.Kind != graph.NodeFile {
+			continue
+		}
+		branches = append(branches, affectedFileBranch{
+			file: idx.docs[docIndex].node, contains: edge,
+			definitions: idx.outgoingEdges(edge.To, graph.EdgeDefines),
+		})
+		sortAffectedDefinitions(branches[len(branches)-1].definitions, impactCounts)
+	}
+	// Cover multiple package files before taking additional symbols from one
+	// file. Each admitted file is immediately followed by its first definition,
+	// preserving an explanatory package -> file -> symbol chain.
+	for branchIndex := range branches {
+		branch := &branches[branchIndex]
+		if len(branch.definitions) == 0 || len(seedIDs)+2 > limit {
+			continue
+		}
+		add(branch.file.ID, branch.contains)
+		add(branch.definitions[0].To, branch.definitions[0])
+		branch.definitions = branch.definitions[1:]
+		branch.admitted = true
+	}
+	for definitionIndex := 0; len(seedIDs) < limit; definitionIndex++ {
+		added := false
+		for _, branch := range branches {
+			if !branch.admitted || definitionIndex >= len(branch.definitions) {
+				continue
+			}
+			if !add(branch.definitions[definitionIndex].To, branch.definitions[definitionIndex]) {
+				return seedIDs, evidence
+			}
+			added = true
+		}
+		if !added {
+			break
+		}
+	}
+	return seedIDs, evidence
+}
+
+func (idx *Index) affectedImpactCounts(relations []graph.EdgeKind, direction Direction) map[string]int {
+	relationSet := make(map[graph.EdgeKind]bool, len(relations))
+	for _, relation := range relations {
+		relationSet[relation] = true
+	}
+	counts := map[string]int{}
+	for _, edge := range idx.graph.Edges {
+		if !relationSet[edge.Kind] {
+			continue
+		}
+		if direction == DirectionOut {
+			counts[edge.From]++
+		} else {
+			counts[edge.To]++
+		}
+	}
+	return counts
+}
+
+func sortAffectedDefinitions(definitions []graph.Edge, impactCounts map[string]int) {
+	sort.SliceStable(definitions, func(i, j int) bool {
+		left, right := impactCounts[definitions[i].To], impactCounts[definitions[j].To]
+		if left != right {
+			return left > right
+		}
+		if definitions[i].To != definitions[j].To {
+			return definitions[i].To < definitions[j].To
+		}
+		return stableEdgeID(definitions[i]) < stableEdgeID(definitions[j])
+	})
+}
+
+func (idx *Index) outgoingEdges(from string, kind graph.EdgeKind) []graph.Edge {
+	var result []graph.Edge
+	for _, edge := range idx.graph.Edges {
+		if edge.From == from && edge.Kind == kind {
+			if _, ok := idx.byID[edge.To]; ok {
+				result = append(result, cloneEdge(edge))
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].To != result[j].To {
+			return result[i].To < result[j].To
+		}
+		return stableEdgeID(result[i]) < stableEdgeID(result[j])
+	})
+	return result
 }
 
 func (idx *Index) normalizeRetrieveOptions(question string, options RetrieveOptions) (normalizedRetrieveOptions, error) {
@@ -227,6 +452,9 @@ func (idx *Index) normalizeRetrieveOptions(question string, options RetrieveOpti
 	if options.MaxNodes < 1 || options.MaxNodes > 10_000 {
 		return normalizedRetrieveOptions{}, errors.New("max nodes must be between 1 and 10000")
 	}
+	if options.BranchFanout < 0 || options.BranchFanout > maximumBranchFanout {
+		return normalizedRetrieveOptions{}, fmt.Errorf("branch fanout must be 0 (automatic) or between 1 and %d", maximumBranchFanout)
+	}
 	if options.HubDegreeThreshold < -1 {
 		return normalizedRetrieveOptions{}, errors.New("hub degree threshold must be -1, 0, or a positive integer")
 	}
@@ -235,6 +463,9 @@ func (idx *Index) normalizeRetrieveOptions(question string, options RetrieveOpti
 	}
 
 	result := normalizedRetrieveOptions{RetrieveOptions: options, relationSet: map[graph.EdgeKind]bool{}}
+	if options.Direction == DirectionBoth {
+		result.directionPreference = inferDirectionPreference(question)
+	}
 	result.Relations = nil
 	seen := map[graph.EdgeKind]bool{}
 	for _, relation := range options.Relations {
@@ -251,6 +482,7 @@ func (idx *Index) normalizeRetrieveOptions(question string, options RetrieveOpti
 	}
 	if len(result.Relations) > 0 {
 		result.filterFrom = "explicit"
+		result.filterEdges = true
 		return result, nil
 	}
 	if !options.DisableRelationInference {
@@ -260,6 +492,7 @@ func (idx *Index) normalizeRetrieveOptions(question string, options RetrieveOpti
 		}
 		if len(result.Relations) > 0 {
 			result.filterFrom = "inferred"
+			result.filterEdges = true
 		}
 	}
 	return result, nil
@@ -314,6 +547,57 @@ func (idx *Index) inferRelations(question string) []graph.EdgeKind {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
+}
+
+func inferDirectionPreference(question string) Direction {
+	text := " " + normalizeSearchText(question) + " "
+	terms := map[string]bool{}
+	for _, term := range searchTokens(question) {
+		terms[term] = true
+	}
+	hasDirectionalRelation := false
+	for _, term := range []string{
+		"call", "calls", "called", "caller", "import", "imports", "imported",
+		"reference", "references", "referenced", "use", "uses", "used",
+		"depend", "depends", "dependency", "dependencies", "implement", "implements",
+		"inherit", "inherits", "affect", "affects", "flow", "flows",
+	} {
+		if terms[term] {
+			hasDirectionalRelation = true
+			break
+		}
+	}
+	if !hasDirectionalRelation {
+		return ""
+	}
+	incoming := containsAnyPhrase(text,
+		" who calls ", " what calls ", " which calls ", " called by ", " callers of ",
+		" who imports ", " what imports ", " which imports ", " imported by ",
+		" who references ", " what references ", " which references ", " referenced by ",
+		" who uses ", " what uses ", " which uses ", " used by ",
+		" who depends ", " what depends ", " which depends ", " dependents of ",
+		" implemented by ", " inherited by ", " affected by ",
+	)
+	outgoing := containsAnyPhrase(text,
+		" what does ", " which does ", " how does ", " calls from ", " imports from ",
+		" references from ", " depends on ", " dependencies of ",
+	)
+	if incoming == outgoing {
+		return ""
+	}
+	if incoming {
+		return DirectionIn
+	}
+	return DirectionOut
+}
+
+func containsAnyPhrase(value string, phrases ...string) bool {
+	for _, phrase := range phrases {
+		if strings.Contains(value, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 func retrievalTerms(question string, relations []graph.EdgeKind) []string {
@@ -457,7 +741,7 @@ func (idx *Index) seedMatchedTerms(candidate rankedNode, terms []string) map[str
 func (idx *Index) filteredAdjacency(options normalizedRetrieveOptions, scores map[string]int) (map[string][]adjacentEdge, map[string]int) {
 	adjacency := map[string][]adjacentEdge{}
 	add := func(from string, edge adjacentEdge) {
-		if len(options.relationSet) > 0 && !options.relationSet[edge.edge.Kind] {
+		if options.filterEdges && !options.relationSet[edge.edge.Kind] {
 			return
 		}
 		adjacency[from] = append(adjacency[from], edge)
@@ -489,6 +773,12 @@ func (idx *Index) filteredAdjacency(options normalizedRetrieveOptions, scores ma
 		sort.SliceStable(adjacency[nodeID], func(i, j int) bool {
 			left := adjacency[nodeID][i]
 			right := adjacency[nodeID][j]
+			if options.directionPreference != "" && left.outgoing != right.outgoing {
+				if options.directionPreference == DirectionOut {
+					return left.outgoing
+				}
+				return !left.outgoing
+			}
 			if scores[left.nodeID] != scores[right.nodeID] {
 				return scores[left.nodeID] > scores[right.nodeID]
 			}
@@ -523,6 +813,7 @@ func relationPriority(kind graph.EdgeKind) int {
 func (idx *Index) traverse(seedIDs []string, seedSet map[string]bool, adjacency map[string][]adjacentEdge, degree map[string]int, options normalizedRetrieveOptions) traversalResult {
 	result := traversalResult{distance: map[string]int{}, via: map[string]graph.Edge{}}
 	result.hubThreshold = hubThreshold(degree, options.HubDegreeThreshold)
+	result.branchFanout = traversalFanout(options.MaxNodes, len(seedIDs), options.MaxDepth, options.BranchFanout)
 	exploreLimit := max(1_000, options.MaxNodes*20)
 	exploreLimit = min(exploreLimit, 50_000)
 	for _, seed := range seedIDs {
@@ -533,14 +824,17 @@ func (idx *Index) traverse(seedIDs []string, seedSet map[string]bool, adjacency 
 		result.order = append(result.order, seed)
 	}
 	if options.Traversal == TraversalDFS {
-		idx.traverseDFS(&result, seedIDs, seedSet, adjacency, degree, options.MaxDepth, exploreLimit, traversalFanout(options.MaxNodes, len(seedIDs), options.MaxDepth))
+		idx.traverseDFS(&result, seedIDs, seedSet, adjacency, degree, options.MaxDepth, exploreLimit, result.branchFanout)
 	} else {
-		idx.traverseBFS(&result, seedIDs, seedSet, adjacency, degree, options.MaxDepth, exploreLimit, traversalFanout(options.MaxNodes, len(seedIDs), options.MaxDepth))
+		idx.traverseBFS(&result, seedIDs, seedSet, adjacency, degree, options.MaxDepth, exploreLimit, result.branchFanout)
 	}
 	return result
 }
 
-func traversalFanout(maxNodes, seeds, depth int) int {
+func traversalFanout(maxNodes, seeds, depth, configured int) int {
+	if configured > 0 {
+		return configured
+	}
 	layers := max(1, depth+1)
 	perBranch := maxNodes / max(1, seeds*layers)
 	return max(4, min(16, perBranch))
@@ -664,10 +958,10 @@ func hubThreshold(degree map[string]int, configured int) int {
 
 func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOptions, seedIDs []string, seedSet map[string]bool, scores, degree map[string]int, walk traversalResult) Retrieval {
 	stats := RetrievalStats{
-		Traversal: options.Traversal, Direction: options.Direction, Depth: options.MaxDepth,
+		Traversal: options.Traversal, Direction: options.Direction, DirectionPreference: options.directionPreference, Depth: options.MaxDepth,
 		SeedIDs: append([]string(nil), seedIDs...), RelationFilters: append([]graph.EdgeKind(nil), options.Relations...),
 		RelationFilterFrom: options.filterFrom, TokenBudget: options.TokenBudget,
-		HubThreshold: walk.hubThreshold, HubsSuppressed: walk.hubsSuppressed, BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order),
+		HubThreshold: walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed, BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order),
 	}
 	result := Retrieval{Version: 1, Query: safeTextBytes(question, 256), Stats: stats}
 	if len(walk.order) == 0 {
@@ -688,7 +982,10 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		if !seedSet[nodeID] && !seedEdgesHandled {
 			seedEdges := idx.edgesWithin(included, options.relationSet)
 			seedEdgesHandled = true
-			for _, edge := range seedEdges[:min(1, len(seedEdges))] {
+			for _, edge := range seedEdges {
+				if includedEdges[edge.ID] {
+					continue
+				}
 				cost := lineTokens(edgeLine(edge))
 				if budgetUsed+cost+reserve > options.TokenBudget {
 					break
@@ -696,6 +993,7 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 				result.Edges = append(result.Edges, edge)
 				includedEdges[edge.ID] = true
 				budgetUsed += cost
+				break
 			}
 		}
 		docIndex, ok := idx.byID[nodeID]
@@ -729,7 +1027,10 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 	if !seedEdgesHandled {
 		seedEdgesHandled = true
 		seedEdges := idx.edgesWithin(included, options.relationSet)
-		for _, edge := range seedEdges[:min(1, len(seedEdges))] {
+		for _, edge := range seedEdges {
+			if includedEdges[edge.ID] {
+				continue
+			}
 			cost := lineTokens(edgeLine(edge))
 			if budgetUsed+cost+reserve > options.TokenBudget {
 				break
@@ -737,6 +1038,7 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 			result.Edges = append(result.Edges, edge)
 			includedEdges[edge.ID] = true
 			budgetUsed += cost
+			break
 		}
 	}
 	if len(walk.order) > options.MaxNodes {
@@ -950,6 +1252,9 @@ func retrievalHeader(question string, stats RetrievalStats) string {
 		"depth=" + strconv.Itoa(stats.Depth),
 		"budget=" + strconv.Itoa(stats.TokenBudget),
 	}
+	if stats.DirectionPreference != "" {
+		parts = append(parts, "preference="+string(stats.DirectionPreference))
+	}
 	headerByteBudget := max(96, stats.TokenBudget) // one-third of the token budget at 3 bytes/token
 	base := strings.Join(parts, "\t")
 	queryLimit := min(96, max(0, headerByteBudget-len(base)-len("\tquery=\"\"")))
@@ -1027,7 +1332,26 @@ func edgeLine(edge ContextEdge) string {
 func truncationLine(stats RetrievalStats) string {
 	return fmt.Sprintf("TRUNCATED\treason=%s\tomitted_nodes=%d\tomitted_edges=%d\tpruned_branches=%d\thint=%s",
 		strings.Join(stats.TruncatedReason, ","), stats.OmittedNodes, stats.OmittedEdges, stats.BranchesPruned,
-		quoteField("narrow filters/depth or raise --token-budget"))
+		quoteField(truncationHint(stats.TruncatedReason)))
+}
+
+func truncationHint(reasons []string) string {
+	for _, reason := range reasons {
+		if reason == "branch_limit" {
+			return "branch_limit: raise --branch-fanout or narrow relations/depth"
+		}
+	}
+	for _, reason := range reasons {
+		if reason == "exploration_limit" {
+			return "exploration_limit: narrow relations/depth"
+		}
+	}
+	for _, reason := range reasons {
+		if reason == "max_nodes" {
+			return "max_nodes: raise --max-nodes or narrow relations/depth"
+		}
+	}
+	return "token_budget: raise --token-budget or narrow output"
 }
 
 func quoteField(value string) string {

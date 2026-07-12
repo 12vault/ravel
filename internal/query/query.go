@@ -62,9 +62,17 @@ func Explain(g graph.Graph, target string) (Explanation, bool) {
 // Explain returns the immediate relationships for the best matching target
 // while reusing the index's immutable graph snapshot.
 func (idx *Index) Explain(target string) (Explanation, bool) {
-	n, ok := idx.FindBest(target)
-	if !ok {
-		return Explanation{}, false
+	explanation, err := idx.ExplainResolved(target)
+	return explanation, err == nil
+}
+
+// ExplainResolved returns the immediate relationships for a strictly resolved
+// target. Unlike the compatibility Explain wrapper, it preserves ambiguity and
+// not-found errors for interactive callers.
+func (idx *Index) ExplainResolved(target string) (Explanation, error) {
+	n, err := idx.ResolveTarget(target)
+	if err != nil {
+		return Explanation{}, err
 	}
 	g := idx.graph
 	byID := nodesByID(g)
@@ -98,7 +106,7 @@ func (idx *Index) Explain(target string) (Explanation, bool) {
 		}
 	}
 	sortExplanation(&ex)
-	return ex, true
+	return ex, nil
 }
 
 func WriteExplanation(w io.Writer, ex Explanation, jsonOut bool) error {
@@ -131,16 +139,11 @@ func ShortestPath(g graph.Graph, fromQuery, toQuery string) ([]graph.Node, bool)
 // ShortestPath finds a directed path first and then an undirected fallback
 // while reusing the index's immutable graph snapshot.
 func (idx *Index) ShortestPath(fromQuery, toQuery string) ([]graph.Node, bool) {
-	from, fromOK := idx.FindBest(fromQuery)
-	to, toOK := idx.FindBest(toQuery)
-	if !fromOK || !toOK {
+	result, ok, err := idx.ShortestPathResult(fromQuery, toQuery)
+	if err != nil || !ok {
 		return nil, false
 	}
-	g := idx.graph
-	if path, ok := bfs(g, from.ID, to.ID, true); ok {
-		return path, true
-	}
-	return bfs(g, from.ID, to.ID, false)
+	return result.Nodes, true
 }
 
 func WritePath(w io.Writer, nodes []graph.Node, jsonOut bool) error {
@@ -178,45 +181,6 @@ func exactMatch(g graph.Graph, query string) (graph.Node, bool) {
 		}
 	}
 	return graph.Node{}, false
-}
-
-func bfs(g graph.Graph, fromID, toID string, directed bool) ([]graph.Node, bool) {
-	byID := nodesByID(g)
-	adj := map[string][]string{}
-	for _, e := range g.Edges {
-		adj[e.From] = append(adj[e.From], e.To)
-		if !directed {
-			adj[e.To] = append(adj[e.To], e.From)
-		}
-	}
-	queue := []string{fromID}
-	prev := map[string]string{fromID: ""}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		if cur == toID {
-			var ids []string
-			for id := toID; id != ""; id = prev[id] {
-				ids = append(ids, id)
-			}
-			for i, j := 0, len(ids)-1; i < j; i, j = i+1, j-1 {
-				ids[i], ids[j] = ids[j], ids[i]
-			}
-			nodes := make([]graph.Node, 0, len(ids))
-			for _, id := range ids {
-				nodes = append(nodes, byID[id])
-			}
-			return nodes, true
-		}
-		for _, next := range adj[cur] {
-			if _, seen := prev[next]; seen {
-				continue
-			}
-			prev[next] = cur
-			queue = append(queue, next)
-		}
-	}
-	return nil, false
 }
 
 func nodesByID(g graph.Graph) map[string]graph.Node {
@@ -270,8 +234,39 @@ func writeRelationSection(w io.Writer, title string, relations []Relation) {
 	}
 	fmt.Fprintf(w, "\n%s:\n", title)
 	for _, relation := range relations {
-		fmt.Fprintf(w, "- %s\t%s\n", safeText(string(relation.Kind)), safeText(display(relation.Node)))
+		parts := []string{
+			"- " + safeText(string(relation.Kind)),
+			compactID(relation.Node.ID),
+			safeText(display(relation.Node)),
+		}
+		if confidence := safeText(relation.Meta["confidence"]); confidence != "" {
+			parts = append(parts, "confidence="+confidence)
+		}
+		if resolved := safeText(relation.Meta["resolved"]); resolved != "" {
+			parts = append(parts, "resolved="+resolved)
+		}
+		if evidence := relationEvidence(relation.Meta); evidence != "" {
+			parts = append(parts, "evidence="+quoteField(evidence))
+		}
+		if rationale := safeText(relation.Meta["rationale"]); rationale != "" {
+			parts = append(parts, "rationale="+quoteField(rationale))
+		}
+		fmt.Fprintln(w, strings.Join(parts, "\t"))
 	}
+}
+
+func relationEvidence(meta map[string]string) string {
+	if evidence := safeText(meta["evidence"]); evidence != "" {
+		return evidence
+	}
+	path := safeText(meta["path"])
+	if path == "" {
+		return ""
+	}
+	if line := safeText(meta["line"]); line != "" {
+		return path + ":" + line
+	}
+	return path
 }
 
 func sortRelations(relations []Relation) {

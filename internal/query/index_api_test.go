@@ -125,6 +125,40 @@ func TestIndexRewardsUnorderedCompoundSymbolNameCoverage(t *testing.T) {
 	}
 }
 
+func TestIndexPrefersSourceQualifiedExactSymbolOverVerboseCoverage(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "function://internal/cache.Cache", Kind: graph.NodeFunction, Name: "Cache", Path: "internal/cache/cache.go", Package: "internal/cache"},
+		{ID: "function://internal/cache.LoadCache", Kind: graph.NodeFunction, Name: "LoadCache", Path: "internal/cache/load.go", Package: "internal/cache"},
+		{ID: "function://internal/cache.TestCacheLoadsRareWidgetRules", Kind: graph.NodeFunction, Name: "TestCacheLoadsRareWidgetRules", Path: "internal/cache/cache_test.go", Package: "internal/cache"},
+	}
+	results := NewIndex(graph.Graph{Nodes: nodes}).Search("what does cache Cache call to load rare widget rules", 3)
+	if len(results) == 0 || results[0].Node.ID != "function://internal/cache.Cache" {
+		t.Fatalf("ranked results = %#v", results)
+	}
+}
+
+func TestIndexUsesPackagePlusExactNameToDisambiguateWrapperFromMethod(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "function://internal/query.Search", Kind: graph.NodeFunction, Name: "Search", Path: "internal/query/query.go", Package: "internal/query"},
+		{ID: "method://internal/query.(*Index).Search", Kind: graph.NodeMethod, Name: "(*Index).Search", Path: "internal/query/index.go", Package: "internal/query"},
+	}
+	results := NewIndex(graph.Graph{Nodes: nodes}).Search("what does query Search call to build the reusable Index", 2)
+	if len(results) == 0 || results[0].Node.ID != "function://internal/query.Search" {
+		t.Fatalf("ranked results = %#v", results)
+	}
+}
+
+func TestIndexDoesNotTreatFileExtensionAsPackageQualification(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "interface://internal/lang.Analyzer", Kind: graph.NodeInterface, Name: "Analyzer", Path: "internal/lang/analyzer.go", Package: "internal/lang"},
+		{ID: "method://internal/lang/goanalyzer.Analyzer.Analyze", Kind: graph.NodeMethod, Name: "Analyzer.Analyze", Path: "internal/lang/goanalyzer/analyzer.go", Package: "internal/lang/goanalyzer"},
+	}
+	results := NewIndex(graph.Graph{Nodes: nodes}).Search("what does go analyzer Analyze call for module import resolution", 2)
+	if len(results) == 0 || results[0].Node.ID != "method://internal/lang/goanalyzer.Analyzer.Analyze" {
+		t.Fatalf("ranked results = %#v", results)
+	}
+}
+
 func TestIndexSearchIsDeterministicAcrossInputOrder(t *testing.T) {
 	nodes := []graph.Node{
 		{ID: "node://c", Kind: graph.NodeConcept, Name: "SharedName"},

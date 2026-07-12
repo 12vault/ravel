@@ -50,3 +50,29 @@ func TestExplainIncludesSemanticRelations(t *testing.T) {
 		t.Fatalf("Explain() = %#v, %v", explanation, ok)
 	}
 }
+
+func TestWriteExplanationPreservesSafeRelationEvidenceAndExactID(t *testing.T) {
+	explanation := Explanation{
+		Target: graph.Node{ID: "function://root", Kind: graph.NodeFunction, Name: "Root"},
+		Outgoing: []Relation{{
+			Kind: graph.EdgeCalls,
+			Node: graph.Node{ID: "function://target\nforged", Kind: graph.NodeFunction, Name: "Target\nforged"},
+			Meta: map[string]string{
+				"confidence": "inferred", "resolved": "false", "evidence": "root.go:12\nforged", "rationale": "receiver\tunknown",
+			},
+		}},
+	}
+	var output bytes.Buffer
+	if err := WriteExplanation(&output, explanation, false); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	for _, fragment := range []string{`function://target\nforged`, "confidence=inferred", "resolved=false", `evidence="root.go:12 forged"`, `rationale="receiver unknown"`} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("explanation missing %q: %q", fragment, text)
+		}
+	}
+	if strings.Contains(text, "\nforged\t") {
+		t.Fatalf("relation metadata forged an output record: %q", text)
+	}
+}

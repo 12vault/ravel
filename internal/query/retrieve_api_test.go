@@ -140,7 +140,8 @@ func TestRetrieveBoundsWideBranchesSoRelevantGrandchildrenFit(t *testing.T) {
 		nodes = append(nodes, graph.Node{ID: id, Kind: graph.NodeFunction, Name: id})
 		edges = append(edges, testQueryEdge(graph.EdgeCalls, "root", id))
 	}
-	result := mustRetrieve(t, NewIndex(graph.Graph{Nodes: nodes, Edges: edges}), "RootTargetCritical", RetrieveOptions{
+	g := graph.Graph{Nodes: nodes, Edges: edges}
+	result := mustRetrieve(t, NewIndex(g), "RootTargetCritical", RetrieveOptions{
 		Traversal: TraversalBFS, Direction: DirectionOut, Relations: []graph.EdgeKind{graph.EdgeCalls},
 		SeedLimit: 1, MaxDepth: 2, MaxNodes: 10, HubDegreeThreshold: -1, TokenBudget: 100_000,
 	})
@@ -149,6 +150,24 @@ func TestRetrieveBoundsWideBranchesSoRelevantGrandchildrenFit(t *testing.T) {
 	}
 	if result.Stats.BranchesPruned == 0 || !containsString(result.Stats.TruncatedReason, "branch_limit") {
 		t.Fatalf("branch pruning was not reported: %#v", result.Stats)
+	}
+	var output bytes.Buffer
+	if err := WriteRetrieval(&output, result, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "branch_limit: raise --branch-fanout or narrow relations/depth") || strings.Contains(output.String(), "--token-budget") {
+		t.Fatalf("branch-limit hint was not reason-specific: %s", output.String())
+	}
+
+	overridden := mustRetrieve(t, NewIndex(g), "RootTargetCritical", RetrieveOptions{
+		Traversal: TraversalBFS, Direction: DirectionOut, Relations: []graph.EdgeKind{graph.EdgeCalls},
+		SeedLimit: 1, MaxDepth: 2, MaxNodes: 30, BranchFanout: 32, HubDegreeThreshold: -1, TokenBudget: 100_000,
+	})
+	if overridden.Stats.BranchFanout != 32 || overridden.Stats.BranchesPruned != 0 || containsString(overridden.Stats.TruncatedReason, "branch_limit") {
+		t.Fatalf("explicit branch fanout was not honored: %#v", overridden.Stats)
+	}
+	if _, ok := retrievalNode(overridden, "deep"); !ok {
+		t.Fatalf("explicit fanout lost reachable evidence: %v", retrievalNodeIDs(overridden))
 	}
 }
 
@@ -182,6 +201,34 @@ func TestRetrieveHonorsIncomingOutgoingAndBothDirections(t *testing.T) {
 				t.Fatalf("direction %s nodes = %v, want %v", tc.direction, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRetrieveBothDirectionsPrioritizesExplicitQuestionIntent(t *testing.T) {
+	g := graph.Graph{
+		Nodes: []graph.Node{
+			{ID: "target", Kind: graph.NodeFunction, Name: "Target"},
+			{ID: "helper", Kind: graph.NodeFunction, Name: "Helper"},
+			{ID: "caller", Kind: graph.NodeFunction, Name: "VerboseTargetCallerTest"},
+		},
+		Edges: []graph.Edge{
+			testQueryEdge(graph.EdgeCalls, "target", "helper"),
+			testQueryEdge(graph.EdgeCalls, "caller", "target"),
+		},
+	}
+	idx := NewIndex(g)
+	options := RetrieveOptions{Direction: DirectionBoth, Relations: []graph.EdgeKind{graph.EdgeCalls}, SeedLimit: 1, MaxDepth: 1, MaxNodes: 10, HubDegreeThreshold: -1, TokenBudget: 1_000}
+	outgoing := mustRetrieve(t, idx, "what does Target call", options)
+	if outgoing.Stats.DirectionPreference != DirectionOut || len(outgoing.Nodes) < 2 || outgoing.Nodes[1].ID != "helper" {
+		t.Fatalf("outgoing-preferred retrieval = %#v", outgoing)
+	}
+	incoming := mustRetrieve(t, idx, "who calls Target", options)
+	if incoming.Stats.DirectionPreference != DirectionIn || len(incoming.Nodes) < 2 || incoming.Nodes[1].ID != "caller" {
+		t.Fatalf("incoming-preferred retrieval = %#v", incoming)
+	}
+	mixed := mustRetrieve(t, idx, "who calls Target and what does it call", options)
+	if mixed.Stats.DirectionPreference != "" {
+		t.Fatalf("mixed question preference = %q, want none", mixed.Stats.DirectionPreference)
 	}
 }
 
@@ -523,6 +570,8 @@ func TestRetrieveRejectsInvalidOptions(t *testing.T) {
 		{name: "depth too large", options: RetrieveOptions{MaxDepth: 9}, message: "max depth"},
 		{name: "nodes too small", options: RetrieveOptions{MaxNodes: -1}, message: "max nodes"},
 		{name: "nodes too large", options: RetrieveOptions{MaxNodes: 10_001}, message: "max nodes"},
+		{name: "branch fanout too small", options: RetrieveOptions{BranchFanout: -1}, message: "branch fanout"},
+		{name: "branch fanout too large", options: RetrieveOptions{BranchFanout: 10_001}, message: "branch fanout"},
 		{name: "hub threshold", options: RetrieveOptions{HubDegreeThreshold: -2}, message: "hub degree threshold"},
 		{name: "budget too small", options: RetrieveOptions{TokenBudget: 127}, message: "token budget"},
 		{name: "budget too large", options: RetrieveOptions{TokenBudget: 100_001}, message: "token budget"},
@@ -541,7 +590,8 @@ func TestRetrieveAppliesDocumentedDefaults(t *testing.T) {
 	g := graph.Graph{Nodes: []graph.Node{{ID: "root", Kind: graph.NodeFunction, Name: "DefaultRoot"}}}
 	result := mustRetrieve(t, NewIndex(g), "DefaultRoot", RetrieveOptions{})
 	if result.Stats.Traversal != TraversalBFS || result.Stats.Direction != DirectionBoth ||
-		result.Stats.Depth != defaultMaxDepth || result.Stats.TokenBudget != defaultTokenBudget {
+		result.Stats.Depth != defaultMaxDepth || result.Stats.TokenBudget != defaultTokenBudget ||
+		result.Stats.BranchFanout != traversalFanout(defaultMaxNodes, 1, defaultMaxDepth, 0) {
 		t.Fatalf("default stats = %#v", result.Stats)
 	}
 	if got, want := result.Stats.SeedIDs, []string{"root"}; !reflect.DeepEqual(got, want) {
