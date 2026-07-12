@@ -35,6 +35,41 @@ func TestExecutePrintsVersion(t *testing.T) {
 	}
 }
 
+func TestWriteInstallSuccess(t *testing.T) {
+	var output bytes.Buffer
+	writeInstallSuccess(&output, "/tmp/ravel/SKILL.md", false)
+
+	for _, want := range []string{
+		"●────────╮",
+		"● · · · · · ●",
+		"█▀▀▄  ▄▀▀▄",
+		"skill installed  →  /tmp/ravel/SKILL.md",
+		"local CLI ready  →  ravel",
+		"network access   →  none",
+		"/ravel understand",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("install output missing %q:\n%s", want, output.String())
+		}
+	}
+	if strings.Contains(output.String(), "\x1b[") {
+		t.Fatalf("plain install output contains ANSI escapes: %q", output.String())
+	}
+}
+
+func TestWriteInstallSuccessUsesBrandColors(t *testing.T) {
+	var output bytes.Buffer
+	writeInstallSuccess(&output, "/tmp/ravel/SKILL.md", true)
+
+	if !strings.Contains(output.String(), "\x1b[38;2;0;194;199m") {
+		t.Fatal("colored install output is missing Ravel cyan")
+	}
+	if !strings.Contains(output.String(), "\x1b[38;2;255;92;77m╲") ||
+		!strings.Contains(output.String(), "\x1b[38;2;255;92;77m●") {
+		t.Fatal("colored install output is missing the coral diagonal or endpoint")
+	}
+}
+
 func TestExecuteUpdateCheckReportsAvailableReleaseAndJSON(t *testing.T) {
 	previous := checkForUpdate
 	checkForUpdate = func(ctx context.Context, options selfupdate.CheckOptions) (selfupdate.CheckResult, error) {

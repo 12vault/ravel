@@ -147,7 +147,6 @@ func runInstall(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Skill installed: %s\n", dst)
 	if *project {
 		if paths, err := installmgr.InstallIntegration(installmgr.IntegrationOptions{Platform: *platform}); err == nil {
 			fmt.Fprintf(stdout, "%s integration installed: %s\n", *platform, strings.Join(paths, ", "))
@@ -158,8 +157,56 @@ func runInstall(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "Add to version control: git add %s\n", dst)
 	}
-	fmt.Fprintln(stdout, "Invoke it from your assistant as $ravel (Codex) or /ravel.")
+	writeInstallSuccess(stdout, dst, terminalSupportsColor(stdout))
 	return nil
+}
+
+func writeInstallSuccess(w io.Writer, destination string, color bool) {
+	const (
+		cyan  = "\x1b[38;2;0;194;199m"
+		coral = "\x1b[38;2;255;92;77m"
+		dim   = "\x1b[2m"
+		reset = "\x1b[0m"
+	)
+
+	paint := func(code, value string) string {
+		if !color {
+			return value
+		}
+		return code + value + reset
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, paint(cyan, "    ●────────╮"))
+	fmt.Fprintln(w, paint(cyan, "             │"))
+	fmt.Fprintln(w, paint(cyan, "    ●─────   ╰●"))
+	fmt.Fprintf(w, "%s%s\n", paint(cyan, "    │          "), paint(coral, "╲"))
+	fmt.Fprintf(w, "%s%s\n", paint(cyan, "    │           "), paint(coral, "╲"))
+	fmt.Fprintf(w, "%s%s\n", paint(cyan, "    ● · · · · · "), paint(coral, "●"))
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%s   %s\n", paint(cyan, "    █▀▀▄  ▄▀▀▄  █   █  █▀▀▀  █"), paint(dim, Version))
+	fmt.Fprintln(w, paint(cyan, "    █▀▀▄  █▄▄█  ▀▄ ▄▀  █▀▀   █"))
+	fmt.Fprintln(w, paint(cyan, "    ▀  ▀  ▀  ▀   ▀▄▀   ▀▀▀▀  ▀▀▀▀"))
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "    skill installed  →  %s\n", destination)
+	fmt.Fprintln(w, "    local CLI ready  →  ravel")
+	fmt.Fprintln(w, "    network access   →  none")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "    Done. Ask your coding assistant:")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "      /ravel understand")
+}
+
+func terminalSupportsColor(w io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func runSelfUpdate(ctx context.Context, args []string, stdout io.Writer) error {
