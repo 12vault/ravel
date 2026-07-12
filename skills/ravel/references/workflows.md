@@ -33,3 +33,11 @@
 At the beginning of each skill task, run `ravel update <target>` once when `.reporavel/graph.json` already exists. The update is local and hash-aware: use `.reporavel/files.json` and the changed paths recorded by the command to scope re-analysis. Rebuild deterministic data first, then rerun only agent roles whose evidence files changed. Do not rebuild a missing graph without consent.
 
 Continuous refresh remains opt-in. Use `ravel watch --interval 2s <target>` for saved-file changes during an active coding session, or `ravel hook install <target>` for post-commit and post-checkout refresh. Never start either automatically from the skill.
+
+## Optional community descriptions
+
+1. Keep clustering deterministic. Choose granularity and hub controls before description work.
+2. Run `ravel community --template` to export current stable community IDs.
+3. Ask `community-describer` to fill only `description` and `rationale` using the bounded graph context supplied by the caller.
+4. Review the JSON, then run `ravel community describe <file>`.
+5. Treat every description as inferred. Never let AI output change IDs, membership, deterministic names, granularity, or hub thresholds.

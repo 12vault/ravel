@@ -14,6 +14,7 @@ import (
 	"time"
 
 	buildrunner "github.com/12vault/ravel/internal/build"
+	"github.com/12vault/ravel/internal/community"
 	"github.com/12vault/ravel/internal/config"
 	"github.com/12vault/ravel/internal/corpus"
 	"github.com/12vault/ravel/internal/dashboard"
@@ -90,6 +91,8 @@ func ExecuteIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		return runAssistantHook(args[1:], stdout)
 	case "ingest":
 		return runIngest(args[1:], stdout)
+	case "community":
+		return runCommunity(args[1:], stdout)
 	case "dashboard":
 		return runDashboard(args[1:], stdout)
 	case "doctor":
@@ -408,6 +411,87 @@ func runIngest(args []string, stdout io.Writer) error {
 	return nil
 }
 
+func runCommunity(args []string, stdout io.Writer) error {
+	describe := len(args) > 0 && args[0] == "describe"
+	if describe {
+		args = args[1:]
+	}
+	configPath := flagValue(args, "config", ".reporavel.yaml")
+	cfg, err := loadCommandConfig(args, configPath)
+	if err != nil {
+		return err
+	}
+	fs := newFlagSet("community")
+	configFlag := fs.String("config", configPath, "configuration file")
+	outDir := fs.String("out", cfg.Output.Dir, "graph directory")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	template := fs.Bool("template", false, "write an AI-description input template")
+	granularity := fs.String("granularity", cfg.Output.CommunityGranularity, "coarse, balanced, or fine")
+	hubThreshold := fs.Int("hub-degree-threshold", cfg.Output.CommunityHubDegreeThreshold, "0 for automatic, -1 to disable")
+	if err := fs.Parse(flexibleFlags(args, "config", "out", "granularity", "hub-degree-threshold")); err != nil {
+		return err
+	}
+	if *configFlag != configPath {
+		return errors.New("internal config flag parsing mismatch")
+	}
+	preset, err := community.ParsePreset(*granularity)
+	if err != nil {
+		return err
+	}
+	if *hubThreshold < -1 {
+		return errors.New("community hub degree threshold must be -1, 0, or positive")
+	}
+	options := community.Options{Granularity: preset, HubDegreeThreshold: *hubThreshold}
+	g, err := store.LoadGraph(*outDir)
+	if err != nil {
+		return err
+	}
+	g = community.AssignWithOptions(g, options)
+	if describe {
+		if *template || *jsonOut || fs.NArg() != 1 {
+			return errors.New("community describe requires exactly one descriptions JSON file")
+		}
+		descriptions, err := community.LoadDescriptions(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		g, err = community.ApplyDescriptions(g, descriptions)
+		if err != nil {
+			return err
+		}
+		markdown := report.MarkdownWithCommunityOptions(g, true, options)
+		if err := store.RewriteGraphViewsConfigured(*outDir, g, markdown, options); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Applied %d inferred community descriptions from %s\n", len(descriptions.Descriptions), descriptions.Source)
+		return nil
+	}
+	if fs.NArg() != 0 {
+		return errors.New("community does not accept positional arguments (use community describe <file>)")
+	}
+	summaries := community.Summaries(g)
+	encoder := json.NewEncoder(stdout)
+	encoder.SetIndent("", "  ")
+	if *template {
+		file := community.DescriptionFile{Version: 1, Source: "community-describer"}
+		for _, summary := range summaries {
+			file.Descriptions = append(file.Descriptions, community.Description{Community: summary.ID})
+		}
+		return encoder.Encode(file)
+	}
+	if *jsonOut {
+		return encoder.Encode(summaries)
+	}
+	for _, summary := range summaries {
+		fmt.Fprintf(stdout, "%s\t%s\t%d nodes", summary.ID, summary.Name, summary.Size)
+		if summary.Description != "" {
+			fmt.Fprintf(stdout, "\t%s", summary.Description)
+		}
+		fmt.Fprintln(stdout)
+	}
+	return nil
+}
+
 func runDashboard(args []string, stdout io.Writer) error {
 	configPath := flagValue(args, "config", ".reporavel.yaml")
 	cfg, err := loadCommandConfig(args, configPath)
@@ -418,7 +502,9 @@ func runDashboard(args []string, stdout io.Writer) error {
 	configFlag := fs.String("config", configPath, "configuration file")
 	outDir := fs.String("out", cfg.Output.Dir, "output directory")
 	communities := fs.Bool("communities", cfg.Output.CommunityClustering, "detect and display graph communities")
-	if err := fs.Parse(flexibleFlags(args, "config", "out")); err != nil {
+	granularity := fs.String("community-granularity", cfg.Output.CommunityGranularity, "coarse, balanced, or fine")
+	hubThreshold := fs.Int("community-hub-degree-threshold", cfg.Output.CommunityHubDegreeThreshold, "0 for automatic, -1 to disable")
+	if err := fs.Parse(flexibleFlags(args, "config", "out", "community-granularity", "community-hub-degree-threshold")); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
@@ -427,12 +513,19 @@ func runDashboard(args []string, stdout io.Writer) error {
 	if *configFlag != configPath {
 		return errors.New("internal config flag parsing mismatch")
 	}
+	preset, err := community.ParsePreset(*granularity)
+	if err != nil {
+		return err
+	}
+	if *hubThreshold < -1 {
+		return errors.New("community hub degree threshold must be -1, 0, or positive")
+	}
 	g, err := store.LoadGraph(*outDir)
 	if err != nil {
 		return err
 	}
 	path := filepath.Join(*outDir, "graph.html")
-	if err := dashboard.WriteWithOptions(path, g, *communities); err != nil {
+	if err := dashboard.WriteConfigured(path, g, *communities, community.Options{Granularity: preset, HubDegreeThreshold: *hubThreshold}); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Wrote %s\n", path)
@@ -529,7 +622,7 @@ func runBuild(ctx context.Context, args []string, stdout io.Writer) error {
 	if !filepath.IsAbs(out) {
 		out = filepath.Join(result.Scan.Root, out)
 	}
-	md := report.MarkdownConfigured(result.Graph, cfg.Output.CommunityClustering)
+	md := report.MarkdownWithCommunityOptions(result.Graph, cfg.Output.CommunityClustering, communityOptions(cfg.Output))
 	if err := store.WriteArtifacts(out, result.Graph, result.Scan, md, cfg.Output); err != nil {
 		return err
 	}
@@ -580,7 +673,7 @@ func runUpdate(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	markdown := report.MarkdownConfigured(result.Build.Graph, cfg.Output.CommunityClustering)
+	markdown := report.MarkdownWithCommunityOptions(result.Build.Graph, cfg.Output.CommunityClustering, communityOptions(cfg.Output))
 	if err := store.WriteArtifacts(out, result.Build.Graph, result.Build.Scan, markdown, cfg.Output); err != nil {
 		return err
 	}
@@ -1094,6 +1187,10 @@ func loadCommandConfig(args []string, path string) (config.Config, error) {
 	return config.Load(path)
 }
 
+func communityOptions(output config.OutputConfig) community.Options {
+	return community.Options{Granularity: community.Preset(output.CommunityGranularity), HubDegreeThreshold: output.CommunityHubDegreeThreshold}
+}
+
 func loadConfigWithOverrides(configPath, outDir string, maxFileSize int64) (config.Config, error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
@@ -1264,7 +1361,8 @@ func commandUsage(w io.Writer, command string) error {
 		"uninstall":    "ravel uninstall [--platform <name>] [--project]",
 		"hook":         "ravel hook <install|uninstall|status> [root]",
 		"ingest":       "ravel ingest [--out <dir>] <fragment.json>",
-		"dashboard":    "ravel dashboard [--out <dir>] [--communities=false]",
+		"community":    "ravel community [--json|--template] [--granularity coarse|balanced|fine] | ravel community describe <file>",
+		"dashboard":    "ravel dashboard [--out <dir>] [--communities=false] [--community-granularity <preset>] [--community-hub-degree-threshold <n>]",
 		"doctor":       "ravel doctor",
 		"tools":        "ravel tools",
 		"extract":      "ravel extract [--json] <audited-doc-or-pdf>...",
@@ -1320,7 +1418,9 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel codex|claude|cursor|vscode|gemini|opencode <install|uninstall>")
 	fmt.Fprintln(w, "  ravel hook <install|uninstall|status> [root]")
 	fmt.Fprintln(w, "  ravel ingest [--out <dir>] <fragment.json>")
-	fmt.Fprintln(w, "  ravel dashboard [--out <dir>] [--communities=false]")
+	fmt.Fprintln(w, "  ravel community [--json|--template] [--granularity coarse|balanced|fine]")
+	fmt.Fprintln(w, "  ravel community describe <descriptions.json>")
+	fmt.Fprintln(w, "  ravel dashboard [--out <dir>] [--communities=false] [--community-granularity balanced]")
 	fmt.Fprintln(w, "  ravel doctor")
 	fmt.Fprintln(w, "  ravel tools")
 	fmt.Fprintln(w, "  ravel extract [--json] <audited-doc-or-pdf>...")

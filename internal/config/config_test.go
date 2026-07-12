@@ -20,6 +20,9 @@ output:
   json: false
   sqlite: false
   markdownReport: true
+  communityClustering: true
+  communityGranularity: fine
+  communityHubDegreeThreshold: 42
 `)
 
 	cfg, err := Load(path)
@@ -43,6 +46,9 @@ output:
 	}
 	if !cfg.Output.MarkdownReport {
 		t.Fatal("Output.MarkdownReport = false, want true")
+	}
+	if cfg.Output.CommunityGranularity != "fine" || cfg.Output.CommunityHubDegreeThreshold != 42 {
+		t.Fatalf("community output config = %#v", cfg.Output)
 	}
 }
 
@@ -106,6 +112,8 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		{name: "invalid direction", content: "retrieval:\n  direction: around\n", want: "retrieval.direction must be out, in, or both"},
 		{name: "invalid branch fanout", content: "retrieval:\n  branchFanout: -1\n", want: "retrieval.branchFanout must be 0 (automatic) or between"},
 		{name: "invalid retrieval budget", content: "retrieval:\n  tokenBudget: 12\n", want: "retrieval.tokenBudget must be between"},
+		{name: "invalid community granularity", content: "output:\n  communityGranularity: microscopic\n", want: "output.communityGranularity must be coarse, balanced, or fine"},
+		{name: "invalid community hub threshold", content: "output:\n  communityHubDegreeThreshold: -2\n", want: "output.communityHubDegreeThreshold must be -1, 0, or positive"},
 		{name: "unsafe permission", content: "permissions:\n  network: true\n", want: "permissions.network cannot be enabled"},
 		{name: "type resolution unavailable", content: "analysis:\n  typeResolution: true\n", want: "analysis.typeResolution is not implemented"},
 		{name: "sqlite unavailable", content: "output:\n  sqlite: true\n", want: "output.sqlite is not implemented"},

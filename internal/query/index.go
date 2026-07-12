@@ -454,6 +454,8 @@ func searchableMeta(meta map[string]string) string {
 		"sourcehash": true, "sourcehashes": true, "resolved": true, "line": true,
 		"path": true, "size": true,
 		"community": true, "communitysize": true,
+		"communitygranularity": true, "communityhubthreshold": true,
+		"communitydescriptionsource": true, "communitydescriptionconfidence": true, "communitydescriptionrationale": true,
 	}
 	keys := make([]string, 0, len(meta))
 	for key := range meta {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,6 +214,45 @@ func TestExecuteDashboardHonorsDisabledCommunityConfig(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"community":"`) {
 		t.Fatal("dashboard ignored disabled community config")
+	}
+}
+
+func TestExecuteCommunityTemplateAndDescriptionImport(t *testing.T) {
+	out := t.TempDir()
+	g := graph.Graph{Nodes: []graph.Node{{ID: "a", Kind: graph.NodeFile, Name: "a.go", Path: "internal/query/a.go"}}}
+	if err := store.WriteJSON(filepath.Join(out, "graph.json"), g); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Execute(context.Background(), []string{"community", "--out", out, "--template"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var template struct {
+		Descriptions []struct {
+			Community string `json:"community"`
+		} `json:"descriptions"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &template); err != nil {
+		t.Fatalf("template JSON: %v\n%s", err, stdout.String())
+	}
+	if len(template.Descriptions) != 1 || template.Descriptions[0].Community == "" {
+		t.Fatalf("template = %#v", template)
+	}
+	descriptionPath := filepath.Join(t.TempDir(), "descriptions.json")
+	descriptionJSON := fmt.Sprintf(`{"version":1,"source":"test-ai","descriptions":[{"community":%q,"description":"Handles graph queries.","rationale":"The community is dominated by query files."}]}`, template.Descriptions[0].Community)
+	if err := os.WriteFile(descriptionPath, []byte(descriptionJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if err := Execute(context.Background(), []string{"community", "describe", descriptionPath, "--out", out}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.LoadGraph(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Nodes[0].Meta["communityDescription"] != "Handles graph queries." || stored.Nodes[0].Meta["communityName"] != "internal/query" {
+		t.Fatalf("described node = %#v", stored.Nodes[0])
 	}
 }
 

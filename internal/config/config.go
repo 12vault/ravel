@@ -31,11 +31,13 @@ type AnalysisConfig struct {
 }
 
 type OutputConfig struct {
-	Dir                 string
-	JSON                bool
-	SQLite              bool
-	MarkdownReport      bool
-	CommunityClustering bool
+	Dir                         string
+	JSON                        bool
+	SQLite                      bool
+	MarkdownReport              bool
+	CommunityClustering         bool
+	CommunityGranularity        string
+	CommunityHubDegreeThreshold int
 }
 
 type RetrievalConfig struct {
@@ -82,11 +84,13 @@ func Default() Config {
 			CommunityBoost:     false,
 		},
 		Output: OutputConfig{
-			Dir:                 ".reporavel",
-			JSON:                true,
-			SQLite:              false,
-			MarkdownReport:      true,
-			CommunityClustering: true,
+			Dir:                         ".reporavel",
+			JSON:                        true,
+			SQLite:                      false,
+			MarkdownReport:              true,
+			CommunityClustering:         true,
+			CommunityGranularity:        "balanced",
+			CommunityHubDegreeThreshold: 0,
 		},
 	}
 }
@@ -308,6 +312,14 @@ func applyValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		cfg.Output.CommunityClustering = parsed
+	case "output.communityGranularity":
+		cfg.Output.CommunityGranularity = strings.ToLower(value)
+	case "output.communityHubDegreeThreshold":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Output.CommunityHubDegreeThreshold = int(parsed)
 	default:
 		return fmt.Errorf("unknown setting %q", key)
 	}
@@ -359,6 +371,12 @@ func validate(cfg Config) error {
 	}
 	if cfg.Output.SQLite {
 		return fmt.Errorf("output.sqlite is not implemented")
+	}
+	if cfg.Output.CommunityGranularity != "coarse" && cfg.Output.CommunityGranularity != "balanced" && cfg.Output.CommunityGranularity != "fine" {
+		return fmt.Errorf("output.communityGranularity must be coarse, balanced, or fine")
+	}
+	if cfg.Output.CommunityHubDegreeThreshold < -1 {
+		return fmt.Errorf("output.communityHubDegreeThreshold must be -1, 0, or positive")
 	}
 	if !cfg.Output.JSON && !cfg.Output.MarkdownReport {
 		return fmt.Errorf("at least one output format must be enabled")
@@ -464,6 +482,8 @@ output:
   sqlite: false
   markdownReport: true
   communityClustering: true
+  communityGranularity: balanced
+  communityHubDegreeThreshold: 0
 `
 }
 

@@ -19,6 +19,7 @@ Use the Go CLI for deterministic scanning, storage, queries, and validation. Use
 - Reverse-impact questions: use `ravel affected <file|symbol|node-id>` for incoming callers, references, implementers, importers, and dependents. Its default impact filter excludes generic containment noise. Files bootstrap direct definitions; packages/modules/directories bootstrap directly contained files plus direct definitions, capped at 20 origins. It does not recursively expand repository or nested-directory trees; use changed-file inputs or `ravel diff` for that scope. Unresolved targets remain errors rather than guesses.
 - MCP-capable hosts may launch `ravel mcp --out <graphdir>` and use its read-only `query`, `context`, `explain`, `path`, and reverse-impact `affected` tools. Keep `context` token-bounded and treat explicit unresolved results as unresolved.
 - Retrieval or answer-quality evaluation: use `ravel benchmark` with the versioned repository-question JSONL contract. An optional `--answers` ledger records externally adjudicated correctness, rubric fact coverage, tokens, spend, and provenance without raw answers; Ravel never invokes a model or judge.
+- Community descriptions: run `ravel community --template`, ask `community-describer` to fill only `description` and `rationale`, then import with `ravel community describe <file>`. AI content must never set community IDs, membership, deterministic names, granularity, or hub thresholds.
 - Agent-produced nodes or edges: read `references/fragments.md`, write a fragment, then run `ravel ingest <fragment.json>`.
 - Native polyglot nodes come from the pinned pure-Go Tree-sitter layer. Treat syntax captures as `extracted`, name-only target matches as `inferred`, and ambiguous or unsupported shapes as unresolved; use `code-analyzer` only to fill evidence-backed gaps rather than duplicating parser facts.
 
@@ -36,7 +37,7 @@ Do not start `ravel watch`, install Git hooks, or leave background processes run
 
 ## Specialized roles
 
-Use the seven executable role prompts in `agents/`. On hosts with native subagents, dispatch those roles directly. Otherwise execute the same prompts sequentially in isolated passes.
+Use the eight executable role prompts in `agents/`. On hosts with native subagents, dispatch those roles directly. Otherwise execute the same prompts sequentially in isolated passes.
 
 1. `project-scanner`: inventory languages, frameworks, manifests, entry points, and boundaries.
 2. `code-analyzer`: extract symbols and explicit code relationships for any language.
@@ -45,6 +46,7 @@ Use the seven executable role prompts in `agents/`. On hosts with native subagen
 5. `graph-reviewer`: reject missing endpoints, unsupported claims, duplicates, and weak provenance.
 6. `domain-analyzer`: model business domains, flows, steps, actors, and affected code.
 7. `document-analyzer`: extract concepts, claims, citations, schema entities, and code links from docs and PDFs.
+8. `community-describer`: add optional inferred prose descriptions to deterministic communities without changing their identity.
 
 Keep each role scoped to explicit files from the audited corpus. Do not let agents scan ignored or secret-like files.
 

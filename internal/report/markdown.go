@@ -14,8 +14,12 @@ func Markdown(g graph.Graph) string {
 }
 
 func MarkdownConfigured(g graph.Graph, communities bool) string {
+	return MarkdownWithCommunityOptions(g, communities, community.DefaultOptions())
+}
+
+func MarkdownWithCommunityOptions(g graph.Graph, communities bool, options community.Options) string {
 	if communities {
-		g = community.Assign(g)
+		g = community.AssignWithOptions(g, options)
 	}
 	var b strings.Builder
 	b.WriteString("# RepoRavel Report\n\n")
@@ -33,6 +37,10 @@ func MarkdownConfigured(g graph.Graph, communities bool) string {
 	fmt.Fprintf(&b, "- Edges: %d\n", len(g.Edges))
 	if communities {
 		fmt.Fprintf(&b, "- Communities: %d\n", len(community.Summaries(g)))
+		if len(g.Nodes) > 0 {
+			fmt.Fprintf(&b, "- Community granularity: %s\n", g.Nodes[0].Meta[community.MetaGranularityKey])
+			fmt.Fprintf(&b, "- Community hub threshold: %s\n", g.Nodes[0].Meta[community.MetaHubThresholdKey])
+		}
 	}
 	b.WriteString("\n")
 
@@ -85,8 +93,17 @@ func writeCommunities(b *strings.Builder, g graph.Graph) {
 			fmt.Fprintf(b, " · %s", strings.Join(kinds, ", "))
 		}
 		b.WriteString("\n")
+		if summary.Description != "" {
+			fmt.Fprintf(b, "  - %s\n", markdownText(summary.Description))
+		}
 	}
 	b.WriteString("\n")
+}
+
+func markdownText(value string) string {
+	value = strings.Join(strings.Fields(value), " ")
+	replacer := strings.NewReplacer("\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_", "[", "\\[", "]", "\\]", "<", "&lt;", ">", "&gt;")
+	return replacer.Replace(value)
 }
 
 func typeCount(g graph.Graph) int {

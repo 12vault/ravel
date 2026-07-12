@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/12vault/ravel/internal/community"
 	"github.com/12vault/ravel/internal/graph"
 )
 
@@ -43,5 +44,25 @@ func TestWriteCanDisableCommunities(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"community":"`) {
 		t.Fatal("disabled dashboard embedded community metadata")
+	}
+}
+
+func TestWriteShowsOptionalCommunityDescriptions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "graph.html")
+	g := community.Assign(graph.Graph{Nodes: []graph.Node{{ID: "a", Name: "A"}}})
+	id := g.Nodes[0].Meta[community.MetaKey]
+	described, err := community.ApplyDescriptions(g, community.DescriptionFile{Version: 1, Source: "test-ai", Descriptions: []community.Description{{Community: id, Text: "Coordinates requests.", Rationale: "The graph groups request nodes."}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(path, described); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Coordinates requests.") {
+		t.Fatal("dashboard omitted community description")
 	}
 }
