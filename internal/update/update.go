@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	buildrunner "github.com/12vault/ravel/internal/build"
+	"github.com/12vault/ravel/internal/community"
 	"github.com/12vault/ravel/internal/config"
 	"github.com/12vault/ravel/internal/graph"
 	"github.com/12vault/ravel/internal/scan"
@@ -17,12 +18,21 @@ type Result struct {
 }
 
 func Run(ctx context.Context, root string, cfg config.Config, previous graph.Graph, previousScan scan.Result) (Result, error) {
-	built, err := buildrunner.Run(ctx, root, cfg)
+	return RunWithProgress(ctx, root, cfg, previous, previousScan, nil)
+}
+
+func RunWithProgress(ctx context.Context, root string, cfg config.Config, previous graph.Graph, previousScan scan.Result, progress func(buildrunner.Progress)) (Result, error) {
+	built, err := buildrunner.RunWithProgress(ctx, root, cfg, progress)
 	if err != nil {
 		return Result{}, err
 	}
 	changed, removed := changes(previousScan.Files, built.Scan.Files)
 	built.Graph = preserveEnrichment(built.Graph, previous)
+	if cfg.Output.CommunityClustering {
+		options := community.Options{Granularity: community.Preset(cfg.Output.CommunityGranularity), HubDegreeThreshold: cfg.Output.CommunityHubDegreeThreshold}
+		built.Graph = community.AssignWithOptions(built.Graph, options)
+		built.Graph = community.RemapLabels(built.Graph, previous)
+	}
 	return Result{Build: built, Changed: changed, Removed: removed}, nil
 }
 

@@ -106,11 +106,11 @@ func ExecuteIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	case "benchmark":
 		return runBenchmark(args[1:], stdout)
 	case "audit", "scan":
-		return runAudit(args[1:], stdout)
+		return runAudit(args[1:], stdout, stderr)
 	case "build":
-		return runBuild(ctx, args[1:], stdout)
+		return runBuild(ctx, args[1:], stdout, stderr)
 	case "update":
-		return runUpdate(ctx, args[1:], stdout)
+		return runUpdate(ctx, args[1:], stdout, stderr)
 	case "watch":
 		return runWatch(ctx, args[1:], stdout)
 	case "share":
@@ -446,7 +446,9 @@ func runCommunity(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	previous := g
 	g = community.AssignWithOptions(g, options)
+	g = community.RemapLabels(g, previous)
 	if describe {
 		if *template || *jsonOut || fs.NArg() != 1 {
 			return errors.New("community describe requires exactly one descriptions JSON file")
@@ -570,7 +572,7 @@ func runDoctor(args []string, stdout io.Writer) error {
 	return nil
 }
 
-func runAudit(args []string, stdout io.Writer) error {
+func runAudit(args []string, stdout, progressOutput io.Writer) error {
 	fs := newFlagSet("audit")
 	configPath := fs.String("config", ".reporavel.yaml", "config path")
 	outDir := fs.String("out", "", "output directory")
@@ -586,15 +588,18 @@ func runAudit(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	result, err := scan.Scan(root, cfg)
+	progress := newTraversalProgress(progressOutput)
+	defer progress.Close()
+	result, err := scan.ScanWithProgress(root, cfg, progress.Scan)
 	if err != nil {
 		return err
 	}
+	progress.Close()
 	writeAudit(stdout, result, cfg)
 	return nil
 }
 
-func runBuild(ctx context.Context, args []string, stdout io.Writer) error {
+func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writer) error {
 	fs := newFlagSet("build")
 	configPath := fs.String("config", ".reporavel.yaml", "config path")
 	outDir := fs.String("out", "", "output directory")
@@ -614,10 +619,13 @@ func runBuild(ctx context.Context, args []string, stdout io.Writer) error {
 	if *noCallGraph {
 		cfg.Analysis.CallGraph = false
 	}
-	result, err := buildrunner.Run(ctx, root, cfg)
+	progress := newTraversalProgress(progressOutput)
+	defer progress.Close()
+	result, err := buildrunner.RunWithProgress(ctx, root, cfg, progress.Build)
 	if err != nil {
 		return err
 	}
+	progress.Build(buildrunner.Progress{Stage: "Writing graph", Completed: len(result.Scan.Files), Total: len(result.Scan.Files)})
 	out := cfg.Output.Dir
 	if !filepath.IsAbs(out) {
 		out = filepath.Join(result.Scan.Root, out)
@@ -626,6 +634,7 @@ func runBuild(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := store.WriteArtifacts(out, result.Graph, result.Scan, md, cfg.Output); err != nil {
 		return err
 	}
+	progress.Close()
 	fmt.Fprintf(stdout, "Wrote %s\n", out)
 	fmt.Fprintf(stdout, "Files analyzed: %d\n", len(result.Scan.Files))
 	fmt.Fprintf(stdout, "Nodes: %d\n", len(result.Graph.Nodes))
@@ -633,7 +642,7 @@ func runBuild(ctx context.Context, args []string, stdout io.Writer) error {
 	return nil
 }
 
-func runUpdate(ctx context.Context, args []string, stdout io.Writer) error {
+func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Writer) error {
 	fs := newFlagSet("update")
 	configPath := fs.String("config", ".reporavel.yaml", "config path")
 	outDir := fs.String("out", "", "output directory")
@@ -669,10 +678,13 @@ func runUpdate(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("update requires existing file metadata: %w", err)
 	}
-	result, err := updater.Run(ctx, root, cfg, previous, previousScan)
+	progress := newTraversalProgress(progressOutput)
+	defer progress.Close()
+	result, err := updater.RunWithProgress(ctx, root, cfg, previous, previousScan, progress.Build)
 	if err != nil {
 		return err
 	}
+	progress.Build(buildrunner.Progress{Stage: "Writing graph", Completed: len(result.Build.Scan.Files), Total: len(result.Build.Scan.Files)})
 	markdown := report.MarkdownWithCommunityOptions(result.Build.Graph, cfg.Output.CommunityClustering, communityOptions(cfg.Output))
 	if err := store.WriteArtifacts(out, result.Build.Graph, result.Build.Scan, markdown, cfg.Output); err != nil {
 		return err
@@ -680,6 +692,7 @@ func runUpdate(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := store.WriteChanges(out, result.Changed, result.Removed); err != nil {
 		return err
 	}
+	progress.Close()
 	fmt.Fprintf(stdout, "Updated %s\n", out)
 	fmt.Fprintf(stdout, "Changed files: %d\n", len(result.Changed))
 	fmt.Fprintf(stdout, "Removed files: %d\n", len(result.Removed))
@@ -739,7 +752,7 @@ func runWatch(ctx context.Context, args []string, stdout io.Writer) error {
 				updateArgs = append(updateArgs, "--out", *outDir)
 			}
 			updateArgs = append(updateArgs, root)
-			if err := runUpdate(ctx, updateArgs, stdout); err != nil {
+			if err := runUpdate(ctx, updateArgs, stdout, stdout); err != nil {
 				return err
 			}
 			previous = current

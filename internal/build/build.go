@@ -18,8 +18,23 @@ type Result struct {
 	Graph graph.Graph
 }
 
+type Progress struct {
+	Stage     string
+	Path      string
+	Completed int
+	Total     int
+}
+
 func Run(ctx context.Context, root string, cfg config.Config) (Result, error) {
-	scanResult, err := scan.Scan(root, cfg)
+	return RunWithProgress(ctx, root, cfg, nil)
+}
+
+func RunWithProgress(ctx context.Context, root string, cfg config.Config, progress func(Progress)) (Result, error) {
+	scanResult, err := scan.ScanWithProgress(root, cfg, func(path string, files int) {
+		if progress != nil {
+			progress(Progress{Stage: "Scanning", Path: path, Completed: files})
+		}
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -42,13 +57,18 @@ func Run(ctx context.Context, root string, cfg config.Config) (Result, error) {
 	for _, f := range scanResult.Files {
 		filesByLanguage[f.Language] = append(filesByLanguage[f.Language], f)
 	}
+	completed := 0
 	for language, files := range filesByLanguage {
 		analyzer, ok := registry.ForLanguage(language)
 		if !ok && cfg.Analysis.Polyglot && treeanalyzer.Supports(language, files) {
 			analyzer, ok = treeanalyzer.New(language), true
 		}
 		if !ok {
+			completed += len(files)
 			continue
+		}
+		if progress != nil {
+			progress(Progress{Stage: "Analyzing " + language, Path: files[0].Path, Completed: completed, Total: len(scanResult.Files)})
 		}
 		analysis, err := analyzer.Analyze(ctx, scanResult.Root, files)
 		if err != nil {
@@ -63,6 +83,7 @@ func Run(ctx context.Context, root string, cfg config.Config) (Result, error) {
 		for _, d := range analysis.Diagnostics {
 			builder.AddDiagnostic(d)
 		}
+		completed += len(files)
 	}
 
 	return Result{Scan: scanResult, Graph: builder.Build()}, nil

@@ -40,6 +40,12 @@ type Result struct {
 }
 
 func Scan(root string, cfg config.Config) (Result, error) {
+	return ScanWithProgress(root, cfg, nil)
+}
+
+// ScanWithProgress scans root and reports each filesystem entry before it is
+// inspected. The callback is optional and is intended for live CLI feedback.
+func ScanWithProgress(root string, cfg config.Config, visit func(path string, files int)) (Result, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return Result{}, err
@@ -71,6 +77,9 @@ func Scan(root string, cfg config.Config) (Result, error) {
 			return nil
 		}
 		relPath := rel(absRoot, path)
+		if visit != nil {
+			visit(filepath.ToSlash(relPath), len(result.Files))
+		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "symbolic link"})
 			return nil

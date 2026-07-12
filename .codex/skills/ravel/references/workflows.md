@@ -41,3 +41,4 @@ Continuous refresh remains opt-in. Use `ravel watch --interval 2s <target>` for 
 3. Ask `community-describer` to fill only `description` and `rationale` using the bounded graph context supplied by the caller.
 4. Review the JSON, then run `ravel community describe <file>`.
 5. Treat every description as inferred. Never let AI output change IDs, membership, deterministic names, granularity, or hub thresholds.
+6. On later updates, preserve descriptions only for exact membership. Transfer display labels only through Ravel's one-to-one overlap remapper; review provisional labels before relying on them.

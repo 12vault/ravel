@@ -455,6 +455,7 @@ func searchableMeta(meta map[string]string) string {
 		"path": true, "size": true,
 		"community": true, "communitysize": true,
 		"communitygranularity": true, "communityhubthreshold": true,
+		"communitylabelstatus": true, "communitylabeloverlap": true, "communitypreviousid": true,
 		"communitydescriptionsource": true, "communitydescriptionconfidence": true, "communitydescriptionrationale": true,
 	}
 	keys := make([]string, 0, len(meta))

@@ -92,6 +92,12 @@ func writeCommunities(b *strings.Builder, g graph.Graph) {
 		if len(kinds) > 0 {
 			fmt.Fprintf(b, " · %s", strings.Join(kinds, ", "))
 		}
+		if summary.LabelStatus == "remapped" {
+			fmt.Fprintf(b, " · label remapped at %s overlap", summary.LabelOverlap)
+		}
+		if summary.LabelStatus == "provisional" {
+			fmt.Fprintf(b, " · **label review required** at %s overlap", summary.LabelOverlap)
+		}
 		b.WriteString("\n")
 		if summary.Description != "" {
 			fmt.Fprintf(b, "  - %s\n", markdownText(summary.Description))
