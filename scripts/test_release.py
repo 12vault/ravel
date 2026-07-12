@@ -69,6 +69,8 @@ for target in targets:
         assert_tree_equal(source / directory, target / directory)
     if (target / "THIRD_PARTY_NOTICES.md").read_bytes() != (source / "THIRD_PARTY_NOTICES.md").read_bytes():
         raise SystemExit(f"{target}: stale THIRD_PARTY_NOTICES.md")
+    if (target / "VERSION").read_bytes() != (source / "VERSION").read_bytes():
+        raise SystemExit(f"{target}: stale VERSION")
     actual = {path.name for path in (target / "bin").iterdir() if path.is_file()}
     if actual != expected:
         raise SystemExit(f"{target / 'bin'}: expected {sorted(expected)}, found {sorted(actual)}")
@@ -102,6 +104,8 @@ for directory in ("references", "agents", "scripts"):
     assert_tree_equal(source / directory, codex_target / directory)
 if (codex_target / "THIRD_PARTY_NOTICES.md").read_bytes() != (source / "THIRD_PARTY_NOTICES.md").read_bytes():
     raise SystemExit(f"{codex_target}: stale THIRD_PARTY_NOTICES.md")
+if (codex_target / "VERSION").read_bytes() != (source / "VERSION").read_bytes():
+    raise SystemExit(f"{codex_target}: stale VERSION")
 
 left = root / "plugins/ravel/skills/ravel/bin"
 right = root / ".agents/plugins/plugins/ravel/skills/ravel/bin"
@@ -117,17 +121,62 @@ if native is not None and native.exists():
     version_result = subprocess.run([str(native), "version"], check=False, capture_output=True, text=True)
     if version_result.returncode != 0 or version_result.stdout != f"ravel v{version}\n":
         raise SystemExit(f"native binary version smoke test failed: {version_result.stdout}{version_result.stderr}")
-    for command in ("context", "affected", "mcp", "benchmark"):
+    for command in ("context", "affected", "mcp", "benchmark", "update-check"):
         result = subprocess.run([str(native), command, "--help"], check=False, capture_output=True, text=True)
         if result.returncode != 0 or "Usage:" not in result.stdout:
             raise SystemExit(f"native binary {command} help smoke test failed: {result.stdout}{result.stderr}")
         if command == "benchmark" and "--answers" not in result.stdout:
             raise SystemExit(f"native binary benchmark help omits --answers: {result.stdout}")
+        if command == "update-check" and "--json" not in result.stdout:
+            raise SystemExit(f"native binary update-check help omits --json: {result.stdout}")
     if os.name != "nt":
         for launcher in (source / "scripts" / "ravel.sh", root / ".codex/skills/ravel/scripts/ravel.sh"):
             launcher_result = subprocess.run([str(launcher), "version"], check=False, capture_output=True, text=True)
             if launcher_result.returncode != 0 or launcher_result.stdout != f"ravel v{version}\n":
                 raise SystemExit(f"source-checkout launcher fallback failed for {launcher}: {launcher_result.stdout}{launcher_result.stderr}")
+
+        # A stale global CLI must not shadow the bundled skill binary. A newer
+        # global CLI may be selected, and neither case performs a network call.
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="ravel-launcher-test-") as temporary:
+            fake = Path(temporary) / "ravel"
+            fake.write_text("#!/bin/sh\nprintf 'ravel v%s\\n' \"${FAKE_RAVEL_VERSION}\"\n")
+            fake.chmod(0o755)
+            launcher = source / "scripts" / "ravel.sh"
+            environment = os.environ | {"PATH": f"{temporary}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+            old = subprocess.run(
+                [str(launcher), "version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment | {"FAKE_RAVEL_VERSION": "0.1.1"},
+            )
+            if old.returncode != 0 or old.stdout != f"ravel v{version}\n":
+                raise SystemExit(f"launcher did not replace stale global CLI: {old.stdout}{old.stderr}")
+            expected_notice = f"Your global Ravel is v0.1.1; this skill requires v{version}."
+            if expected_notice not in old.stderr or f"Using the bundled v{version} binary" not in old.stderr:
+                raise SystemExit(f"launcher omitted stale-version notice: {old.stderr}")
+
+            equal = subprocess.run(
+                [str(launcher), "update-check", "--help"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment | {"FAKE_RAVEL_VERSION": version},
+            )
+            if equal.returncode != 0 or "Usage: ravel update-check" not in equal.stdout:
+                raise SystemExit(f"launcher did not prefer its paired bundle for an equal version: {equal.stdout}{equal.stderr}")
+
+            newer = subprocess.run(
+                [str(launcher), "version"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment | {"FAKE_RAVEL_VERSION": "9.0.0"},
+            )
+            if newer.returncode != 0 or newer.stdout != "ravel v9.0.0\n" or newer.stderr:
+                raise SystemExit(f"launcher did not accept newer global CLI: {newer.stdout}{newer.stderr}")
 
 comparison = root / "benchmarks/compare_graphify.py"
 if os.name != "nt" and comparison.stat().st_mode & 0o111 == 0:

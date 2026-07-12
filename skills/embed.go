@@ -12,7 +12,7 @@ import (
 //go:embed ravel/skill.md
 var Ravel []byte
 
-//go:embed ravel/references/*.md ravel/agents/* ravel/scripts/*
+//go:embed ravel/VERSION ravel/THIRD_PARTY_NOTICES.md ravel/references/*.md ravel/agents/* ravel/scripts/*
 var bundle embed.FS
 
 func ReferenceFiles() (map[string][]byte, error) {

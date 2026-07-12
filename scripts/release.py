@@ -34,6 +34,7 @@ def current_versions() -> dict[str, str]:
         raise SystemExit("cannot find CLI version")
     return {
         "cli": match.group(1),
+        "skill": (ROOT / "skills/ravel/VERSION").read_text().strip().removeprefix("v"),
         "claude-marketplace": json.loads((ROOT / ".claude-plugin/marketplace.json").read_text())["version"],
         "claude-plugin": json.loads((ROOT / "plugins/ravel/.claude-plugin/plugin.json").read_text())["version"],
         "codex-plugin": json.loads((ROOT / ".agents/plugins/plugins/ravel/.codex-plugin/plugin.json").read_text())["version"].split("+", 1)[0],
@@ -55,6 +56,7 @@ if args.check:
 
 commands = ROOT / "internal/cli/commands.go"
 commands.write_text(re.sub(r'var Version = "v[^"]+"', f'var Version = "v{version}"', commands.read_text(), count=1))
+(ROOT / "skills/ravel/VERSION").write_text(version + "\n")
 json_version(ROOT / ".claude-plugin/marketplace.json", version, marketplace=True)
 json_version(ROOT / "plugins/ravel/.claude-plugin/plugin.json", version)
 json_version(ROOT / ".agents/plugins/plugins/ravel/.codex-plugin/plugin.json", version)

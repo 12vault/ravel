@@ -27,6 +27,7 @@ def copy_tree(target: Path) -> None:
         shutil.copytree(SOURCE / name, destination)
     shutil.copy2(SOURCE / "skill.md", target / "SKILL.md")
     shutil.copy2(SOURCE / "THIRD_PARTY_NOTICES.md", target / "THIRD_PARTY_NOTICES.md")
+    shutil.copy2(SOURCE / "VERSION", target / "VERSION")
 
 
 def build_binaries(destination: Path, cache: Path) -> None:

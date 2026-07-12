@@ -48,7 +48,9 @@ Keep each role scoped to explicit files from the audited corpus. Do not let agen
 
 ## Bootstrap
 
-Probe the required command with `ravel context --help`; a successful `ravel version` is not enough because an older binary may lack the connected retriever. If the probe fails, use the packaged launcher at `scripts/ravel.sh` on macOS/Linux or `scripts/ravel.ps1` on Windows for every Ravel command. The launcher selects the bundled binary for the current operating system and architecture, including the repository marketplace copy when this is the source checkout. It runs in place: do not download or install anything. If neither command is available, stop and ask before updating or installing Ravel. After resolving the command, continue from `ravel audit`.
+On the first invocation, run `scripts/ravel.sh version` on macOS/Linux or `scripts/ravel.ps1 version` on Windows, then use that launcher for every Ravel command. The launcher compares the global CLI with the version in `VERSION`, entirely locally. When the global CLI is older, it selects the bundled binary and prints a short, non-blocking update notice; surface that notice to the user and continue the task. The source-checkout launcher may select the synchronized repository marketplace binary. It never downloads, installs, or updates anything.
+
+If the packaged launcher is absent, probe `ravel context --help`. If that fails, stop and ask before installing or updating Ravel. Never invoke `ravel update-check` or `ravel self-update` automatically during a skill task: `update-check` performs an explicit release-metadata network request, and `self-update` downloads and replaces software. After resolving the command, continue from `ravel audit`.
 
 ## Safety
 
