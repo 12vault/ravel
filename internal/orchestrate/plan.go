@@ -27,14 +27,17 @@ type Plan struct {
 
 func Build(route string, g graph.Graph, targets []string, batchSize int, outDir string) (Plan, error) {
 	route = strings.ToLower(strings.TrimSpace(route))
+
 	if batchSize < 1 {
 		return Plan{}, fmt.Errorf("batch size must be positive")
 	}
+
 	files := filePaths(g, route, targets)
 	plan := Plan{Version: 1, Route: route}
 	add := func(id, role string, deps, paths []string) {
 		plan.Tasks = append(plan.Tasks, Task{ID: id, Role: role, DependsOn: deps, SourcePaths: paths, ExpectedOutput: filepath.ToSlash(filepath.Join(outDir, "tasks", id+".json"))})
 	}
+
 	switch route {
 	case "tech":
 		add("scan", "project-scanner", nil, files)
@@ -64,6 +67,7 @@ func Build(route string, g graph.Graph, targets []string, batchSize int, outDir 
 	default:
 		return Plan{}, fmt.Errorf("unsupported plan route %q", route)
 	}
+
 	return plan, nil
 }
 
@@ -76,7 +80,9 @@ func Write(w io.Writer, plan Plan, jsonOutput bool) error {
 		_, err = fmt.Fprintln(w, string(data))
 		return err
 	}
+
 	fmt.Fprintf(w, "Ravel %s agent plan\n", plan.Route)
+
 	for _, task := range plan.Tasks {
 		fmt.Fprintf(w, "%s\t%s\t%d paths", task.ID, task.Role, len(task.SourcePaths))
 		if len(task.DependsOn) > 0 {
@@ -84,6 +90,7 @@ func Write(w io.Writer, plan Plan, jsonOutput bool) error {
 		}
 		fmt.Fprintf(w, "\t-> %s\n", task.ExpectedOutput)
 	}
+
 	return nil
 }
 
@@ -103,14 +110,18 @@ func addBatches(plan *Plan, prefix, role string, deps, files []string, size int,
 
 func filePaths(g graph.Graph, route string, targets []string) []string {
 	targetSet := map[string]bool{}
+
 	for _, target := range targets {
 		targetSet[filepath.ToSlash(target)] = true
 	}
+
 	var paths []string
+
 	for _, node := range g.Nodes {
 		if node.Kind != graph.NodeFile || node.Path == "" {
 			continue
 		}
+
 		language := node.Meta["language"]
 		include := len(targetSet) == 0 || targetSet[node.Path]
 		switch route {
@@ -125,7 +136,9 @@ func filePaths(g graph.Graph, route string, targets []string) []string {
 			paths = append(paths, node.Path)
 		}
 	}
+
 	sort.Strings(paths)
+
 	return paths
 }
 
