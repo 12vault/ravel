@@ -37,6 +37,8 @@ import (
 
 var Version = "v0.2.0"
 
+var checkForUpdate = selfupdate.Check
+
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return ExecuteIO(ctx, args, os.Stdin, stdout, stderr)
 }
@@ -70,6 +72,8 @@ func ExecuteIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		return nil
 	case "self-update":
 		return runSelfUpdate(ctx, args[1:], stdout)
+	case "update-check":
+		return runUpdateCheck(ctx, args[1:], stdout)
 	case "init":
 		return runInit(args[1:], stdout)
 	case "install":
@@ -191,6 +195,35 @@ func runSelfUpdate(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "Refreshed %s skill and integration\n", platform)
 	}
+	return nil
+}
+
+func runUpdateCheck(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := newFlagSet("update-check")
+	repository := fs.String("repo", "12vault/ravel", "GitHub owner/repository")
+	jsonOutput := fs.Bool("json", false, "emit machine-readable JSON")
+	if err := fs.Parse(flexibleFlags(args, "repo")); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("update-check does not accept positional arguments")
+	}
+	result, err := checkForUpdate(ctx, selfupdate.CheckOptions{CurrentVersion: Version, Repository: *repository})
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(result)
+	}
+	if !result.UpdateAvailable {
+		fmt.Fprintf(stdout, "Ravel is up to date: %s\n", result.CurrentVersion)
+		return nil
+	}
+	fmt.Fprintf(stdout, "Ravel %s is available; current version is %s.\n", result.LatestVersion, result.CurrentVersion)
+	fmt.Fprintln(stdout, "Run: ravel self-update")
+	fmt.Fprintf(stdout, "Release: %s\n", result.ReleaseURL)
 	return nil
 }
 
@@ -1162,37 +1195,38 @@ func commandHelpRequested(args []string) bool {
 
 func commandUsage(w io.Writer, command string) error {
 	lines := map[string]string{
-		"version":     "ravel version",
-		"self-update": "ravel self-update [--version latest] [--platforms codex,claude] [--project]",
-		"init":        "ravel init",
-		"install":     "ravel install [--platform <name>] [--project]",
-		"uninstall":   "ravel uninstall [--platform <name>] [--project]",
-		"hook":        "ravel hook <install|uninstall|status> [root]",
-		"ingest":      "ravel ingest [--out <dir>] <fragment.json>",
-		"dashboard":   "ravel dashboard [--out <dir>]",
-		"doctor":      "ravel doctor",
-		"tools":       "ravel tools",
-		"extract":     "ravel extract [--json] <audited-doc-or-pdf>...",
-		"plan":        "ravel plan [--json] <route> [paths...]",
-		"audit":       "ravel audit [--config <path>] [--out <dir>] [root]",
-		"scan":        "ravel scan [--config <path>] [--out <dir>] [root]",
-		"build":       "ravel build [--config <path>] [--out <dir>] [root]",
-		"update":      "ravel update [--config <path>] [--out <dir>] [root]",
-		"watch":       "ravel watch [--interval 2s] [root]",
-		"share":       "ravel share [--from <dir>] [--out ravel-graph]",
-		"report":      "ravel report [--out <dir>]",
-		"query":       "ravel query [--out <dir>] [--limit 25] [--json] <text>",
-		"affected":    "ravel affected [--out <dir>] [--json] [--max-depth 2] [--branch-fanout 0] [--relations <kinds>] <file-or-symbol>",
-		"explain":     "ravel explain [--out <dir>] [--json] <file-or-symbol>",
-		"path":        "ravel path [--out <dir>] [--json] <from> <to>",
-		"mcp":         "ravel mcp [--out <graphdir>]",
-		"tech":        "ravel tech [--out <dir>] [--json]",
-		"understand":  "ravel understand [--out <dir>] [--json]",
-		"learn":       "ravel learn [--out <dir>] [--json]",
-		"docs":        "ravel docs [--out <dir>] [--json]",
-		"pdf":         "ravel pdf [--out <dir>] [--json]",
-		"schema":      "ravel schema [--out <dir>] [--json]",
-		"diff":        "ravel diff [--out <dir>] [--json] [changed-path]...",
+		"version":      "ravel version",
+		"self-update":  "ravel self-update [--version latest] [--platforms codex,claude] [--project]",
+		"update-check": "ravel update-check [--json] [--repo 12vault/ravel]",
+		"init":         "ravel init",
+		"install":      "ravel install [--platform <name>] [--project]",
+		"uninstall":    "ravel uninstall [--platform <name>] [--project]",
+		"hook":         "ravel hook <install|uninstall|status> [root]",
+		"ingest":       "ravel ingest [--out <dir>] <fragment.json>",
+		"dashboard":    "ravel dashboard [--out <dir>]",
+		"doctor":       "ravel doctor",
+		"tools":        "ravel tools",
+		"extract":      "ravel extract [--json] <audited-doc-or-pdf>...",
+		"plan":         "ravel plan [--json] <route> [paths...]",
+		"audit":        "ravel audit [--config <path>] [--out <dir>] [root]",
+		"scan":         "ravel scan [--config <path>] [--out <dir>] [root]",
+		"build":        "ravel build [--config <path>] [--out <dir>] [root]",
+		"update":       "ravel update [--config <path>] [--out <dir>] [root]",
+		"watch":        "ravel watch [--interval 2s] [root]",
+		"share":        "ravel share [--from <dir>] [--out ravel-graph]",
+		"report":       "ravel report [--out <dir>]",
+		"query":        "ravel query [--out <dir>] [--limit 25] [--json] <text>",
+		"affected":     "ravel affected [--out <dir>] [--json] [--max-depth 2] [--branch-fanout 0] [--relations <kinds>] <file-or-symbol>",
+		"explain":      "ravel explain [--out <dir>] [--json] <file-or-symbol>",
+		"path":         "ravel path [--out <dir>] [--json] <from> <to>",
+		"mcp":          "ravel mcp [--out <graphdir>]",
+		"tech":         "ravel tech [--out <dir>] [--json]",
+		"understand":   "ravel understand [--out <dir>] [--json]",
+		"learn":        "ravel learn [--out <dir>] [--json]",
+		"docs":         "ravel docs [--out <dir>] [--json]",
+		"pdf":          "ravel pdf [--out <dir>] [--json]",
+		"schema":       "ravel schema [--out <dir>] [--json]",
+		"diff":         "ravel diff [--out <dir>] [--json] [changed-path]...",
 	}
 	switch command {
 	case "context":
@@ -1217,6 +1251,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Usage:")
 	fmt.Fprintln(w, "  ravel version")
+	fmt.Fprintln(w, "  ravel update-check [--json]")
 	fmt.Fprintln(w, "  ravel self-update [--version latest] [--platforms codex,claude] [--project]")
 	fmt.Fprintln(w, "  ravel init")
 	fmt.Fprintln(w, "  ravel install [--platform <name>] [--project]")

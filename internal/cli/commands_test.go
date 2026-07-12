@@ -14,6 +14,7 @@ import (
 	"github.com/12vault/ravel/internal/graph"
 	"github.com/12vault/ravel/internal/query"
 	"github.com/12vault/ravel/internal/scan"
+	"github.com/12vault/ravel/internal/selfupdate"
 	"github.com/12vault/ravel/internal/store"
 )
 
@@ -31,6 +32,47 @@ func TestExecutePrintsVersion(t *testing.T) {
 		if stderr.Len() != 0 {
 			t.Fatalf("Execute(%v) stderr = %q, want empty", args, stderr.String())
 		}
+	}
+}
+
+func TestExecuteUpdateCheckReportsAvailableReleaseAndJSON(t *testing.T) {
+	previous := checkForUpdate
+	checkForUpdate = func(ctx context.Context, options selfupdate.CheckOptions) (selfupdate.CheckResult, error) {
+		if options.CurrentVersion != Version || options.Repository != "12vault/ravel" {
+			t.Fatalf("check options = %#v", options)
+		}
+		return selfupdate.CheckResult{
+			CurrentVersion:  "v0.2.0",
+			LatestVersion:   "v0.3.0",
+			UpdateAvailable: true,
+			ReleaseURL:      "https://github.com/12vault/ravel/releases/tag/v0.3.0",
+		}, nil
+	}
+	t.Cleanup(func() { checkForUpdate = previous })
+
+	var stdout, stderr bytes.Buffer
+	if err := Execute(context.Background(), []string{"update-check"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Ravel v0.3.0 is available", "Run: ravel self-update", "releases/tag/v0.3.0"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("update-check output missing %q: %s", want, stdout.String())
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+
+	stdout.Reset()
+	if err := Execute(context.Background(), []string{"update-check", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var result selfupdate.CheckResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.UpdateAvailable || result.LatestVersion != "v0.3.0" {
+		t.Fatalf("JSON result = %#v", result)
 	}
 }
 
