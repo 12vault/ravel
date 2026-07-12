@@ -14,7 +14,7 @@ Ravel builds a local knowledge graph of code and documents so developers and cod
 The Go binary provides a fast, offline evidence layer. The bundled skill adds language-independent agent analysis for architecture, domains, flows, tours, documents, PDFs, and schemas. Agent enrichment is optional, validated, provenance-tagged, and never confused with parser-extracted facts.
 
 > [!NOTE]
-> Native deterministic extraction currently uses Go AST, Markdown headings and links, plus SQL tables, views, columns, indexes, foreign keys, and conservative `FROM`/`JOIN` references. The scanner inventories additional safe file languages without claiming native symbol semantics for them. The agent skill analyzes popular programming languages without a fixed allowlist. Ravel states all three layers explicitly because inventory, deterministic evidence, and agent inference have different confidence and safety properties.
+> Native deterministic extraction uses Go AST, a pinned pure-Go Tree-sitter runtime for broad polyglot definitions and call sites, Markdown headings and links, plus SQL tables, views, columns, indexes, foreign keys, and conservative `FROM`/`JOIN` references. Tree-sitter syntax facts are tagged `extracted`; name-based target resolution is explicitly tagged `inferred`, and ambiguous targets remain unresolved. The scanner still inventories safe files whose grammar has no useful structural query. Ravel states inventory, deterministic evidence, and inference separately because they have different confidence and safety properties.
 
 ## Why Ravel?
 
@@ -220,7 +220,7 @@ git add ravel-graph
 
 The bundle contains `graph.json`, `report.md`, `graph.html`, and a safety manifest. Review inferred content before committing it.
 
-The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, Markdown parser, and SQL parser add deterministic facts; SQL facts include tables, views, columns, indexes, declared foreign keys, and conservative `FROM`/`JOIN` references. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:
+The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, pure-Go Tree-sitter polyglot parser, Markdown parser, and SQL parser add deterministic facts; SQL facts include tables, views, columns, indexes, declared foreign keys, and conservative `FROM`/`JOIN` references. Tree-sitter parses are bounded to two seconds per file, recoverable syntax errors are reported as diagnostics, and stopped partial parses are never emitted as complete facts. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:
 
 ```sh
 ravel ingest fragment.json
@@ -264,7 +264,9 @@ ravel build --no-call-graph .
 ravel update .
 ```
 
-Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` for topology-only output. The `output.json` and `output.markdownReport` switches control which artifacts are written.
+Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json` and `output.markdownReport` switches control which artifacts are written.
+
+Packaged binaries embed a curated, self-contained grammar set for JavaScript/TypeScript/TSX, Swift, Python, Java, Kotlin, Scala, Rust, Ruby, PHP, C/C++, C#, F#, Dart, Elixir, Erlang, Clojure, Lua, R, Objective-C, Perl, Groovy, Solidity, shell, PowerShell, HCL, Protocol Buffers, and GraphQL. Source builds without release tags embed gotreesitter's complete registry. Grammar loading is lazy in both cases; Ravel only emits semantics when a grammar provides a compilable structural tags query.
 
 The connected retriever can also be configured once for agents and benchmarks:
 
@@ -358,8 +360,8 @@ Maintainers prepare a synchronized release with `scripts/release.sh 0.2.0`. It u
 
 | Capability | Offline Go binary | Agent skill |
 | --- | --- | --- |
-| Popular languages | Safe file topology and language inventory | Symbols, references, architecture, intent, and explanations across languages |
-| Code structure | Native Go AST | Language-independent specialized code analyzer |
+| Popular languages | Safe file topology plus pure-Go Tree-sitter semantics for the packaged grammar set | Architecture, intent, and explanations across languages |
+| Code structure | Go AST plus extracted Tree-sitter definitions/call sites; inferred target matching is labeled | Language-independent specialized code analyzer |
 | Docs and schemas | Markdown headings/links; SQL tables, views, columns, indexes, foreign keys, and `FROM`/`JOIN` references | Rich document, PDF, article, and schema semantics |
 | Domains and flows | Validated graph model and focused views | Domain, flow, process-step, and actor inference |
 | Learning | Centrality and tour graph views | Generated onboarding guides and dependency-ordered tours |
