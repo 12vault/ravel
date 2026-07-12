@@ -10,7 +10,9 @@ Run `ravel tools` to discover local PDF and document utilities, then `ravel extr
 
 ## Schemas
 
-Ravel deterministically extracts basic SQL tables and columns. `ravel tools` reports locally available SQLite, PostgreSQL, and MySQL inspection tools. Ask `document-article-analyzer` or `domain-analyzer` to add foreign-key meaning, bounded contexts, ownership, data flows, and links to application code. Mark parser facts `extracted` and inferred business meaning `inferred`.
+Ravel deterministically extracts SQL tables, views (including materialized views), columns, indexes, and explicit foreign keys. It also resolves conservative `FROM` and `JOIN` references from tables and views to unambiguous physical tables, including references reached through non-recursive CTE bodies. Stable schema-object IDs are scoped to the containing directory so declarations can move between migration files without changing identity. Ambiguous names, CTE aliases, table-valued functions, and references that appear only in comments or string literals stay unresolved instead of becoming speculative edges.
+
+`ravel tools` reports locally available SQLite, PostgreSQL, and MySQL inspection tools. Ask `document-article-analyzer` or `domain-analyzer` to interpret ownership, bounded contexts, business meaning, data flows, and links to application code. An extracted foreign-key edge proves the declared reference, not the business meaning of the relationship. Mark parser facts `extracted` and agent interpretation `inferred`.
 
 ## Mixed corpus
 

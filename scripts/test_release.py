@@ -33,13 +33,32 @@ expected_platforms = {
     "ravel_windows_arm64.exe": ("windows", "arm64"),
 }
 expected = set(expected_platforms)
+
+
+def assert_tree_equal(source_dir: Path, target_dir: Path) -> None:
+    source_entries = {path.relative_to(source_dir) for path in source_dir.rglob("*")}
+    target_entries = {path.relative_to(target_dir) for path in target_dir.rglob("*")}
+    if source_entries != target_entries:
+        raise SystemExit(f"{target_dir}: package entries differ from {source_dir}")
+    for relative in sorted(source_entries):
+        source_path = source_dir / relative
+        target_path = target_dir / relative
+        if source_path.is_symlink() or target_path.is_symlink():
+            raise SystemExit(f"{target_path}: symlinks are not allowed in packaged skill trees")
+        if source_path.is_dir() != target_path.is_dir():
+            raise SystemExit(f"{target_path}: package entry type differs")
+        if source_path.is_file():
+            if not filecmp.cmp(source_path, target_path, shallow=False):
+                raise SystemExit(f"{target_path}: package file differs")
+            if (source_path.stat().st_mode & 0o111) != (target_path.stat().st_mode & 0o111):
+                raise SystemExit(f"{target_path}: executable mode differs")
+
+
 for target in targets:
     if (target / "SKILL.md").read_bytes() != (source / "skill.md").read_bytes():
         raise SystemExit(f"{target}: stale SKILL.md")
     for directory in ("references", "agents", "scripts"):
-        comparison = filecmp.dircmp(source / directory, target / directory)
-        if comparison.left_only or comparison.right_only or comparison.diff_files or comparison.funny_files:
-            raise SystemExit(f"{target / directory}: package drift")
+        assert_tree_equal(source / directory, target / directory)
     actual = {path.name for path in (target / "bin").iterdir() if path.is_file()}
     if actual != expected:
         raise SystemExit(f"{target / 'bin'}: expected {sorted(expected)}, found {sorted(actual)}")
@@ -60,16 +79,17 @@ for target in targets:
         for field in (f"GOOS={system}", f"GOARCH={arch}", "CGO_ENABLED=0"):
             if field not in info.stdout:
                 raise SystemExit(f"{binary}: missing build setting {field}")
-        if f"v{version}".encode() not in binary.read_bytes():
-            raise SystemExit(f"{binary}: embedded CLI version is not v{version}")
+        # sync-packages builds with both the source default and a linker -X
+        # value. Requiring both occurrences catches an accidentally different
+        # linker value, which a single raw-string presence check cannot detect.
+        if binary.read_bytes().count(f"v{version}".encode()) < 2:
+            raise SystemExit(f"{binary}: embedded CLI/linker version is not v{version}")
 
 codex_target = root / ".codex/skills/ravel"
 if (codex_target / "SKILL.md").read_bytes() != (source / "skill.md").read_bytes():
     raise SystemExit(f"{codex_target}: stale SKILL.md")
 for directory in ("references", "agents", "scripts"):
-    comparison = filecmp.dircmp(source / directory, codex_target / directory)
-    if comparison.left_only or comparison.right_only or comparison.diff_files or comparison.funny_files:
-        raise SystemExit(f"{codex_target / directory}: package drift")
+    assert_tree_equal(source / directory, codex_target / directory)
 
 left = root / "plugins/ravel/skills/ravel/bin"
 right = root / ".agents/plugins/plugins/ravel/skills/ravel/bin"
@@ -91,4 +111,9 @@ if native is not None and native.exists():
             raise SystemExit(f"native binary {command} help smoke test failed: {result.stdout}{result.stderr}")
         if command == "benchmark" and "--answers" not in result.stdout:
             raise SystemExit(f"native binary benchmark help omits --answers: {result.stdout}")
+    if os.name != "nt":
+        for launcher in (source / "scripts" / "ravel.sh", root / ".codex/skills/ravel/scripts/ravel.sh"):
+            launcher_result = subprocess.run([str(launcher), "version"], check=False, capture_output=True, text=True)
+            if launcher_result.returncode != 0 or launcher_result.stdout != f"ravel v{version}\n":
+                raise SystemExit(f"source-checkout launcher fallback failed for {launcher}: {launcher_result.stdout}{launcher_result.stderr}")
 print(f"Release versions synchronized at {version}")

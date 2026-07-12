@@ -15,6 +15,10 @@ Use the Go CLI for deterministic scanning, storage, queries, and validation. Use
 - `ravel diff`: analyze the impact of current changes. Read `references/workflows.md`.
 - `ravel docs`, `ravel pdf`, or `ravel schema`: ingest non-code sources. Read `references/corpus.md`.
 - Natural-language relationship questions: prefer `ravel context` for a connected, token-bounded subgraph. Use `ravel query` for a short exact/lexical result list, then `ravel path` or `ravel explain` for a named target.
+- Read compact truncation reasons literally: `token_budget` may justify raising `--token-budget`, while `branch_limit` requires narrower relations/depth or a larger `--branch-fanout`. More output tokens do not reopen a pruned traversal branch.
+- Reverse-impact questions: use `ravel affected <file|symbol|node-id>` for incoming callers, references, implementers, importers, and dependents. Its default impact filter excludes generic containment noise. Files bootstrap direct definitions; packages/modules/directories bootstrap directly contained files plus direct definitions, capped at 20 origins. It does not recursively expand repository or nested-directory trees; use changed-file inputs or `ravel diff` for that scope. Unresolved targets remain errors rather than guesses.
+- MCP-capable hosts may launch `ravel mcp --out <graphdir>` and use its read-only `query`, `context`, `explain`, `path`, and reverse-impact `affected` tools. Keep `context` token-bounded and treat explicit unresolved results as unresolved.
+- Retrieval or answer-quality evaluation: use `ravel benchmark` with the versioned repository-question JSONL contract. An optional `--answers` ledger records externally adjudicated correctness, rubric fact coverage, tokens, spend, and provenance without raw answers; Ravel never invokes a model or judge.
 - Agent-produced nodes or edges: read `references/fragments.md`, write a fragment, then run `ravel ingest <fragment.json>`.
 
 ## Core workflow
