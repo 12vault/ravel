@@ -17,7 +17,8 @@ func WriteDoctor(w io.Writer, cfg config.Config) {
 	fmt.Fprintln(w, "Subagents: disabled")
 	fmt.Fprintln(w, "Secret files: ignored")
 	fmt.Fprintf(w, "Output dir: %s\n", cfg.Output.Dir)
-	fmt.Fprintln(w, "Supported languages: Go")
+	fmt.Fprintln(w, "Scanned language inventory: scanner detection for audited safe files (inventory only)")
+	fmt.Fprintln(w, "Deterministic semantics: Go AST; Markdown headings/links; SQL tables/views/columns/indexes/foreign keys/FROM/JOIN references")
 	fmt.Fprintf(w, "Max file size: %d bytes\n", cfg.Scan.MaxFileSizeBytes)
 	fmt.Fprintf(w, "Max total read size: %d bytes\n", cfg.Scan.MaxTotalBytes)
 }
