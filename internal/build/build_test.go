@@ -45,9 +45,40 @@ func TestRunCanDisableGoAnalysis(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	for _, node := range result.Graph.Nodes {
-		if node.Kind == graph.NodePackage || graph.SymbolKind(node.Kind) {
+		if node.Kind == graph.NodeFile || node.Kind == graph.NodePackage || graph.SymbolKind(node.Kind) {
 			t.Fatalf("found semantic node %s with Go analysis disabled", node.ID)
 		}
+	}
+}
+
+func TestRunSkipsUnsupportedAndZeroContributionFiles(t *testing.T) {
+	root := t.TempDir()
+	files := map[string]string{
+		"main.go":      "package main\nfunc main() {}\n",
+		"empty.py":     "# comments only\n",
+		"LICENSE":      "plain text without a supported analyzer\n",
+		"payload.json": "{\"name\": \"data, not code\"}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := Run(context.Background(), root, config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasNode(result.Graph, graph.FileID("main.go")) {
+		t.Fatal("graphifiable Go file was omitted")
+	}
+	for _, path := range []string{"empty.py", "LICENSE", "payload.json"} {
+		if hasNode(result.Graph, graph.FileID(path)) {
+			t.Errorf("non-contributing file %q was graphified", path)
+		}
+	}
+	if len(result.Skipped) != 3 {
+		t.Fatalf("Skipped = %#v, want 3 files", result.Skipped)
 	}
 }
 

@@ -636,7 +636,11 @@ func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writ
 	}
 	progress.Close()
 	fmt.Fprintf(stdout, "Wrote %s\n", out)
-	fmt.Fprintf(stdout, "Files analyzed: %d\n", len(result.Scan.Files))
+	fmt.Fprintf(stdout, "Files scanned: %d\n", len(result.Scan.Files))
+	fmt.Fprintf(stdout, "Files graphified: %d\n", result.Graph.Metrics.NodesByKind[graph.NodeFile])
+	if len(result.Skipped) > 0 {
+		fmt.Fprintf(stdout, "Warning: %d file(s) produced no graph content and were skipped\n", len(result.Skipped))
+	}
 	fmt.Fprintf(stdout, "Nodes: %d\n", len(result.Graph.Nodes))
 	fmt.Fprintf(stdout, "Edges: %d\n", len(result.Graph.Edges))
 	return nil
@@ -696,6 +700,9 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	fmt.Fprintf(stdout, "Updated %s\n", out)
 	fmt.Fprintf(stdout, "Changed files: %d\n", len(result.Changed))
 	fmt.Fprintf(stdout, "Removed files: %d\n", len(result.Removed))
+	if len(result.Build.Skipped) > 0 {
+		fmt.Fprintf(stdout, "Warning: %d file(s) produced no graph content and were skipped\n", len(result.Build.Skipped))
+	}
 	return nil
 }
 

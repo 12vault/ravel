@@ -3,6 +3,7 @@ package build
 import (
 	"context"
 	"path/filepath"
+	"strings"
 
 	"github.com/12vault/ravel/internal/config"
 	"github.com/12vault/ravel/internal/graph"
@@ -14,8 +15,9 @@ import (
 )
 
 type Result struct {
-	Scan  scan.Result
-	Graph graph.Graph
+	Scan    scan.Result
+	Graph   graph.Graph
+	Skipped []scan.Ignored
 }
 
 type Progress struct {
@@ -44,9 +46,6 @@ func RunWithCache(ctx context.Context, root string, cfg config.Config, progress 
 	}
 	cache := newAnalysisCache(scanResult.Root, cacheOptions)
 
-	builder := graph.NewBuilder(scanResult.Root)
-	addFileTopology(builder, scanResult)
-
 	registry := lang.NewRegistry()
 	if cfg.Analysis.Go {
 		registry.Register(goanalyzer.New(cfg.Analysis.CallGraph))
@@ -63,12 +62,18 @@ func RunWithCache(ctx context.Context, root string, cfg config.Config, progress 
 		filesByLanguage[f.Language] = append(filesByLanguage[f.Language], f)
 	}
 	completed := 0
+	var analyses []*lang.AnalysisResult
+	contributed := map[string]bool{}
+	var skipped []scan.Ignored
 	for language, files := range filesByLanguage {
 		analyzer, ok := registry.ForLanguage(language)
 		if !ok && cfg.Analysis.Polyglot && treeanalyzer.Supports(language, files) {
 			analyzer, ok = treeanalyzer.New(language), true
 		}
 		if !ok {
+			for _, file := range files {
+				skipped = append(skipped, scan.Ignored{Path: file.Path, Reason: "no supported analyzer"})
+			}
 			completed += len(files)
 			continue
 		}
@@ -93,23 +98,54 @@ func RunWithCache(ctx context.Context, root string, cfg config.Config, progress 
 			if err != nil {
 				return Result{}, err
 			}
-			for _, n := range analysis.Nodes {
-				builder.AddNode(n)
-			}
-			for _, e := range analysis.Edges {
-				builder.AddEdge(e)
-			}
-			for _, d := range analysis.Diagnostics {
-				builder.AddDiagnostic(d)
+			analyses = append(analyses, analysis)
+			for _, file := range unit.files {
+				if analysisContributed(file.Path, analysis) {
+					contributed[file.Path] = true
+				} else {
+					skipped = append(skipped, scan.Ignored{Path: file.Path, Reason: "analyzer produced zero graph content"})
+				}
 			}
 			completed += len(unit.files)
+		}
+	}
+
+	builder := graph.NewBuilder(scanResult.Root)
+	addFileTopology(builder, scanResult, contributed)
+	for _, analysis := range analyses {
+		for _, n := range analysis.Nodes {
+			builder.AddNode(n)
+		}
+		for _, e := range analysis.Edges {
+			builder.AddEdge(e)
+		}
+		for _, d := range analysis.Diagnostics {
+			builder.AddDiagnostic(d)
 		}
 	}
 
 	if cache != nil {
 		cache.prune()
 	}
-	return Result{Scan: scanResult, Graph: builder.Build()}, nil
+	return Result{Scan: scanResult, Graph: builder.Build(), Skipped: skipped}, nil
+}
+
+func analysisContributed(path string, analysis *lang.AnalysisResult) bool {
+	for _, node := range analysis.Nodes {
+		if node.Path == path || evidenceMatchesPath(node.Meta["evidence"], path) {
+			return true
+		}
+	}
+	for _, edge := range analysis.Edges {
+		if evidenceMatchesPath(edge.Meta["evidence"], path) {
+			return true
+		}
+	}
+	return false
+}
+
+func evidenceMatchesPath(evidence, path string) bool {
+	return evidence == path || strings.HasPrefix(evidence, path+":")
 }
 
 type analysisUnit struct {
@@ -181,11 +217,14 @@ func analyze(ctx context.Context, analyzer lang.Analyzer, root string, files []s
 	return analyzer.Analyze(ctx, root, files)
 }
 
-func addFileTopology(builder *graph.Builder, scanResult scan.Result) {
+func addFileTopology(builder *graph.Builder, scanResult scan.Result, contributed map[string]bool) {
 	builder.AddNode(graph.Node{ID: graph.DirID("."), Kind: graph.NodeDir, Name: ".", Path: ".", Meta: topologyMeta(".")})
 	builder.AddEdge(graph.Edge{Kind: graph.EdgeContains, From: graph.RepoID(), To: graph.DirID("."), Meta: topologyMeta(".")})
 	seenDirs := map[string]bool{".": true}
 	for _, file := range scanResult.Files {
+		if !contributed[file.Path] {
+			continue
+		}
 		dir := graph.ParentDir(file.Path)
 		addDir(builder, seenDirs, dir)
 		builder.AddNode(graph.Node{
