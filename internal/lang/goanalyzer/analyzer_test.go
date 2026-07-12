@@ -335,6 +335,193 @@ func Run() { Helper() }
 	}
 }
 
+func TestGoSemanticEdgesResolveTypesValuesAndImplementationAssertions(t *testing.T) {
+	result, _ := analyzeGoSources(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.26\n",
+		"api/api.go": `package api
+
+type Payload struct{}
+type Runner interface { Run(Payload) error }
+
+var Default Payload
+func Make(Payload) Payload { return Payload{} }
+`,
+		"worker/worker.go": `package worker
+
+import "example.com/app/api"
+
+type Worker struct { Payload api.Payload }
+
+var Shared api.Payload
+var Alias = api.Default
+var Callback = api.Make
+
+func (*Worker) Run(value api.Payload) error {
+	_ = api.Default
+	var local api.Payload
+	_ = local
+	_ = value
+	return nil
+}
+
+var _ api.Runner = (*Worker)(nil)
+`,
+	})
+
+	workerID := graph.TypeID("worker", "Worker")
+	payloadID := graph.TypeID("api", "Payload")
+	runnerID := graph.TypeID("api", "Runner")
+	defaultID := graph.TypeID("api", "Default")
+	makeID := graph.FunctionID("api", "Make")
+	runID := graph.MethodID("worker", "(*Worker)", "Run")
+
+	assertSemanticEdge(t, result, graph.EdgeUsesType, workerID, payloadID)
+	assertSemanticEdge(t, result, graph.EdgeUsesType, graph.TypeID("worker", "Shared"), payloadID)
+	assertSemanticEdge(t, result, graph.EdgeUsesType, runID, payloadID)
+	assertSemanticEdge(t, result, graph.EdgeReferences, graph.TypeID("worker", "Alias"), defaultID)
+	assertSemanticEdge(t, result, graph.EdgeReferences, graph.TypeID("worker", "Callback"), makeID)
+	assertSemanticEdge(t, result, graph.EdgeReferences, runID, defaultID)
+
+	implements := assertSemanticEdge(t, result, graph.EdgeImplements, workerID, runnerID)
+	if implements.Meta["implementation_evidence"] != "compile_time_assertion" {
+		t.Fatalf("implementation metadata = %#v", implements.Meta)
+	}
+}
+
+func TestGoSemanticEdgesUseTypeCheckedBindingsAndDoNotGuessShadowedValues(t *testing.T) {
+	result, _ := analyzeGoSources(t, map[string]string{
+		"pkg/main.go": `package sample
+
+type Value struct{}
+var Global Value
+
+func UsesGlobal() Value { return Global }
+func ShadowsGlobal() {
+	Global := Value{}
+	_ = Global
+}
+`,
+	})
+
+	globalID := graph.TypeID("pkg", "Global")
+	valueID := graph.TypeID("pkg", "Value")
+	assertSemanticEdge(t, result, graph.EdgeReferences, graph.FunctionID("pkg", "UsesGlobal"), globalID)
+	assertSemanticEdge(t, result, graph.EdgeUsesType, graph.FunctionID("pkg", "UsesGlobal"), valueID)
+	if edge, ok := semanticEdge(result, graph.EdgeReferences, graph.FunctionID("pkg", "ShadowsGlobal"), globalID); ok {
+		t.Fatalf("shadowed package variable was guessed as a reference: %#v", edge)
+	}
+}
+
+func TestGoSemanticEdgesInferOnlyTypeCheckedNonEmptyInterfaceImplementations(t *testing.T) {
+	result, _ := analyzeGoSources(t, map[string]string{
+		"pkg/main.go": `package sample
+
+type Runner interface { Run() }
+type Empty interface{}
+type Worker struct{}
+type Wrong struct{}
+
+func (*Worker) Run() {}
+func (*Wrong) Run(int) {}
+`,
+	})
+
+	workerID := graph.TypeID("pkg", "Worker")
+	runnerID := graph.TypeID("pkg", "Runner")
+	implements := assertSemanticEdge(t, result, graph.EdgeImplements, workerID, runnerID)
+	if implements.Meta["implementation"] != "pointer" || implements.Meta["implementation_evidence"] != "method_set" {
+		t.Fatalf("implicit implementation metadata = %#v", implements.Meta)
+	}
+	for _, pair := range [][2]string{
+		{workerID, graph.TypeID("pkg", "Empty")},
+		{graph.TypeID("pkg", "Wrong"), runnerID},
+	} {
+		if edge, ok := semanticEdge(result, graph.EdgeImplements, pair[0], pair[1]); ok {
+			t.Fatalf("invented implementation edge: %#v", edge)
+		}
+	}
+}
+
+func TestGoAnalyzerSeparatesSameDirectoryExternalTestPackage(t *testing.T) {
+	result, _ := analyzeGoSources(t, map[string]string{
+		"go.mod": "module example.com/app\n\ngo 1.26\n",
+		"pkg/base.go": `package pkg
+
+type Shared struct{}
+func Same() {}
+`,
+		"pkg/internal_test.go": `package pkg
+
+func InternalOnly() { Same() }
+`,
+		"pkg/external_test.go": `package pkg_test
+
+import base "example.com/app/pkg"
+
+func Same() {}
+func Check() {
+	Same()
+	base.Same()
+	_ = base.Shared{}
+}
+`,
+	})
+
+	externalQualifier := "pkg#package=pkg_test"
+	baseSame := graph.FunctionID("pkg", "Same")
+	externalSame := graph.FunctionID(externalQualifier, "Same")
+	checkID := graph.FunctionID(externalQualifier, "Check")
+	if baseSame == externalSame {
+		t.Fatal("base and external-test function IDs collide")
+	}
+	for _, id := range []string{baseSame, externalSame, checkID, graph.FunctionID("pkg", "InternalOnly")} {
+		if _, ok := nodeByID(result, id); !ok {
+			t.Fatalf("missing separated symbol node %q", id)
+		}
+	}
+
+	calls := callsFrom(result, checkID)
+	if !hasTarget(calls, externalSame) || !hasTarget(calls, baseSame) {
+		t.Fatalf("external test calls = %#v, want local %q and imported base %q", calls, externalSame, baseSame)
+	}
+	assertSemanticEdge(t, result, graph.EdgeUsesType, checkID, graph.TypeID("pkg", "Shared"))
+
+	basePackage := graph.PackageID("pkg")
+	externalPackage := graph.PackageID(externalQualifier)
+	if basePackage == externalPackage {
+		t.Fatal("base and external-test package IDs collide")
+	}
+	if !hasGraphEdge(result, graph.EdgeContains, basePackage, graph.FileID("pkg/base.go")) ||
+		!hasGraphEdge(result, graph.EdgeContains, externalPackage, graph.FileID("pkg/external_test.go")) {
+		t.Fatalf("package containment did not preserve package separation: %#v", edgesOfKind(result, graph.EdgeContains))
+	}
+}
+
+func TestCallGraphDoesNotMisclassifyImportedTypeConversionsAsFunctions(t *testing.T) {
+	result, _ := analyzeGoSources(t, map[string]string{
+		"pkg/main.go": `package sample
+
+import (
+	"fmt"
+	"time"
+)
+
+func Convert(value int64) time.Duration {
+	_ = fmt.Sprintf("%d", value)
+	return time.Duration(value)
+}
+`,
+	})
+
+	calls := callsFrom(result, graph.FunctionID("pkg", "Convert"))
+	if len(calls) != 1 || calls[0].To != graph.ExternalFunctionID("fmt", "Sprintf") {
+		t.Fatalf("calls = %#v, want fmt.Sprintf only", calls)
+	}
+	if _, ok := nodeByID(result, graph.ExternalFunctionID("time", "Duration")); ok {
+		t.Fatal("imported time.Duration conversion emitted as an external function")
+	}
+}
+
 func analyzeGoSources(t *testing.T, sources map[string]string) (*lang.AnalysisResult, []scan.File) {
 	t.Helper()
 	root := t.TempDir()
@@ -396,4 +583,43 @@ func nodeByID(result *lang.AnalysisResult, id string) (graph.Node, bool) {
 		}
 	}
 	return graph.Node{}, false
+}
+
+func semanticEdge(result *lang.AnalysisResult, kind graph.EdgeKind, from, to string) (graph.Edge, bool) {
+	for _, edge := range result.Edges {
+		if edge.Kind == kind && edge.From == from && edge.To == to {
+			return edge, true
+		}
+	}
+	return graph.Edge{}, false
+}
+
+func assertSemanticEdge(t *testing.T, result *lang.AnalysisResult, kind graph.EdgeKind, from, to string) graph.Edge {
+	t.Helper()
+	edge, ok := semanticEdge(result, kind, from, to)
+	if !ok {
+		t.Fatalf("missing %s edge %q -> %q; edges = %#v", kind, from, to, result.Edges)
+	}
+	if edge.Meta["confidence"] != "extracted" || edge.Meta["resolved"] != "true" || edge.Meta["evidence"] == "" || edge.Meta["rationale"] == "" {
+		t.Fatalf("semantic edge metadata = %#v", edge.Meta)
+	}
+	return edge
+}
+
+func hasTarget(edges []graph.Edge, target string) bool {
+	for _, edge := range edges {
+		if edge.To == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGraphEdge(result *lang.AnalysisResult, kind graph.EdgeKind, from, to string) bool {
+	for _, edge := range result.Edges {
+		if edge.Kind == kind && edge.From == from && edge.To == to {
+			return true
+		}
+	}
+	return false
 }
