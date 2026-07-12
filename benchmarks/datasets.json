@@ -23,7 +23,7 @@
   "datasets": [
     {
       "name": "repository-questions",
-      "adapter": "graph-query-jsonl",
+      "adapter": "graph-query-jsonl-v2",
       "input": "id, dataset, question, expectedNodeIds or expectedEvidence; optional expectedKeyFacts plus a separate answer ledger"
     }
   ],

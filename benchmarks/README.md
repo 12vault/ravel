@@ -42,6 +42,8 @@ ravel benchmark --graph .reporavel --dataset benchmarks/example.jsonl \
 
 Each answer-ledger JSONL record uses the dataset case `id` plus `correct` and/or `keyFactsFound`; optional accounting fields are `inputTokens`, `outputTokens`, `toolTokens`, and `costUsd`, with `model`, `judge`, and `runId` provenance. Ravel validates facts against the case rubric and reports accuracy, mean key-fact coverage, total agent tokens, and total spend overall and per dataset. Partial ledgers are allowed and expose their scored-case denominator. The strict format intentionally has no raw-answer field, and Ravel never invokes a model or judge. Values in `example-answers.jsonl` are illustrative fixtures, not published model results.
 
+Token fields must be non-overlapping: `totalAgentTokens` is their sum. If a provider already includes tool-call or tool-result payloads in its input/output counts, record those provider totals in `inputTokens`/`outputTokens` and leave `toolTokens` at zero. Record `costUsd` as the case's full externally measured spend.
+
 Version 3 results report:
 
 - Node recall, precision, and reciprocal rank.

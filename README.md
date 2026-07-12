@@ -9,7 +9,7 @@ Ravel builds a local knowledge graph of code and documents so developers and cod
 The Go binary provides a fast, offline evidence layer. The bundled skill adds language-independent agent analysis for architecture, domains, flows, tours, documents, PDFs, and schemas. Agent enrichment is optional, validated, provenance-tagged, and never confused with parser-extracted facts.
 
 > [!NOTE]
-> Native deterministic extraction currently uses Go AST, Markdown structure, and SQL schema parsing. The agent skill analyzes popular programming languages without a fixed allowlist. Ravel states both layers explicitly because deterministic evidence and agent inference have different confidence and safety properties.
+> Native deterministic extraction currently uses Go AST, Markdown headings and links, plus SQL tables, views, columns, indexes, foreign keys, and conservative `FROM`/`JOIN` references. The scanner inventories additional safe file languages without claiming native symbol semantics for them. The agent skill analyzes popular programming languages without a fixed allowlist. Ravel states all three layers explicitly because inventory, deterministic evidence, and agent inference have different confidence and safety properties.
 
 ## Why Ravel?
 
@@ -124,10 +124,13 @@ Useful controls include:
 ```sh
 ravel context --traversal dfs --direction out --max-depth 3 "authentication flow"
 ravel context --relations calls,references --token-budget 1200 "who reaches CreateSession?"
+ravel context --branch-fanout 32 "wide dispatcher dependencies"
 ravel context --json "what imports the storage package?"
 ```
 
 When no explicit `--relations` filter is supplied, Ravel can infer one from words such as “called,” “imports,” “inherits,” or “tested.” Use `--infer-relations=false` to traverse every available relationship. `--json` returns the same selected context in a machine-readable envelope; `estimatedTokens` measures the compact text payload, so JSON field-name and formatting overhead is intentionally not included.
+
+Compact output reports every truncation cause. `token_budget` can be addressed by raising `--token-budget` or narrowing the output. `branch_limit` happens earlier during traversal: narrow relations/depth or raise `--branch-fanout`; more output tokens alone cannot recover a pruned branch. The default branch fanout of `0` chooses a safe automatic cap from the node, seed, and depth limits.
 
 Explain a file or symbol and show its immediate relationships:
 
@@ -140,6 +143,16 @@ Find a path between two graph nodes:
 ```sh
 ravel path "main" "CreateSession"
 ```
+
+`path` prefers a directed route. If only graph connectivity exists, the result is labeled `undirected_fallback`, and every hop reports whether it was followed forward or in reverse together with the original edge orientation. Duplicate exact target names for `affected`, `explain`, or `path` are ambiguity errors that list candidate node IDs instead of choosing silently.
+
+Find incoming callers, references, implementers, importers, and other dependents of one target:
+
+```sh
+ravel affected "CreateSession"
+```
+
+`affected` defaults to reverse dependency relationships, excluding generic containment noise; explicitly requested `affects` or `flows_to` edges follow their forward causal orientation. A file target bootstraps its direct definitions. A package, module, or directory target bootstraps directly contained files and their direct definitions, with at most 20 total origins. It intentionally does not recurse through an entire repository or nested directory tree; use changed-file inputs or `ravel diff` for repository-wide impact. Use `--relations` to narrow traversal further; a target that cannot be resolved is reported as an error rather than guessed.
 
 Add `--json` to `query`, `explain`, or `path` when another tool will consume the result.
 
@@ -166,6 +179,18 @@ ravel diff internal/api.go # impact from explicit paths
 
 In an agent session, these routes also activate the specialized semantic roles and merge their evidence-tagged fragments.
 
+### MCP server
+
+Expose the existing graph to MCP-capable coding agents without a network service or additional dependencies:
+
+```sh
+ravel mcp --out .reporavel
+```
+
+The stdio server provides five read-only tools: `query`, `context`, `explain`, `path`, and `affected`. `context` keeps Ravel's normal traversal, hub-suppression, confidence, evidence, and token-budget controls. `affected` uses reverse dependency traversal by default, excluding generic containment noise; explicitly requested causal edges follow their forward orientation.
+
+Configure a client to launch the local process with `ravel` as the command and `mcp --out /absolute/path/to/.reporavel` as its arguments. The server supports standard newline-delimited MCP stdio and Content-Length framing, locks to the client's first framing mode, and writes protocol messages only to stdout. It keeps one immutable in-memory index and hot-reloads it after an atomic graph-state replacement, so `ravel update` results become available without restarting the client.
+
 ## Generated artifacts
 
 `ravel build .` writes these files to `.reporavel/` by default:
@@ -190,7 +215,7 @@ git add ravel-graph
 
 The bundle contains `graph.json`, `report.md`, `graph.html`, and a safety manifest. Review inferred content before committing it.
 
-The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, Markdown parser, and SQL schema parser add deterministic facts. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:
+The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, Markdown parser, and SQL parser add deterministic facts; SQL facts include tables, views, columns, indexes, declared foreign keys, and conservative `FROM`/`JOIN` references. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:
 
 ```sh
 ravel ingest fragment.json
@@ -247,6 +272,7 @@ retrieval:
   seedLimit: 3
   maxDepth: 2
   maxNodes: 100
+  branchFanout: 0 # automatic; positive values override neighbors expanded per node
   hubDegreeThreshold: 0 # automatic p99 with a floor of 50; -1 disables
   tokenBudget: 2000
 ```
@@ -329,7 +355,7 @@ Maintainers prepare a synchronized release with `scripts/release.sh 0.2.0`. It u
 | --- | --- | --- |
 | Popular languages | Safe file topology and language inventory | Symbols, references, architecture, intent, and explanations across languages |
 | Code structure | Native Go AST | Language-independent specialized code analyzer |
-| Docs and schemas | Markdown and SQL extraction | Rich document, PDF, article, and schema semantics |
+| Docs and schemas | Markdown headings/links; SQL tables, views, columns, indexes, foreign keys, and `FROM`/`JOIN` references | Rich document, PDF, article, and schema semantics |
 | Domains and flows | Validated graph model and focused views | Domain, flow, process-step, and actor inference |
 | Learning | Centrality and tour graph views | Generated onboarding guides and dependency-ordered tours |
 | Queries | IDF/BM25F search, bounded multi-seed BFS/DFS context, explain, shortest path, traversal, impact | Natural-language synthesis grounded in graph evidence |
