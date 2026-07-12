@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/12ya/reporavel/internal/graph"
@@ -111,13 +112,35 @@ func TestSQLExtractsViewsIndexesAndCrossFileReferences(t *testing.T) {
 	if viewNode == nil || viewNode.Meta["materialized"] != "true" || viewNode.Meta["confidence"] != "extracted" {
 		t.Fatalf("materialized view metadata = %#v", viewNode)
 	}
-	indexID := graph.ContentID("index", "schema", "users_email_idx")
+	indexID := graph.ContentID("index", "schema", "users_email_idx", "public.users")
 	indexNode := nodeByID(result.Nodes, indexID)
 	if indexNode == nil || indexNode.Meta["unique"] != "true" || indexNode.Meta["evidence"] != "schema/users.sql:5" {
 		t.Fatalf("index metadata = %#v", indexNode)
 	}
 	if !hasEdge(result.Edges, graph.EdgeContains, usersID, indexID) {
 		t.Fatalf("missing table-to-index containment: %#v", result.Edges)
+	}
+}
+
+func TestSQLKeepsSameNamedIndexesOnDifferentTables(t *testing.T) {
+	file := testFile(t, "db/indexes.sql", `CREATE TABLE public.users (id UUID);
+CREATE TABLE audit.users (id UUID);
+CREATE INDEX users_id_idx ON public.users(id);
+CREATE INDEX users_id_idx ON audit.users(id);
+`)
+	result, err := SQL().Analyze(context.Background(), "", []scan.File{file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countKind(result.Nodes, graph.NodeIndex); got != 2 {
+		t.Fatalf("same-named per-table indexes collapsed: got %d nodes: %#v", got, result.Nodes)
+	}
+	for _, table := range []string{"public.users", "audit.users"} {
+		tableID := graph.ContentID("table", "db", table)
+		indexID := graph.ContentID("index", "db", "users_id_idx", table)
+		if nodeByID(result.Nodes, indexID) == nil || !hasEdge(result.Edges, graph.EdgeContains, tableID, indexID) {
+			t.Fatalf("missing index %q on %q: nodes=%#v edges=%#v", indexID, tableID, result.Nodes, result.Edges)
+		}
 	}
 }
 
@@ -146,6 +169,28 @@ func TestSQLIDsAreStableWithinDirectoryAndIsolatedAcrossDirectories(t *testing.T
 	}
 }
 
+func TestSQLDoesNotGuessAcrossDirectoryScopes(t *testing.T) {
+	dbUsers := testFile(t, "db/users.sql", "CREATE TABLE users (id UUID);\n")
+	archiveUsers := testFile(t, "archive/users.sql", "CREATE TABLE users (id UUID);\n")
+	dbView := testFile(t, "db/view.sql", "CREATE VIEW active_users AS SELECT * FROM users;\n")
+	reportView := testFile(t, "reports/view.sql", "CREATE VIEW active_users AS SELECT * FROM users;\n")
+
+	result, err := SQL().Analyze(context.Background(), "", []scan.File{reportView, archiveUsers, dbView, dbUsers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbViewID := graph.ContentID("view", "db", "active_users")
+	dbUsersID := graph.ContentID("table", "db", "users")
+	assertSQLReference(t, result.Edges, dbViewID, dbUsersID, "from", "db/view.sql:1")
+
+	reportViewID := graph.ContentID("view", "reports", "active_users")
+	for _, edge := range result.Edges {
+		if edge.Kind == graph.EdgeReferences && edge.From == reportViewID {
+			t.Fatalf("unscoped reference crossed directories speculatively: %#v", edge)
+		}
+	}
+}
+
 func TestSQLResolvesAlterTableForeignKeyAndIgnoresCTEAlias(t *testing.T) {
 	tables := testFile(t, "db/tables.sql", "CREATE TABLE users (id UUID PRIMARY KEY);\nCREATE TABLE events (user_id UUID);\n")
 	alter := testFile(t, "db/constraints.sql", "ALTER TABLE events\n ADD CONSTRAINT events_user_fk FOREIGN KEY (user_id) REFERENCES users(id);\n")
@@ -169,8 +214,16 @@ func TestSQLResolvesAlterTableForeignKeyAndIgnoresCTEAlias(t *testing.T) {
 }
 
 func TestSQLSkipsCommentsLiteralsFunctionsAndAmbiguousReferences(t *testing.T) {
-	tables := testFile(t, "db/tables.sql", "-- CREATE TABLE fake (id UUID);\nCREATE TABLE public.users (id UUID);\nCREATE TABLE audit.users (id UUID);\n")
-	views := testFile(t, "db/views.sql", "CREATE VIEW ambiguous_users AS SELECT * FROM users;\nCREATE VIEW public_users AS SELECT * FROM public.users;\nCREATE VIEW literal_only AS SELECT 'FROM public.users' AS message;\nCREATE VIEW generated AS SELECT * FROM generate_series(1, 3);\n")
+	tables := testFile(t, "db/tables.sql", `-- CREATE TABLE fake (id UUID);
+# CREATE TABLE hash_fake (id UUID);
+/* outer comment
+   /* nested comment */
+   CREATE TABLE block_fake (id UUID);
+*/
+CREATE TABLE public.users (id UUID);
+CREATE TABLE audit.users (id UUID);
+`)
+	views := testFile(t, "db/views.sql", "CREATE VIEW ambiguous_users AS SELECT * FROM users;\nCREATE VIEW public_users AS SELECT * FROM public.users;\nCREATE VIEW literal_only AS SELECT 'FROM public.users' AS message;\nCREATE VIEW generated AS SELECT * FROM generate_series(1, 3);\nCREATE VIEW json_users AS SELECT payload #> '{id}' FROM public.users;\nCREATE VIEW escaped_literal AS SELECT 'don\\'t FROM public.users' AS message;\n")
 
 	result, err := SQL().Analyze(context.Background(), "", []scan.File{views, tables})
 	if err != nil {
@@ -182,13 +235,146 @@ func TestSQLSkipsCommentsLiteralsFunctionsAndAmbiguousReferences(t *testing.T) {
 	publicViewID := graph.ContentID("view", "db", "public_users")
 	publicUsersID := graph.ContentID("table", "db", "public.users")
 	assertSQLReference(t, result.Edges, publicViewID, publicUsersID, "from", "db/views.sql:2")
-	for _, viewName := range []string{"ambiguous_users", "literal_only", "generated"} {
+	assertSQLReference(t, result.Edges, graph.ContentID("view", "db", "json_users"), publicUsersID, "from", "db/views.sql:5")
+	for _, viewName := range []string{"ambiguous_users", "literal_only", "generated", "escaped_literal"} {
 		viewID := graph.ContentID("view", "db", viewName)
 		for _, edge := range result.Edges {
 			if edge.Kind == graph.EdgeReferences && edge.From == viewID {
 				t.Fatalf("conservative view %s produced a speculative reference: %#v", viewName, edge)
 			}
 		}
+	}
+}
+
+func TestSQLKeywordsInsideDelimitedIdentifiersDoNotCreateReferences(t *testing.T) {
+	file := testFile(t, "db/quoted.sql", `CREATE TABLE users (id UUID);
+CREATE TABLE notes (
+  "references users(id)" TEXT,
+  marker TEXT,
+  typed "my default type" NOT NULL,
+  CONSTRAINT "foreign key (marker) references users(id)" CHECK (marker IS NOT NULL)
+);
+CREATE VIEW "from users" AS SELECT 1;
+CREATE VIEW labels AS SELECT "join users" AS label;
+`)
+
+	result, err := SQL().Analyze(context.Background(), "", []scan.File{file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, edge := range result.Edges {
+		if edge.Kind == graph.EdgeReferences {
+			t.Fatalf("keyword text inside a delimited identifier created a reference: %#v", edge)
+		}
+	}
+	typedColumn := false
+	for _, node := range result.Nodes {
+		if node.Kind != graph.NodeColumn || node.Name != "typed" {
+			continue
+		}
+		typedColumn = true
+		if node.Meta["type"] != `"my default type"` {
+			t.Fatalf("delimited type name was truncated at a keyword: %#v", node)
+		}
+	}
+	if !typedColumn {
+		t.Fatalf("delimited type column was not extracted: %#v", result.Nodes)
+	}
+}
+
+func TestSQLDelimitedIdentifiersRemainDistinctAndResolveCompositeForeignKeys(t *testing.T) {
+	schema := testFile(t, "db/schema.sql", `CREATE TABLE order.items (id UUID);
+CREATE TABLE public."order.items" ("User""ID" UUID PRIMARY KEY);
+CREATE VIEW item_view AS SELECT * FROM "order.items";
+CREATE TABLE accounts (id UUID);
+CREATE TABLE "Accounts" (
+  "Tenant""ID" UUID,
+  [Account)]]ID] UUID,
+  PRIMARY KEY ("Tenant""ID", [Account)]]ID])
+);
+CREATE TABLE events (tenant_id UUID, account_id UUID);
+ALTER TABLE events ADD CONSTRAINT events_account_fk
+  FOREIGN KEY (tenant_id, account_id)
+  REFERENCES "Accounts" ("Tenant""ID", [Account)]]ID]);
+`)
+
+	result, err := SQL().Analyze(context.Background(), "", []scan.File{schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countKind(result.Nodes, graph.NodeTable); got != 5 {
+		t.Fatalf("table nodes = %d, want 5 distinct quoted/unquoted tables: %#v", got, result.Nodes)
+	}
+
+	quotedItemsID := graph.ContentID("table", "db", canonicalSQLIdentifier(`public."order.items"`))
+	unquotedItemsID := graph.ContentID("table", "db", canonicalSQLIdentifier(`order.items`))
+	if quotedItemsID == unquotedItemsID || nodeByID(result.Nodes, quotedItemsID) == nil || nodeByID(result.Nodes, unquotedItemsID) == nil {
+		t.Fatalf("quoted and qualified table identifiers collapsed: quoted=%q unquoted=%q nodes=%#v", quotedItemsID, unquotedItemsID, result.Nodes)
+	}
+	assertSQLReference(t, result.Edges, graph.ContentID("view", "db", "item_view"), quotedItemsID, "from", "db/schema.sql:3")
+
+	quotedAccountsID := graph.ContentID("table", "db", canonicalSQLIdentifier(`"Accounts"`))
+	unquotedAccountsID := graph.ContentID("table", "db", "accounts")
+	if quotedAccountsID == unquotedAccountsID || nodeByID(result.Nodes, quotedAccountsID) == nil || nodeByID(result.Nodes, unquotedAccountsID) == nil {
+		t.Fatalf("case-sensitive delimited table collapsed: quoted=%q unquoted=%q nodes=%#v", quotedAccountsID, unquotedAccountsID, result.Nodes)
+	}
+	eventsID := graph.ContentID("table", "db", "events")
+	assertSQLReference(t, result.Edges, eventsID, quotedAccountsID, "foreign_key", "db/schema.sql:11")
+	assertSQLReference(t, result.Edges,
+		sqlColumnID(eventsID, "tenant_id"),
+		sqlColumnID(quotedAccountsID, canonicalSQLIdentifier(`"Tenant""ID"`)),
+		"foreign_key", "db/schema.sql:11")
+	assertSQLReference(t, result.Edges,
+		sqlColumnID(eventsID, "account_id"),
+		sqlColumnID(quotedAccountsID, canonicalSQLIdentifier(`[Account)]]ID]`)),
+		"foreign_key", "db/schema.sql:11")
+}
+
+func TestSQLCTEColumnListsAndMaterializationDoNotResolveAsTables(t *testing.T) {
+	tables := testFile(t, "db/tables.sql", "CREATE TABLE events (id UUID);\nCREATE TABLE recent (id UUID);\nCREATE TABLE archived (id UUID);\n")
+	views := testFile(t, "db/views.sql", `CREATE VIEW materialized_events AS
+WITH recent(id) AS MATERIALIZED (SELECT id FROM events)
+SELECT * FROM recent;
+CREATE VIEW unmaterialized_events AS
+WITH archived(id) AS NOT MATERIALIZED (SELECT id FROM events)
+SELECT * FROM archived;
+CREATE VIEW same_named_cte AS
+WITH events(id) AS (SELECT id FROM events)
+SELECT * FROM events;
+CREATE VIEW recursive_cte AS
+WITH RECURSIVE events(id) AS (SELECT NULL UNION ALL SELECT id FROM events)
+SELECT * FROM events;
+`)
+
+	result, err := SQL().Analyze(context.Background(), "", []scan.File{views, tables})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reversed, err := SQL().Analyze(context.Background(), "", []scan.File{tables, views})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result, reversed) {
+		t.Fatalf("SQL analysis changed with input order:\nfirst=%#v\nreversed=%#v", result, reversed)
+	}
+
+	eventsID := graph.ContentID("table", "db", "events")
+	for _, viewName := range []string{"materialized_events", "unmaterialized_events"} {
+		viewID := graph.ContentID("view", "db", viewName)
+		if !hasEdge(result.Edges, graph.EdgeReferences, viewID, eventsID) {
+			t.Fatalf("CTE-backed view %s omitted its base table: %#v", viewName, result.Edges)
+		}
+		for _, shadowedTable := range []string{"recent", "archived"} {
+			if hasEdge(result.Edges, graph.EdgeReferences, viewID, graph.ContentID("table", "db", shadowedTable)) {
+				t.Fatalf("CTE alias %s in view %s resolved as a physical table: %#v", shadowedTable, viewName, result.Edges)
+			}
+		}
+	}
+	if !hasEdge(result.Edges, graph.EdgeReferences, graph.ContentID("view", "db", "same_named_cte"), eventsID) {
+		t.Fatalf("non-recursive same-named CTE lost its physical base table: %#v", result.Edges)
+	}
+	if hasEdge(result.Edges, graph.EdgeReferences, graph.ContentID("view", "db", "recursive_cte"), eventsID) {
+		t.Fatalf("recursive CTE self-reference resolved as a physical table: %#v", result.Edges)
 	}
 }
 

@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	sqlIdentifierSegment = `(?:[A-Za-z_][A-Za-z0-9_$]*|"[^"]+"|` + "`[^`]+`" + `|\[[^\]]+\])`
-	sqlIdentifier        = sqlIdentifierSegment + `(?:\s*\.\s*` + sqlIdentifierSegment + `)*`
+	sqlBareIdentifierSegment = `[A-Za-z_][A-Za-z0-9_$]*`
+	sqlIdentifierSegment     = `(?:` + sqlBareIdentifierSegment + `|"(?:""|[^"])+"|` + "`(?:``|[^`])+`" + `|\[(?:\]\]|[^\]])+\])`
+	sqlIdentifier            = sqlIdentifierSegment + `(?:\s*\.\s*` + sqlIdentifierSegment + `)*`
+	sqlIdentifierList        = sqlIdentifierSegment + `(?:\s*,\s*` + sqlIdentifierSegment + `)*`
 )
 
 var (
@@ -27,10 +29,11 @@ var (
 	sqlLeadingIdentifierRE = regexp.MustCompile(`^\s*(` + sqlIdentifierSegment + `)`)
 	sqlWholeIdentifierRE   = regexp.MustCompile(`^\s*` + sqlIdentifier + `\s*$`)
 	sqlColumnBoundaryRE    = regexp.MustCompile(`(?i)\s+(?:constraint|not\s+null|null|default|primary\s+key|unique|references|check|collate|generated|identity)\b`)
-	sqlForeignKeyRE        = regexp.MustCompile(`(?is)(?:\bconstraint\s+` + sqlIdentifierSegment + `\s+)?\bforeign\s+key\s*\(([^)]*)\)\s*references\s+(` + sqlIdentifier + `)(?:\s*\(([^)]*)\))?`)
-	sqlInlineReferenceRE   = regexp.MustCompile(`(?is)\breferences\s+(` + sqlIdentifier + `)(?:\s*\(([^)]*)\))?`)
+	sqlForeignKeyRE        = regexp.MustCompile(`(?is)(?:\bconstraint\s+` + sqlIdentifierSegment + `\s+)?\bforeign\s+key\s*\(\s*(` + sqlIdentifierList + `)\s*\)\s*references\s+(` + sqlIdentifier + `)(?:\s*\(\s*(` + sqlIdentifierList + `)\s*\))?`)
+	sqlInlineReferenceRE   = regexp.MustCompile(`(?is)\breferences\s+(` + sqlIdentifier + `)(?:\s*\(\s*(` + sqlIdentifierList + `)\s*\))?`)
 	sqlRelationRE          = regexp.MustCompile(`(?is)\b(from|join)\s+(?:(?:only|lateral)\s+)*(` + sqlIdentifier + `)`)
-	sqlCTEAliasRE          = regexp.MustCompile(`(?is)(?:\bwith\s+(?:recursive\s+)?|,\s*)(` + sqlIdentifierSegment + `)\s+as\s*\(`)
+	sqlCTEAliasRE          = regexp.MustCompile(`(?is)(?:\bwith\s+(?:recursive\s+)?|,\s*)(` + sqlIdentifierSegment + `)(?:\s*\(\s*` + sqlIdentifierSegment + `(?:\s*,\s*` + sqlIdentifierSegment + `)*\s*\))?\s+as\s+(?:(?:not\s+)?materialized\s+)?\(`)
+	sqlBareIdentifierRE    = regexp.MustCompile(`^` + sqlBareIdentifierSegment + `$`)
 )
 
 type sqlSource struct {
@@ -80,6 +83,14 @@ type sqlReference struct {
 	relation string
 	path     string
 	line     int
+}
+
+type sqlCTEAlias struct {
+	name      string
+	nameStart int
+	bodyOpen  int
+	bodyClose int
+	recursive bool
 }
 
 type sqlIndex struct {
@@ -186,8 +197,11 @@ func parseSQLTableItem(item string, line int, path string, object *sqlObject, pa
 		return
 	}
 	if !quotedSQLIdentifier(leading[1]) && sqlConstraint(leading[1]) {
-		for _, match := range sqlForeignKeyRE.FindAllStringSubmatch(item, -1) {
-			appendSQLForeignKey(match, object.scope, object.canonical, path, line, parsed)
+		for _, indices := range sqlForeignKeyRE.FindAllStringSubmatchIndex(item, -1) {
+			if sqlInsideDelimitedIdentifier(item, indices[0]) {
+				continue
+			}
+			appendSQLForeignKey(submatches(item, indices), object.scope, object.canonical, path, line, parsed)
 		}
 		return
 	}
@@ -197,7 +211,7 @@ func parseSQLTableItem(item string, line int, path string, object *sqlObject, pa
 		return
 	}
 	object.addColumn(column)
-	if match := sqlInlineReferenceRE.FindStringSubmatch(item); len(match) == 3 {
+	if match := firstSQLSyntaxSubmatch(sqlInlineReferenceRE, item); len(match) == 3 {
 		target := canonicalSQLIdentifier(match[1])
 		if target != "" {
 			parsed.foreignKeys = append(parsed.foreignKeys, sqlForeignKey{
@@ -223,8 +237,8 @@ func parseSQLColumn(item, path string, line int) (sqlColumn, bool) {
 	if remainder == "" {
 		return sqlColumn{}, false
 	}
-	if boundary := sqlColumnBoundaryRE.FindStringIndex(remainder); boundary != nil {
-		remainder = strings.TrimSpace(remainder[:boundary[0]])
+	if boundary := firstSQLSyntaxIndex(sqlColumnBoundaryRE, remainder); boundary >= 0 {
+		remainder = strings.TrimSpace(remainder[:boundary])
 	}
 	if remainder == "" || !validSQLTypeStart(remainder[0]) {
 		return sqlColumn{}, false
@@ -275,7 +289,7 @@ func parseSQLIndex(statement sqlStatement, path, scope string, parsed *sqlParsed
 		return
 	}
 	parsed.indexes = append(parsed.indexes, sqlIndex{
-		id:        graph.ContentID("index", scope, canonical),
+		id:        graph.ContentID("index", scope, canonical, target),
 		name:      name,
 		canonical: canonical,
 		scope:     scope,
@@ -296,6 +310,9 @@ func parseSQLAlterTable(statement sqlStatement, path, scope string, parsed *sqlP
 		return
 	}
 	for _, foreignKey := range sqlForeignKeyRE.FindAllStringSubmatchIndex(statement.text, -1) {
+		if sqlInsideDelimitedIdentifier(statement.text, foreignKey[0]) {
+			continue
+		}
 		groups := submatches(statement.text, foreignKey)
 		if len(groups) != 4 {
 			continue
@@ -326,18 +343,13 @@ func appendSQLForeignKey(match []string, scope, owner, path string, line int, pa
 }
 
 func appendSQLRelations(statement sqlStatement, path, scope, owner string, parsed *sqlParsedFile) {
-	cteAliases := map[string]bool{}
-	for _, match := range sqlCTEAliasRE.FindAllStringSubmatch(statement.text, -1) {
-		if len(match) == 2 {
-			cteAliases[canonicalSQLIdentifier(match[1])] = true
-		}
-	}
+	cteAliases := findSQLCTEAliases(statement.text)
 	for _, indices := range sqlRelationRE.FindAllStringSubmatchIndex(statement.text, -1) {
-		if len(indices) < 6 {
+		if len(indices) < 6 || sqlInsideDelimitedIdentifier(statement.text, indices[0]) {
 			continue
 		}
 		target := canonicalSQLIdentifier(statement.text[indices[4]:indices[5]])
-		if target == "" || cteAliases[target] || sqlCallFollows(statement.text, indices[5]) {
+		if target == "" || sqlRelationUsesCTE(target, indices[0], cteAliases) || sqlCallFollows(statement.text, indices[5]) {
 			continue
 		}
 		parsed.references = append(parsed.references, sqlReference{
@@ -349,6 +361,63 @@ func appendSQLRelations(statement sqlStatement, path, scope, owner string, parse
 			line:     statement.line + strings.Count(statement.text[:indices[0]], "\n"),
 		})
 	}
+}
+
+func findSQLCTEAliases(statement string) []sqlCTEAlias {
+	matches := sqlCTEAliasRE.FindAllStringSubmatchIndex(statement, -1)
+	aliases := make([]sqlCTEAlias, 0, len(matches))
+	recursive := false
+	for _, indices := range matches {
+		if len(indices) < 4 || indices[2] < 0 || indices[3] < 0 || sqlInsideDelimitedIdentifier(statement, indices[0]) {
+			continue
+		}
+		prefix := strings.ToLower(strings.TrimSpace(statement[indices[0]:indices[2]]))
+		if strings.HasPrefix(prefix, "with") {
+			recursive = strings.Contains(prefix, "recursive")
+		}
+		bodyOpen := indices[1] - 1
+		if bodyOpen < 0 || bodyOpen >= len(statement) || statement[bodyOpen] != '(' {
+			continue
+		}
+		bodyClose := matchingSQLParen(statement, bodyOpen)
+		if bodyClose < 0 {
+			continue
+		}
+		name := canonicalSQLIdentifier(statement[indices[2]:indices[3]])
+		if name == "" {
+			continue
+		}
+		aliases = append(aliases, sqlCTEAlias{
+			name:      name,
+			nameStart: indices[2],
+			bodyOpen:  bodyOpen,
+			bodyClose: bodyClose,
+			recursive: recursive,
+		})
+	}
+	return aliases
+}
+
+func sqlRelationUsesCTE(target string, relationStart int, aliases []sqlCTEAlias) bool {
+	for _, alias := range aliases {
+		if alias.name != target {
+			continue
+		}
+		if alias.recursive {
+			return true
+		}
+		// In a non-recursive WITH clause, a CTE is visible only after its
+		// definition. A same-named relation inside the definition still
+		// names the physical table, while uses after the closing parenthesis
+		// name the CTE and must not become graph references.
+		if relationStart > alias.bodyClose {
+			return true
+		}
+		if relationStart < alias.nameStart || (relationStart > alias.bodyOpen && relationStart < alias.bodyClose) {
+			return false
+		}
+	}
+	return false
 }
 
 func emitSQLSchemas(parsed []sqlParsedFile, result *lang.AnalysisResult) {
@@ -397,7 +466,7 @@ func (catalog *sqlCatalog) resolve(scope, name string) *sqlObject {
 		return object
 	}
 	candidates := catalog.byBase[sqlCatalogKey(scope, sqlBaseName(canonical))]
-	if len(candidates) == 1 && (!strings.Contains(canonical, ".") || !strings.Contains(candidates[0].canonical, ".")) {
+	if len(candidates) == 1 && (!qualifiedSQLIdentifier(canonical) || !qualifiedSQLIdentifier(candidates[0].canonical)) {
 		return candidates[0]
 	}
 	return nil
@@ -627,13 +696,17 @@ func maskSQLTrivia(content string) string {
 			}
 			maskSQLRange(masked, i, end)
 			i = end
-		case content[i] == '/' && i+1 < len(content) && content[i+1] == '*':
-			end := strings.Index(content[i+2:], "*/")
+		case content[i] == '#' && sqlHashStartsComment(content, i):
+			end := strings.IndexByte(content[i:], '\n')
 			if end < 0 {
 				end = len(content)
 			} else {
-				end += i + 4
+				end += i
 			}
+			maskSQLRange(masked, i, end)
+			i = end
+		case content[i] == '/' && i+1 < len(content) && content[i+1] == '*':
+			end := skipSQLBlockComment(content, i)
 			maskSQLRange(masked, i, end)
 			i = end
 		case content[i] == '$':
@@ -657,6 +730,35 @@ func maskSQLTrivia(content string) string {
 	return string(masked)
 }
 
+func sqlHashStartsComment(content string, position int) bool {
+	for i := position - 1; i >= 0 && content[i] != '\n' && content[i] != '\r'; i-- {
+		if !unicode.IsSpace(rune(content[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+func skipSQLBlockComment(content string, start int) int {
+	depth := 1
+	for i := start + 2; i < len(content); {
+		switch {
+		case i+1 < len(content) && content[i] == '/' && content[i+1] == '*':
+			depth++
+			i += 2
+		case i+1 < len(content) && content[i] == '*' && content[i+1] == '/':
+			depth--
+			i += 2
+			if depth == 0 {
+				return i
+			}
+		default:
+			i++
+		}
+	}
+	return len(content)
+}
+
 func maskSQLRange(content []byte, start, end int) {
 	for i := start; i < end && i < len(content); i++ {
 		if content[i] != '\n' && content[i] != '\r' {
@@ -667,6 +769,10 @@ func maskSQLRange(content []byte, start, end int) {
 
 func skipSQLQuoted(content string, start int, quote byte) int {
 	for i := start + 1; i < len(content); i++ {
+		if content[i] == '\\' && i+1 < len(content) {
+			i++
+			continue
+		}
 		if content[i] != quote {
 			continue
 		}
@@ -802,10 +908,26 @@ func parseSQLIdentifierList(content string) []string {
 func canonicalSQLIdentifier(identifier string) string {
 	parts := splitSQLIdentifier(identifier)
 	for i := range parts {
-		parts[i] = strings.ToLower(unquoteSQLIdentifier(strings.TrimSpace(parts[i])))
-		if parts[i] == "" {
+		part := strings.TrimSpace(parts[i])
+		value := unquoteSQLIdentifier(part)
+		if value == "" {
 			return ""
 		}
+		if !quotedSQLIdentifier(part) {
+			parts[i] = strings.ToLower(value)
+			continue
+		}
+
+		// Lower-case delimited names such as "users" refer to the same
+		// object as their ordinary spelling in the common SQL dialects Ravel
+		// supports. Preserve delimiters for mixed-case or otherwise special
+		// names so that "Users" and "order.items" do not collapse into the
+		// unquoted identifiers users and order.items.
+		if value == strings.ToLower(value) && sqlBareIdentifierRE.MatchString(value) {
+			parts[i] = value
+			continue
+		}
+		parts[i] = `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 	}
 	return strings.Join(parts, ".")
 }
@@ -877,15 +999,57 @@ func sqlCallFollows(content string, identifierEnd int) bool {
 	return identifierEnd < len(content) && content[identifierEnd] == '('
 }
 
+func firstSQLSyntaxSubmatch(expression *regexp.Regexp, content string) []string {
+	for _, indices := range expression.FindAllStringSubmatchIndex(content, -1) {
+		if !sqlInsideDelimitedIdentifier(content, indices[0]) {
+			return submatches(content, indices)
+		}
+	}
+	return nil
+}
+
+func firstSQLSyntaxIndex(expression *regexp.Regexp, content string) int {
+	for _, indices := range expression.FindAllStringIndex(content, -1) {
+		if !sqlInsideDelimitedIdentifier(content, indices[0]) {
+			return indices[0]
+		}
+	}
+	return -1
+}
+
+func sqlInsideDelimitedIdentifier(content string, position int) bool {
+	for i := 0; i < len(content) && i <= position; {
+		start := i
+		switch content[i] {
+		case '"', '`':
+			i = skipSQLQuoted(content, i, content[i])
+		case '[':
+			i = skipSQLBracketed(content, i)
+		default:
+			i++
+			continue
+		}
+		if position > start && position < i {
+			return true
+		}
+	}
+	return false
+}
+
 func sqlCatalogKey(scope, name string) string {
 	return scope + "\x00" + name
 }
 
 func sqlBaseName(name string) string {
-	if index := strings.LastIndexByte(name, '.'); index >= 0 {
-		return name[index+1:]
+	parts := splitSQLIdentifier(name)
+	if len(parts) == 0 {
+		return ""
 	}
-	return name
+	return canonicalSQLIdentifier(parts[len(parts)-1])
+}
+
+func qualifiedSQLIdentifier(name string) bool {
+	return len(splitSQLIdentifier(name)) > 1
 }
 
 func sqlColumnID(objectID, column string) string {
