@@ -55,7 +55,7 @@ jobs:
           CGO_ENABLED: 0
         run: |
           grammar_tags="$(cat scripts/grammar_tags.txt)"
-          go build -buildvcs=false -trimpath -tags "$grammar_tags" -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
+          go build -buildvcs=false -trimpath -tags "$grammar_tags" -ldflags "-s -w -X github.com/12vault/ravel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
           tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE THIRD_PARTY_NOTICES.md
       - name: Check Apple signing configuration
         if: matrix.os == 'darwin'
@@ -132,7 +132,7 @@ jobs:
           CGO_ENABLED: 0
         run: |
           $grammarTags = (Get-Content scripts/grammar_tags.txt -Raw).Trim()
-          go build -buildvcs=false -trimpath -tags $grammarTags -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=$env:GITHUB_REF_NAME" -o ravel.exe ./cmd/ravel
+          go build -buildvcs=false -trimpath -tags $grammarTags -ldflags "-s -w -X github.com/12vault/ravel/internal/cli.Version=$env:GITHUB_REF_NAME" -o ravel.exe ./cmd/ravel
           Compress-Archive -Path ravel.exe,LICENSE,THIRD_PARTY_NOTICES.md -DestinationPath "ravel_windows_$env:GOARCH.zip"
       - uses: actions/upload-artifact@v6
         with:
