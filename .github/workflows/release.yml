@@ -21,6 +21,8 @@ jobs:
         run: |
           go test ./...
           go vet ./...
+          grammar_tags="$(cat scripts/grammar_tags.txt)"
+          go test -tags "$grammar_tags" ./internal/lang/treeanalyzer ./internal/build
           python3 scripts/release.py "${GITHUB_REF_NAME}" --check
           python3 scripts/test_release.py
           git diff --check
@@ -52,8 +54,9 @@ jobs:
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: 0
         run: |
-          go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
-          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
+          grammar_tags="$(cat scripts/grammar_tags.txt)"
+          go build -buildvcs=false -trimpath -tags "$grammar_tags" -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=${GITHUB_REF_NAME}" -o ravel ./cmd/ravel
+          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE THIRD_PARTY_NOTICES.md
       - name: Check Apple signing configuration
         if: matrix.os == 'darwin'
         id: apple-signing
@@ -112,14 +115,14 @@ jobs:
           ditto -c -k --keepParent ravel "$RUNNER_TEMP/ravel-notarization.zip"
           xcrun notarytool submit "$RUNNER_TEMP/ravel-notarization.zip" --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
           spctl --assess --type execute --verbose=4 ravel
-          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
+          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE THIRD_PARTY_NOTICES.md
       - name: Ad-hoc sign macOS binary
         if: matrix.os == 'darwin' && steps.apple-signing.outputs.enabled != 'true'
         shell: bash
         run: |
           codesign --force --sign - ravel
           codesign --verify --strict --verbose=2 ravel
-          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE
+          tar -czf "ravel_${GOOS}_${GOARCH}.tar.gz" ravel LICENSE THIRD_PARTY_NOTICES.md
       - name: Build Windows archive
         if: matrix.os == 'windows'
         shell: pwsh
@@ -128,8 +131,9 @@ jobs:
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: 0
         run: |
-          go build -buildvcs=false -trimpath -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=$env:GITHUB_REF_NAME" -o ravel.exe ./cmd/ravel
-          Compress-Archive -Path ravel.exe,LICENSE -DestinationPath "ravel_windows_$env:GOARCH.zip"
+          $grammarTags = (Get-Content scripts/grammar_tags.txt -Raw).Trim()
+          go build -buildvcs=false -trimpath -tags $grammarTags -ldflags "-s -w -X github.com/12ya/reporavel/internal/cli.Version=$env:GITHUB_REF_NAME" -o ravel.exe ./cmd/ravel
+          Compress-Archive -Path ravel.exe,LICENSE,THIRD_PARTY_NOTICES.md -DestinationPath "ravel_windows_$env:GOARCH.zip"
       - uses: actions/upload-artifact@v6
         with:
           name: ravel-${{ matrix.os }}-${{ matrix.arch }}

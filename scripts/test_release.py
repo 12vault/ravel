@@ -11,6 +11,14 @@ import subprocess
 root = Path(__file__).resolve().parents[1]
 source = (root / "internal/cli/commands.go").read_text()
 version = re.search(r'var Version = "v([^"]+)"', source).group(1)
+grammar_tags = (root / "scripts/grammar_tags.txt").read_text().strip()
+grammar_tag_list = grammar_tags.split(",")
+if not grammar_tags or grammar_tag_list[0] != "grammar_subset":
+    raise SystemExit("scripts/grammar_tags.txt must select embedded subset mode")
+if any(not re.fullmatch(r"grammar_subset(?:_[a-z0-9_]+)?", tag) for tag in grammar_tag_list):
+    raise SystemExit("scripts/grammar_tags.txt contains an invalid grammar build tag")
+if len(grammar_tag_list) != len(set(grammar_tag_list)):
+    raise SystemExit("scripts/grammar_tags.txt contains duplicate grammar build tags")
 paths = [
     root / ".claude-plugin/marketplace.json",
     root / "plugins/ravel/.claude-plugin/plugin.json",
@@ -59,6 +67,8 @@ for target in targets:
         raise SystemExit(f"{target}: stale SKILL.md")
     for directory in ("references", "agents", "scripts"):
         assert_tree_equal(source / directory, target / directory)
+    if (target / "THIRD_PARTY_NOTICES.md").read_bytes() != (source / "THIRD_PARTY_NOTICES.md").read_bytes():
+        raise SystemExit(f"{target}: stale THIRD_PARTY_NOTICES.md")
     actual = {path.name for path in (target / "bin").iterdir() if path.is_file()}
     if actual != expected:
         raise SystemExit(f"{target / 'bin'}: expected {sorted(expected)}, found {sorted(actual)}")
@@ -76,7 +86,7 @@ for target in targets:
         )
         if info.returncode != 0:
             raise SystemExit(f"cannot inspect {binary}: {info.stderr.strip()}")
-        for field in (f"GOOS={system}", f"GOARCH={arch}", "CGO_ENABLED=0"):
+        for field in (f"GOOS={system}", f"GOARCH={arch}", "CGO_ENABLED=0", f"-tags={grammar_tags}"):
             if field not in info.stdout:
                 raise SystemExit(f"{binary}: missing build setting {field}")
         # sync-packages builds with both the source default and a linker -X
@@ -90,6 +100,8 @@ if (codex_target / "SKILL.md").read_bytes() != (source / "skill.md").read_bytes(
     raise SystemExit(f"{codex_target}: stale SKILL.md")
 for directory in ("references", "agents", "scripts"):
     assert_tree_equal(source / directory, codex_target / directory)
+if (codex_target / "THIRD_PARTY_NOTICES.md").read_bytes() != (source / "THIRD_PARTY_NOTICES.md").read_bytes():
+    raise SystemExit(f"{codex_target}: stale THIRD_PARTY_NOTICES.md")
 
 left = root / "plugins/ravel/skills/ravel/bin"
 right = root / ".agents/plugins/plugins/ravel/skills/ravel/bin"

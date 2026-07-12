@@ -11,6 +11,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "skills" / "ravel"
+GRAMMAR_TAGS = (ROOT / "scripts" / "grammar_tags.txt").read_text().strip()
 TARGETS = [
     ROOT / "plugins" / "ravel" / "skills" / "ravel",
     ROOT / ".agents" / "plugins" / "plugins" / "ravel" / "skills" / "ravel",
@@ -25,6 +26,7 @@ def copy_tree(target: Path) -> None:
             shutil.rmtree(destination)
         shutil.copytree(SOURCE / name, destination)
     shutil.copy2(SOURCE / "skill.md", target / "SKILL.md")
+    shutil.copy2(SOURCE / "THIRD_PARTY_NOTICES.md", target / "THIRD_PARTY_NOTICES.md")
 
 
 def build_binaries(destination: Path, cache: Path) -> None:
@@ -50,7 +52,7 @@ def build_binaries(destination: Path, cache: Path) -> None:
             "GOCACHE": str(cache),
         }
         subprocess.run(
-            ["go", "build", "-buildvcs=false", "-trimpath", "-ldflags", f"-s -w -X github.com/12ya/reporavel/internal/cli.Version={version}", "-o", output, "./cmd/ravel"],
+            ["go", "build", "-buildvcs=false", "-trimpath", "-tags", GRAMMAR_TAGS, "-ldflags", f"-s -w -X github.com/12ya/reporavel/internal/cli.Version={version}", "-o", output, "./cmd/ravel"],
             cwd=ROOT,
             env=env,
             check=True,

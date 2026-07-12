@@ -20,6 +20,7 @@ Use the Go CLI for deterministic scanning, storage, queries, and validation. Use
 - MCP-capable hosts may launch `ravel mcp --out <graphdir>` and use its read-only `query`, `context`, `explain`, `path`, and reverse-impact `affected` tools. Keep `context` token-bounded and treat explicit unresolved results as unresolved.
 - Retrieval or answer-quality evaluation: use `ravel benchmark` with the versioned repository-question JSONL contract. An optional `--answers` ledger records externally adjudicated correctness, rubric fact coverage, tokens, spend, and provenance without raw answers; Ravel never invokes a model or judge.
 - Agent-produced nodes or edges: read `references/fragments.md`, write a fragment, then run `ravel ingest <fragment.json>`.
+- Native polyglot nodes come from the pinned pure-Go Tree-sitter layer. Treat syntax captures as `extracted`, name-only target matches as `inferred`, and ambiguous or unsupported shapes as unresolved; use `code-analyzer` only to fill evidence-backed gaps rather than duplicating parser facts.
 
 ## Core workflow
 
