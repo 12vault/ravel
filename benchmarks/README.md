@@ -6,7 +6,7 @@ Run the repeatable local suite with:
 ./benchmarks/run.sh
 ```
 
-The suite reports graph build and query throughput without network access. `go test ./...` also compiles and smoke-tests every benchmark.
+The suite reports graph build, pure-Go Tree-sitter polyglot analysis, and query throughput without network access. `go test ./...` also compiles and smoke-tests every benchmark.
 
 Run retrieval-quality cases against a built graph:
 
@@ -60,3 +60,20 @@ The estimate conservatively uses three UTF-8 bytes per token for the compact tex
 `datasets.json` defines the implemented repository-question contract. Custom dataset names are accepted after the caller converts their corpus and questions into evidence-tagged Ravel graphs plus the common JSONL format. Ravel does not ship or claim native LOCOMO/LongMemEval corpus adapters, download external datasets, or call a model/judge. Case isolation and adjudication remain the benchmark author's responsibility; the optional answer ledger records their resulting quality and cost measurements reproducibly.
 
 Pass `--dataset-revision <revision>` and `--adapter-version <version>` for publishable runs. Do not compare scores produced with different graphs, datasets, retrieval settings, or model settings.
+
+## Optional Graphify compatibility comparison
+
+When Graphify is installed locally, `compare_graphify.py` can run the same repository questions and token budget through both CLIs. Graphify's raw `extract --no-cluster` output must first be converted to its clustered node-link graph because its query command expects that form:
+
+```sh
+graphify extract . --code-only --no-cluster --max-workers 1 --out /tmp/graphify-ravel
+graphify cluster-only /tmp/graphify-ravel \
+  --graph /tmp/graphify-ravel/graphify-out/graph.json --no-label --no-viz
+python3 benchmarks/compare_graphify.py \
+  --ravel ravel --ravel-graph .reporavel \
+  --graphify graphify --graphify-graph /tmp/graphify-ravel/graphify-out/graph.json \
+  --dataset benchmarks/ravel-retrieval.jsonl --token-budget 800 \
+  --out /tmp/ravel-vs-graphify.json
+```
+
+The adapter reports normalized expected symbol-name recall because Ravel and Graphify use incompatible node and edge ID schemes. It does not compare evidence recall, model answers, or judge scores and must not be presented as a universal quality ranking. Keep the raw graphs, tool versions, dataset, and output with any published result.

@@ -128,4 +128,11 @@ if native is not None and native.exists():
             launcher_result = subprocess.run([str(launcher), "version"], check=False, capture_output=True, text=True)
             if launcher_result.returncode != 0 or launcher_result.stdout != f"ravel v{version}\n":
                 raise SystemExit(f"source-checkout launcher fallback failed for {launcher}: {launcher_result.stdout}{launcher_result.stderr}")
+
+comparison = root / "benchmarks/compare_graphify.py"
+if os.name != "nt" and comparison.stat().st_mode & 0o111 == 0:
+    raise SystemExit(f"comparison adapter is not executable: {comparison}")
+comparison_help = subprocess.run([sys.executable, str(comparison), "--help"], check=False, capture_output=True, text=True)
+if comparison_help.returncode != 0 or "--graphify-graph" not in comparison_help.stdout:
+    raise SystemExit(f"Graphify comparison adapter help smoke test failed: {comparison_help.stdout}{comparison_help.stderr}")
 print(f"Release versions synchronized at {version}")
