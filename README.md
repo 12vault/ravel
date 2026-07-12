@@ -326,7 +326,8 @@ reporting, the threat model, and CI security controls.
 - Analysis, graph, query, dashboard, and corpus commands make no network requests and never call an LLM. Only the explicit `ravel update-check` and `ravel self-update` commands access the release server.
 - `ravel extract` may execute a discovered, allowlisted local extractor (`pdftotext`, `mutool`, or `pandoc`) only when the user invokes that command.
 - Agent roles run only through the installed skill and the host assistant's normal permission model.
-- `.gitignore` rules, symlinks, `.env` files, private-key formats, credential directories, databases, archives, binary media, dependency folders, and common build output are rejected before file content is read.
+- Nested `.gitignore` and `.ravelignore` rules, symlinks, `.env` files, private-key formats, credential directories, databases, archives, binary media, dependency folders, and common build output are rejected before file content is read. Ravel-specific rules are loaded after Git rules in each directory, so they can add exclusions or negate a file-level Git pattern.
+- Source discovery admits recognized code/document extensions and extensionless files with supported code shebangs; arbitrary text and binary formats are reported as unsupported without hashing their full contents.
 - Default limits are 1 MiB per file and 100 MiB total input.
 - Output goes to `.reporavel/` unless another directory is explicitly selected.
 - Unresolved calls stay unresolved instead of being presented as certain matches.
@@ -494,16 +495,16 @@ Run the local build/query performance suite with `./benchmarks/run.sh`. Run the 
 
 ### T3 Code Ravel vs Graphify snapshot
 
-Measured on 2026-07-12 on an Apple M1 Pro (`darwin/arm64`) with Ravel v0.2.4 and Graphify 0.9.12 against [`t3tools/t3code`](https://github.com/t3tools/t3code) commit `c1ec1915`:
+Measured on 2026-07-12 on an Apple M1 Pro (`darwin/arm64`) with Ravel v0.2.5 and Graphify 0.9.12 against [`t3tools/t3code`](https://github.com/t3tools/t3code) commit `c1ec1915`:
 
 | T3 Code measurement | Ravel | Graphify | Scope |
 | --- | ---: | ---: | --- |
-| Graph build | 148.95 s | 90.52 s | Cold local extraction; Ravel analyzed 5,630 accepted code/document files, while Graphify scanned 5,448 code files with `--code-only` |
-| Resulting graph | 296,964 nodes / 367,445 edges | 49,517 nodes / 104,160 clustered edges | Tool-native schemas and extractors; coverage is not equivalent |
-| Tool-native reclustering | 13.18 s | 19.71 s | Each tool clustered its own resulting graph; Graphify used NetworkX Louvain |
-| Compact context, 10 questions | 6,851 estimated tokens | 9,009 estimated tokens | Same checked-in questions and 800-token setting; ceiling of three UTF-8 bytes per estimated token |
+| Graph build | 166.54 s | 90.52 s | Cold local extraction; Ravel scanned 5,630 accepted code/document files and graphified 5,065, while Graphify scanned 5,448 code files with `--code-only` |
+| Resulting graph | 296,334 nodes / 366,815 edges | 49,517 nodes / 104,160 clustered edges | Tool-native schemas and extractors; coverage is not equivalent |
+| Tool-native reclustering | 13.23 s | 19.71 s | Each tool clustered its own resulting graph; Graphify used NetworkX Louvain |
+| Compact context, 10 questions | 6,821 estimated tokens | 9,009 estimated tokens | Same checked-in questions and 800-token setting; ceiling of three UTF-8 bytes per estimated token |
 
-On these ten T3 Code questions, Ravel returned 24.0% fewer estimated context tokens. This measures retrieval payload size, not model input billing, answer quality, or factual accuracy. Graphify skipped non-code inputs, 805 source files that produced no nodes, and 11 SQL files because its optional SQL parser was not installed. The build and tool-native clustering rows therefore describe observed end-to-end behavior, not equal-graph algorithm microbenchmarks. The [question set](benchmarks/t3code-context-questions.json), [comparison script](benchmarks/compare_context_payloads.py), and [raw results](benchmarks/results/t3code-ravel-v0.2.4-vs-graphify-0.9.12-2026-07-12.json) are checked in for reproduction.
+On these ten T3 Code questions, Ravel returned 24.3% fewer estimated context tokens. This measures retrieval payload size, not model input billing, answer quality, or factual accuracy. Ravel skipped 565 accepted files that produced no graph content. Graphify skipped non-code inputs, 805 source files that produced no nodes, and 11 SQL files because its optional SQL parser was not installed. The build and tool-native clustering rows therefore describe observed end-to-end behavior, not equal-graph algorithm microbenchmarks. The [question set](benchmarks/t3code-context-questions.json), [comparison script](benchmarks/compare_context_payloads.py), and [raw results](benchmarks/results/t3code-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-12.json) are checked in for reproduction.
 
 ## Development
 

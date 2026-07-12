@@ -80,17 +80,17 @@ The adapter reports normalized expected symbol-name recall because Ravel and Gra
 
 ## Recorded T3 Code comparison
 
-The current 2026-07-12 snapshot used an Apple M1 Pro (`darwin/arm64`), Ravel v0.2.4, Graphify 0.9.12, and `t3tools/t3code` commit `c1ec1915fc16f3dc1ec5d47d9a97f6210a574526`.
+The current 2026-07-12 snapshot used an Apple M1 Pro (`darwin/arm64`), Ravel v0.2.5, Graphify 0.9.12, and `t3tools/t3code` commit `c1ec1915fc16f3dc1ec5d47d9a97f6210a574526`.
 
 | Measurement | Ravel | Graphify |
 | --- | ---: | ---: |
-| Cold graph build | 148.95 s | 90.52 s |
-| Resulting graph nodes | 296,964 | 49,517 |
-| Resulting graph edges | 367,445 | 104,160 clustered edges |
-| Tool-native reclustering | 13.18 s | 19.71 s |
-| Compact context, 10 questions, 800-token budget | 6,851 estimated tokens | 9,009 estimated tokens |
+| Cold graph build | 166.54 s | 90.52 s |
+| Resulting graph nodes | 296,334 | 49,517 |
+| Resulting graph edges | 366,815 | 104,160 clustered edges |
+| Tool-native reclustering | 13.23 s | 19.71 s |
+| Compact context, 10 questions, 800-token budget | 6,821 estimated tokens | 9,009 estimated tokens |
 
-The comparison uses each tool's native graph schema and extractors, so graph coverage is not equivalent. Ravel accepted code and supported repository documents. Graphify used `--code-only`, reported 805 source files with no nodes, and skipped 11 SQL files because its optional SQL parser was unavailable. Its reclustering used the installed NetworkX 3.6.1 Louvain fallback. Context size uses the same checked-in questions and `ceil(UTF-8 bytes / 3)` estimate; it does not measure answer correctness or model billing.
+The comparison uses each tool's native graph schema and extractors, so graph coverage is not equivalent. Ravel scanned code and supported repository documents, graphified 5,065 files, and skipped 565 accepted files with no graph content. Graphify used `--code-only`, reported 805 source files with no nodes, and skipped 11 SQL files because its optional SQL parser was unavailable. Its reclustering used the installed NetworkX 3.6.1 Louvain fallback. Context size uses the same checked-in questions and `ceil(UTF-8 bytes / 3)` estimate; it does not measure answer correctness or model billing.
 
 Reproduce the context payload measurement after building both graphs:
 
@@ -105,6 +105,6 @@ python3 benchmarks/compare_context_payloads.py \
 
 Raw records:
 
-- [`results/t3code-ravel-v0.2.4-vs-graphify-0.9.12-2026-07-12.json`](results/t3code-ravel-v0.2.4-vs-graphify-0.9.12-2026-07-12.json)
+- [`results/t3code-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-12.json`](results/t3code-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-12.json)
 
 The older self-repository retrieval and synthetic clustering snapshots remain under `benchmarks/results/` as historical records, but they are no longer used for the headline comparison.
