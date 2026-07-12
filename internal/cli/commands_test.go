@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/12ya/reporavel/internal/evaluation"
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/query"
-	"github.com/12ya/reporavel/internal/scan"
-	"github.com/12ya/reporavel/internal/store"
+	"github.com/12vault/ravel/internal/evaluation"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/query"
+	"github.com/12vault/ravel/internal/scan"
+	"github.com/12vault/ravel/internal/store"
 )
 
 func TestExecutePrintsVersion(t *testing.T) {

@@ -4,13 +4,13 @@ import (
 	"context"
 	"path/filepath"
 
-	"github.com/12ya/reporavel/internal/config"
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/lang"
-	"github.com/12ya/reporavel/internal/lang/contentanalyzer"
-	"github.com/12ya/reporavel/internal/lang/goanalyzer"
-	"github.com/12ya/reporavel/internal/lang/treeanalyzer"
-	"github.com/12ya/reporavel/internal/scan"
+	"github.com/12vault/ravel/internal/config"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/lang"
+	"github.com/12vault/ravel/internal/lang/contentanalyzer"
+	"github.com/12vault/ravel/internal/lang/goanalyzer"
+	"github.com/12vault/ravel/internal/lang/treeanalyzer"
+	"github.com/12vault/ravel/internal/scan"
 )
 
 type Result struct {

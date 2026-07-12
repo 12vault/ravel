@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/12ya/reporavel/internal/config"
+	"github.com/12vault/ravel/internal/config"
 )
 
 func WriteDoctor(w io.Writer, cfg config.Config) {

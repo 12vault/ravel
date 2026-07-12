@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/12ya/reporavel/internal/config"
+	"github.com/12vault/ravel/internal/config"
 )
 
 func BenchmarkBuildFixture(b *testing.B) {

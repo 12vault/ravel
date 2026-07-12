@@ -15,7 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/12ya/reporavel/internal/config"
+	"github.com/12vault/ravel/internal/config"
 )
 
 type File struct {

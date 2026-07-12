@@ -17,9 +17,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/lang"
-	"github.com/12ya/reporavel/internal/scan"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/lang"
+	"github.com/12vault/ravel/internal/scan"
 )
 
 type Analyzer struct {

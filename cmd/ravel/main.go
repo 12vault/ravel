@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/12ya/reporavel/internal/cli"
+	"github.com/12vault/ravel/internal/cli"
 )
 
 func main() {

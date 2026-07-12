@@ -1,4 +1,4 @@
-module github.com/12ya/reporavel
+module github.com/12vault/ravel
 
 go 1.26.5
 

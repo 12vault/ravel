@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/12ya/reporavel/internal/config"
-	"github.com/12ya/reporavel/internal/graph"
+	"github.com/12vault/ravel/internal/config"
+	"github.com/12vault/ravel/internal/graph"
 )
 
 func TestRunBuildsGoGraph(t *testing.T) {

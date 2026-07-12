@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/12ya/reporavel/skills"
+	"github.com/12vault/ravel/skills"
 )
 
 func TestInstallAndUninstallSkillForEveryPlatform(t *testing.T) {

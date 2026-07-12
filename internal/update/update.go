@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 
-	buildrunner "github.com/12ya/reporavel/internal/build"
-	"github.com/12ya/reporavel/internal/config"
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/scan"
+	buildrunner "github.com/12vault/ravel/internal/build"
+	"github.com/12vault/ravel/internal/config"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/scan"
 )
 
 type Result struct {

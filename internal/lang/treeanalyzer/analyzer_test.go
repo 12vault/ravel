@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/scan"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/scan"
 )
 
 func BenchmarkAnalyzePythonHundredFunctions(b *testing.B) {

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/store"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/store"
 )
 
 func TestGraphCacheReusesIndexAndReloadsHashWithUnchangedStat(t *testing.T) {

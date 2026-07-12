@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/lang"
-	"github.com/12ya/reporavel/internal/scan"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/lang"
+	"github.com/12vault/ravel/internal/scan"
 	"github.com/odvcencio/gotreesitter"
 	"github.com/odvcencio/gotreesitter/grammars"
 )

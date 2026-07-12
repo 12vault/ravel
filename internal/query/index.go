@@ -7,7 +7,7 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/12ya/reporavel/internal/graph"
+	"github.com/12vault/ravel/internal/graph"
 )
 
 const (

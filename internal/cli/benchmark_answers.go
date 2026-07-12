@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/12ya/reporavel/internal/evaluation"
+	"github.com/12vault/ravel/internal/evaluation"
 )
 
 func attachAnswerLedger(report *evaluation.Report, cases []evaluation.Case, path string) error {

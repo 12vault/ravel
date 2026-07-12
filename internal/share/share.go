@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/12ya/reporavel/internal/dashboard"
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/report"
-	"github.com/12ya/reporavel/internal/store"
+	"github.com/12vault/ravel/internal/dashboard"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/report"
+	"github.com/12vault/ravel/internal/store"
 )
 
 type Manifest struct {

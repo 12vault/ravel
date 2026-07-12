@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/12ya/reporavel/internal/graph"
-	"github.com/12ya/reporavel/internal/query"
-	"github.com/12ya/reporavel/internal/store"
+	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/query"
+	"github.com/12vault/ravel/internal/store"
 )
 
 func writeQueryCommandGraph(t *testing.T, g graph.Graph) string {

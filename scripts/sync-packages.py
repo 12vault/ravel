@@ -52,7 +52,7 @@ def build_binaries(destination: Path, cache: Path) -> None:
             "GOCACHE": str(cache),
         }
         subprocess.run(
-            ["go", "build", "-buildvcs=false", "-trimpath", "-tags", GRAMMAR_TAGS, "-ldflags", f"-s -w -X github.com/12ya/reporavel/internal/cli.Version={version}", "-o", output, "./cmd/ravel"],
+            ["go", "build", "-buildvcs=false", "-trimpath", "-tags", GRAMMAR_TAGS, "-ldflags", f"-s -w -X github.com/12vault/ravel/internal/cli.Version={version}", "-o", output, "./cmd/ravel"],
             cwd=ROOT,
             env=env,
             check=True,

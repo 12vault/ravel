@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/12ya/reporavel/skills"
+	"github.com/12vault/ravel/skills"
 )
 
 const (
