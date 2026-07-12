@@ -21,6 +21,7 @@ type graphFingerprint struct {
 	size    int64
 	modTime time.Time
 	hash    [sha256.Size]byte
+	info    os.FileInfo
 }
 
 type graphSnapshot struct {
@@ -32,6 +33,7 @@ type graphCache struct {
 	outDir  string
 	mu      sync.Mutex
 	current *graphSnapshot
+	reads   int
 }
 
 func newGraphCache(outDir string) *graphCache {
@@ -46,11 +48,20 @@ func (c *graphCache) snapshot() (*graphSnapshot, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	data, fingerprint, err := readGraphState(c.outDir)
+	path, info, err := graphStatePath(c.outDir)
 	if err != nil {
 		return nil, err
 	}
-	if c.current != nil && c.current.fingerprint == fingerprint {
+	if c.current != nil && sameGraphState(c.current.fingerprint, path, info) {
+		return c.current, nil
+	}
+	c.reads++
+	data, fingerprint, err := readGraphState(path)
+	if err != nil {
+		return nil, err
+	}
+	if c.current != nil && c.current.fingerprint.hash == fingerprint.hash {
+		c.current = &graphSnapshot{index: c.current.index, fingerprint: fingerprint}
 		return c.current, nil
 	}
 	var g graph.Graph
@@ -61,11 +72,7 @@ func (c *graphCache) snapshot() (*graphSnapshot, error) {
 	return c.current, nil
 }
 
-func readGraphState(outDir string) ([]byte, graphFingerprint, error) {
-	path, err := graphStatePath(outDir)
-	if err != nil {
-		return nil, graphFingerprint{}, err
-	}
+func readGraphState(path string) ([]byte, graphFingerprint, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, graphFingerprint{}, fmt.Errorf("open graph state %s: %w", path, err)
@@ -91,20 +98,25 @@ func readGraphState(outDir string) ([]byte, graphFingerprint, error) {
 		size:    int64(len(data)),
 		modTime: info.ModTime(),
 		hash:    sha256.Sum256(data),
+		info:    info,
 	}, nil
 }
 
-func graphStatePath(outDir string) (string, error) {
+func graphStatePath(outDir string) (string, os.FileInfo, error) {
 	candidates := []string{
 		filepath.Join(outDir, "graph.json"),
 		filepath.Join(outDir, ".state", "graph.json"),
 	}
 	for _, candidate := range candidates {
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
+		if info, err := os.Stat(candidate); err == nil {
+			return candidate, info, nil
 		} else if !os.IsNotExist(err) {
-			return "", fmt.Errorf("stat graph state %s: %w", candidate, err)
+			return "", nil, fmt.Errorf("stat graph state %s: %w", candidate, err)
 		}
 	}
-	return "", fmt.Errorf("graph state not found under %s", outDir)
+	return "", nil, fmt.Errorf("graph state not found under %s", outDir)
+}
+
+func sameGraphState(fingerprint graphFingerprint, path string, info os.FileInfo) bool {
+	return fingerprint.path == path && fingerprint.size == info.Size() && fingerprint.modTime.Equal(info.ModTime()) && fingerprint.info != nil && os.SameFile(fingerprint.info, info)
 }

@@ -30,6 +30,9 @@ func TestGraphCacheReusesIndexAndReloadsHashWithUnchangedStat(t *testing.T) {
 	if unchanged != first || unchanged.index != first.index {
 		t.Fatal("unchanged graph rebuilt the immutable index")
 	}
+	if cache.reads != 1 {
+		t.Fatalf("unchanged steady-state graph reads = %d, want 1 initial read", cache.reads)
+	}
 
 	writeTestGraph(t, path, graphWithNode("node://one", "Bravo"))
 	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
@@ -49,6 +52,9 @@ func TestGraphCacheReusesIndexAndReloadsHashWithUnchangedStat(t *testing.T) {
 	}
 	if updated == first || updated.index == first.index {
 		t.Fatal("changed graph hash did not rebuild the index")
+	}
+	if cache.reads != 2 {
+		t.Fatalf("changed graph reads = %d, want 2", cache.reads)
 	}
 	results := updated.index.Search("Bravo", 1)
 	if len(results) != 1 || results[0].Node.Name != "Bravo" {

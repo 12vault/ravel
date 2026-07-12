@@ -35,7 +35,7 @@ import (
 	"github.com/12ya/reporavel/internal/workflow"
 )
 
-var Version = "v0.1.1"
+var Version = "v0.2.0"
 
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return ExecuteIO(ctx, args, os.Stdin, stdout, stderr)
@@ -655,9 +655,10 @@ func runContext(args []string, stdout io.Writer) error {
 	seedLimit := fs.Int("seed-limit", cfg.Retrieval.SeedLimit, "maximum lexical seeds")
 	maxDepth := fs.Int("max-depth", cfg.Retrieval.MaxDepth, "graph traversal depth")
 	maxNodes := fs.Int("max-nodes", cfg.Retrieval.MaxNodes, "hard node limit")
+	branchFanout := fs.Int("branch-fanout", cfg.Retrieval.BranchFanout, "0 for automatic, positive for neighbors expanded per node")
 	hubThreshold := fs.Int("hub-degree-threshold", cfg.Retrieval.HubDegreeThreshold, "0 for automatic, -1 to disable")
 	tokenBudget := fs.Int("token-budget", cfg.Retrieval.TokenBudget, "approximate output-token budget")
-	valueFlags := []string{"config", "out", "traversal", "direction", "relations", "seed-limit", "max-depth", "max-nodes", "hub-degree-threshold", "token-budget"}
+	valueFlags := []string{"config", "out", "traversal", "direction", "relations", "seed-limit", "max-depth", "max-nodes", "branch-fanout", "hub-degree-threshold", "token-budget"}
 	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
 		return err
 	}
@@ -680,7 +681,7 @@ func runContext(args []string, stdout io.Writer) error {
 	result, err := query.NewIndex(g).Retrieve(strings.Join(fs.Args(), " "), query.RetrieveOptions{
 		Traversal: query.Traversal(strings.ToLower(*traversal)), Direction: query.Direction(strings.ToLower(*direction)),
 		Relations: edgeKinds, DisableRelationInference: !*inferRelations, SeedLimit: *seedLimit,
-		MaxDepth: *maxDepth, MaxNodes: *maxNodes, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
+		MaxDepth: *maxDepth, MaxNodes: *maxNodes, BranchFanout: *branchFanout, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
 	})
 	if err != nil {
 		return err
@@ -693,11 +694,12 @@ func runAffected(args []string, stdout io.Writer) error {
 	outDir := fs.String("out", ".reporavel", "graph directory")
 	jsonOut := fs.Bool("json", false, "write JSON")
 	relations := fs.String("relations", "", "comma-separated edge kinds")
-	maxDepth := fs.Int("max-depth", 2, "incoming traversal depth")
+	maxDepth := fs.Int("max-depth", 2, "impact traversal depth")
 	maxNodes := fs.Int("max-nodes", 100, "hard node limit")
+	branchFanout := fs.Int("branch-fanout", 0, "0 for automatic, positive for neighbors expanded per node")
 	hubThreshold := fs.Int("hub-degree-threshold", 0, "0 for automatic, -1 to disable")
 	tokenBudget := fs.Int("token-budget", 2000, "approximate output-token budget")
-	valueFlags := []string{"out", "relations", "max-depth", "max-nodes", "hub-degree-threshold", "token-budget"}
+	valueFlags := []string{"out", "relations", "max-depth", "max-nodes", "branch-fanout", "hub-degree-threshold", "token-budget"}
 	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
 		return err
 	}
@@ -715,7 +717,7 @@ func runAffected(args []string, stdout io.Writer) error {
 		}
 	}
 	result, err := query.NewIndex(g).Affected(strings.Join(fs.Args(), " "), query.RetrieveOptions{
-		Relations: edgeKinds, MaxDepth: *maxDepth, MaxNodes: *maxNodes,
+		Relations: edgeKinds, MaxDepth: *maxDepth, MaxNodes: *maxNodes, BranchFanout: *branchFanout,
 		HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
 	})
 	if err != nil {
@@ -738,9 +740,9 @@ func runExplain(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	ex, ok := query.Explain(g, strings.Join(fs.Args(), " "))
-	if !ok {
-		return errors.New("target not found")
+	ex, err := query.NewIndex(g).ExplainResolved(strings.Join(fs.Args(), " "))
+	if err != nil {
+		return err
 	}
 	return query.WriteExplanation(stdout, ex, *jsonOut)
 }
@@ -759,12 +761,15 @@ func runPath(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	nodes, ok := query.ShortestPath(g, fs.Arg(0), fs.Arg(1))
+	result, ok, err := query.NewIndex(g).ShortestPathResult(fs.Arg(0), fs.Arg(1))
+	if err != nil {
+		return err
+	}
 	if !ok {
 		fmt.Fprintln(stdout, "No path found.")
 		return nil
 	}
-	return query.WritePath(stdout, nodes, *jsonOut)
+	return query.WritePathResult(stdout, result, *jsonOut)
 }
 
 func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
@@ -917,12 +922,13 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	inferRelations := fs.Bool("infer-relations", cfg.Retrieval.InferRelations, "infer relation filters from each question")
 	seedLimit := fs.Int("seed-limit", cfg.Retrieval.SeedLimit, "maximum lexical seeds")
 	maxDepth := fs.Int("max-depth", cfg.Retrieval.MaxDepth, "graph traversal depth")
+	branchFanout := fs.Int("branch-fanout", cfg.Retrieval.BranchFanout, "0 for automatic, positive for neighbors expanded per node")
 	hubThreshold := fs.Int("hub-degree-threshold", cfg.Retrieval.HubDegreeThreshold, "0 for automatic, -1 to disable")
 	tokenBudget := fs.Int("token-budget", cfg.Retrieval.TokenBudget, "approximate output-token budget")
 	datasetRevision := fs.String("dataset-revision", "unspecified", "dataset revision or commit")
 	graphRevision := fs.String("graph-revision", "unspecified", "source revision used to build the graph")
 	adapterVersion := fs.String("adapter-version", "graph-query-jsonl-v2", "dataset adapter version")
-	valueFlags := []string{"config", "graph", "dataset", "answers", "out", "top-k", "retriever", "traversal", "direction", "relations", "seed-limit", "max-depth", "hub-degree-threshold", "token-budget", "dataset-revision", "graph-revision", "adapter-version"}
+	valueFlags := []string{"config", "graph", "dataset", "answers", "out", "top-k", "retriever", "traversal", "direction", "relations", "seed-limit", "max-depth", "branch-fanout", "hub-degree-threshold", "token-budget", "dataset-revision", "graph-revision", "adapter-version"}
 	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
 		return err
 	}
@@ -936,11 +942,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cases, err := evaluation.LoadJSONL(*dataset)
-	if err != nil {
-		return err
-	}
-	datasetHash, err := evaluation.DatasetHash(*dataset)
+	cases, datasetHash, err := evaluation.LoadJSONLWithHash(*dataset)
 	if err != nil {
 		return err
 	}
@@ -958,7 +960,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 		Retriever: strings.ToLower(*retriever), TopK: *topK,
 		Retrieval: query.RetrieveOptions{
 			Traversal: query.Traversal(strings.ToLower(*traversal)), Direction: query.Direction(strings.ToLower(*direction)),
-			Relations: edgeKinds, SeedLimit: *seedLimit, MaxDepth: *maxDepth, MaxNodes: *topK,
+			Relations: edgeKinds, SeedLimit: *seedLimit, MaxDepth: *maxDepth, MaxNodes: *topK, BranchFanout: *branchFanout,
 			DisableRelationInference: !*inferRelations, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
 		},
 		RavelVersion: Version, DatasetRevision: *datasetRevision, DatasetSHA256: datasetHash, AdapterVersion: *adapterVersion,
@@ -1180,7 +1182,7 @@ func commandUsage(w io.Writer, command string) error {
 		"share":       "ravel share [--from <dir>] [--out ravel-graph]",
 		"report":      "ravel report [--out <dir>]",
 		"query":       "ravel query [--out <dir>] [--limit 25] [--json] <text>",
-		"affected":    "ravel affected [--out <dir>] [--json] [--max-depth 2] [--relations <kinds>] <file-or-symbol>",
+		"affected":    "ravel affected [--out <dir>] [--json] [--max-depth 2] [--branch-fanout 0] [--relations <kinds>] <file-or-symbol>",
 		"explain":     "ravel explain [--out <dir>] [--json] <file-or-symbol>",
 		"path":        "ravel path [--out <dir>] [--json] <from> <to>",
 		"mcp":         "ravel mcp [--out <graphdir>]",
@@ -1195,11 +1197,11 @@ func commandUsage(w io.Writer, command string) error {
 	switch command {
 	case "context":
 		fmt.Fprintln(w, "Usage: ravel context [options] <question>")
-		fmt.Fprintln(w, "Options: --config --out --json --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --hub-degree-threshold --token-budget")
+		fmt.Fprintln(w, "Options: --config --out --json --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --branch-fanout --hub-degree-threshold --token-budget")
 		return nil
 	case "benchmark":
 		fmt.Fprintln(w, "Usage: ravel benchmark --dataset <cases.jsonl> [options]")
-		fmt.Fprintln(w, "Options: --config --graph --answers --out --retriever --top-k --traversal --direction --relations --infer-relations --seed-limit --max-depth --hub-degree-threshold --token-budget --dataset-revision --graph-revision --adapter-version")
+		fmt.Fprintln(w, "Options: --config --graph --answers --out --retriever --top-k --traversal --direction --relations --infer-relations --seed-limit --max-depth --branch-fanout --hub-degree-threshold --token-budget --dataset-revision --graph-revision --adapter-version")
 		return nil
 	}
 	line, ok := lines[command]
@@ -1235,8 +1237,8 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel share [--out ravel-graph]")
 	fmt.Fprintln(w, "  ravel report")
 	fmt.Fprintln(w, "  ravel query [--json] <text>")
-	fmt.Fprintln(w, "  ravel context [--json] [--token-budget 2000] [--max-depth 2] <question>")
-	fmt.Fprintln(w, "  ravel affected [--json] [--max-depth 2] [--relations calls,references] <file-or-symbol>")
+	fmt.Fprintln(w, "  ravel context [--json] [--token-budget 2000] [--max-depth 2] [--branch-fanout 0] <question>")
+	fmt.Fprintln(w, "  ravel affected [--json] [--max-depth 2] [--branch-fanout 0] [--relations calls,references] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel explain [--json] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel path [--json] <from> <to>")
 	fmt.Fprintln(w, "  ravel mcp [--out <graphdir>]")

@@ -66,12 +66,13 @@ func toolDefinitions() []toolDefinition {
 			InputSchema: objectSchema(map[string]any{
 				"question":             stringSchema("Natural-language relationship question", 1, maximumToolTextBytes),
 				"traversal":            enumSchema("Traversal strategy", "bfs", "dfs"),
-				"direction":            enumSchema("Relationship direction", "out", "in", "both"),
+				"direction":            enumSchema("Relationship direction", "both", "out", "in"),
 				"relations":            arrayStringSchema("Exact edge-kind filters", 32, 80),
 				"infer_relations":      booleanSchema("Infer edge-kind filters from the question", true),
 				"seed_limit":           integerSchema("Maximum lexical seeds", 1, 20, 3),
 				"max_depth":            integerSchema("Traversal depth", 1, 8, 2),
 				"max_nodes":            integerSchema("Hard node limit", 1, 10_000, 100),
+				"branch_fanout":        integerSchema("0 for automatic; positive values override neighbors expanded per node", 0, 10_000, 0),
 				"hub_degree_threshold": integerMinimumSchema("Hub suppression threshold; -1 disables", -1, 0),
 				"token_budget":         integerSchema("Approximate output-token budget", minimumTokenBudget, maximumTokenBudget, defaultToolTokenBudget),
 			}, "question"),
@@ -89,7 +90,7 @@ func toolDefinitions() []toolDefinition {
 		},
 		{
 			Name:        "path",
-			Description: "Find the shortest directed graph path, with an undirected fallback.",
+			Description: "Find the shortest directed graph path; if only undirected connectivity exists, label every fallback hop and original edge orientation explicitly.",
 			InputSchema: objectSchema(map[string]any{
 				"from":         stringSchema("Starting file, symbol, or node ID", 1, maximumToolTextBytes),
 				"to":           stringSchema("Destination file, symbol, or node ID", 1, maximumToolTextBytes),
@@ -99,12 +100,13 @@ func toolDefinitions() []toolDefinition {
 		},
 		{
 			Name:        "affected",
-			Description: "Find incoming dependents likely affected by changing a target.",
+			Description: "Find graph dependents likely affected by changing a target.",
 			InputSchema: objectSchema(map[string]any{
 				"target":               stringSchema("Changed file, symbol, or node ID", 1, maximumToolTextBytes),
 				"relations":            arrayStringSchema("Optional exact edge-kind filters", 32, 80),
-				"max_depth":            integerSchema("Incoming traversal depth", 1, 8, 2),
+				"max_depth":            integerSchema("Impact traversal depth", 1, 8, 2),
 				"max_nodes":            integerSchema("Hard node limit", 1, 10_000, 100),
+				"branch_fanout":        integerSchema("0 for automatic; positive values override neighbors expanded per node", 0, 10_000, 0),
 				"hub_degree_threshold": integerMinimumSchema("Hub suppression threshold; -1 disables", -1, 0),
 				"token_budget":         integerSchema("Approximate output-token budget", minimumTokenBudget, maximumTokenBudget, defaultToolTokenBudget),
 			}, "target"),
@@ -210,7 +212,7 @@ func (s *server) queryTool(raw json.RawMessage) (string, *toolExecutionError) {
 }
 
 func (s *server) contextTool(raw json.RawMessage) (string, *toolExecutionError) {
-	allowed := []string{"question", "traversal", "direction", "relations", "infer_relations", "seed_limit", "max_depth", "max_nodes", "hub_degree_threshold", "token_budget"}
+	allowed := []string{"question", "traversal", "direction", "relations", "infer_relations", "seed_limit", "max_depth", "max_nodes", "branch_fanout", "hub_degree_threshold", "token_budget"}
 	args, err := decodeArguments(raw, allowed...)
 	if err != nil {
 		return "", invalidArguments(err)
@@ -259,9 +261,9 @@ func (s *server) explainTool(raw json.RawMessage) (string, *toolExecutionError) 
 	if loadErr != nil {
 		return "", graphUnavailable(loadErr)
 	}
-	explanation, ok := snapshot.index.Explain(target)
-	if !ok {
-		return "", &toolExecutionError{Code: "target_not_found", Message: fmt.Sprintf("target %q was not found", target)}
+	explanation, resolveErr := snapshot.index.ExplainResolved(target)
+	if resolveErr != nil {
+		return "", targetToolError(resolveErr)
 	}
 	limited, omitted := limitExplanation(explanation, maxRelations)
 	var output bytes.Buffer
@@ -295,24 +297,21 @@ func (s *server) pathTool(raw json.RawMessage) (string, *toolExecutionError) {
 	if loadErr != nil {
 		return "", graphUnavailable(loadErr)
 	}
-	if _, ok := snapshot.index.FindBest(from); !ok {
-		return "", &toolExecutionError{Code: "target_not_found", Message: fmt.Sprintf("path start %q was not found", from)}
+	result, ok, pathErr := snapshot.index.ShortestPathResult(from, to)
+	if pathErr != nil {
+		return "", targetToolError(pathErr)
 	}
-	if _, ok := snapshot.index.FindBest(to); !ok {
-		return "", &toolExecutionError{Code: "target_not_found", Message: fmt.Sprintf("path destination %q was not found", to)}
-	}
-	nodes, ok := snapshot.index.ShortestPath(from, to)
 	var output bytes.Buffer
 	if !ok {
 		output.WriteString("No path found.\n")
-	} else if err := query.WritePath(&output, nodes, false); err != nil {
+	} else if err := query.WritePathResult(&output, result, false); err != nil {
 		return "", internalToolError(err)
 	}
 	return boundText(output.String(), budget), nil
 }
 
 func (s *server) affectedTool(raw json.RawMessage) (string, *toolExecutionError) {
-	allowed := []string{"target", "relations", "max_depth", "max_nodes", "hub_degree_threshold", "token_budget"}
+	allowed := []string{"target", "relations", "max_depth", "max_nodes", "branch_fanout", "hub_degree_threshold", "token_budget"}
 	args, err := decodeArguments(raw, allowed...)
 	if err != nil {
 		return "", invalidArguments(err)
@@ -331,13 +330,24 @@ func (s *server) affectedTool(raw json.RawMessage) (string, *toolExecutionError)
 	}
 	result, retrieveErr := snapshot.index.Affected(target, options)
 	if retrieveErr != nil {
-		return "", &toolExecutionError{Code: "target_not_found", Message: oneLine(retrieveErr.Error())}
+		if query.IsTargetError(retrieveErr, query.TargetAmbiguous) || query.IsTargetError(retrieveErr, query.TargetNotFound) {
+			return "", targetToolError(retrieveErr)
+		}
+		return "", invalidArguments(retrieveErr)
 	}
 	var output bytes.Buffer
 	if err := query.WriteAffected(&output, result, false); err != nil {
 		return "", internalToolError(err)
 	}
 	return boundText(output.String(), budget), nil
+}
+
+func targetToolError(err error) *toolExecutionError {
+	code := "target_not_found"
+	if query.IsTargetError(err, query.TargetAmbiguous) {
+		code = "target_ambiguous"
+	}
+	return &toolExecutionError{Code: code, Message: oneLine(err.Error())}
 }
 
 func retrievalOptions(args map[string]json.RawMessage, defaultDirection query.Direction, affected bool) (query.RetrieveOptions, int, error) {
@@ -361,6 +371,10 @@ func retrievalOptions(args map[string]json.RawMessage, defaultDirection query.Di
 	if err != nil {
 		return query.RetrieveOptions{}, 0, err
 	}
+	branchFanout, err := optionalInt(args, "branch_fanout", 0, 0, 10_000)
+	if err != nil {
+		return query.RetrieveOptions{}, 0, err
+	}
 	hubThreshold, err := optionalIntMinimum(args, "hub_degree_threshold", 0, -1)
 	if err != nil {
 		return query.RetrieveOptions{}, 0, err
@@ -380,7 +394,7 @@ func retrievalOptions(args map[string]json.RawMessage, defaultDirection query.Di
 	return query.RetrieveOptions{
 		Traversal: query.Traversal(traversal), Direction: query.Direction(direction), Relations: relations,
 		DisableRelationInference: !inferRelations, SeedLimit: seedLimit, MaxDepth: maxDepth,
-		MaxNodes: maxNodes, HubDegreeThreshold: hubThreshold, TokenBudget: budget,
+		MaxNodes: maxNodes, BranchFanout: branchFanout, HubDegreeThreshold: hubThreshold, TokenBudget: budget,
 	}, budget, nil
 }
 
@@ -420,8 +434,8 @@ func requiredString(args map[string]json.RawMessage, name string) (string, error
 	if value == "" {
 		return "", fmt.Errorf("%s must not be empty", name)
 	}
-	if len(value) > maximumToolTextBytes {
-		return "", fmt.Errorf("%s must be at most %d bytes", name, maximumToolTextBytes)
+	if utf8.RuneCountInString(value) > maximumToolTextBytes {
+		return "", fmt.Errorf("%s must be at most %d characters", name, maximumToolTextBytes)
 	}
 	return value, nil
 }
@@ -442,6 +456,9 @@ func optionalIntMinimum(args map[string]json.RawMessage, name string, fallback, 
 	if !ok {
 		return fallback, nil
 	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, fmt.Errorf("%s must be an integer", name)
+	}
 	var value int
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return 0, fmt.Errorf("%s must be an integer", name)
@@ -456,6 +473,9 @@ func optionalBool(args map[string]json.RawMessage, name string, fallback bool) (
 	raw, ok := args[name]
 	if !ok {
 		return fallback, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return false, fmt.Errorf("%s must be a boolean", name)
 	}
 	var value bool
 	if err := json.Unmarshal(raw, &value); err != nil {
@@ -487,6 +507,9 @@ func optionalRelations(args map[string]json.RawMessage) ([]graph.EdgeKind, error
 	if !ok {
 		return nil, nil
 	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("relations must be an array of strings")
+	}
 	var values []string
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, fmt.Errorf("relations must be an array of strings")
@@ -498,8 +521,8 @@ func optionalRelations(args map[string]json.RawMessage) ([]graph.EdgeKind, error
 	result := make([]graph.EdgeKind, 0, len(values))
 	for _, value := range values {
 		value = strings.TrimSpace(value)
-		if value == "" || len(value) > 80 {
-			return nil, fmt.Errorf("each relation must contain between 1 and 80 bytes")
+		if value == "" || utf8.RuneCountInString(value) > 80 {
+			return nil, fmt.Errorf("each relation must contain between 1 and 80 characters")
 		}
 		kind := graph.EdgeKind(value)
 		if seen[kind] {

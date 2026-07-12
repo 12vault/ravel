@@ -13,6 +13,9 @@ import (
 const (
 	defaultMaxMessageBytes = 4 << 20
 	maxHeaderLineBytes     = 8 << 10
+	maxHeaderBytes         = 64 << 10
+	maxHeaderLines         = 100
+	maxBlankLines          = 100
 )
 
 type framingMode uint8
@@ -44,6 +47,7 @@ func newTransport(in io.Reader, out io.Writer, maxBody int) *transport {
 
 func (t *transport) read() ([]byte, error) {
 	if t.mode == framingAuto {
+		blankBytes := 0
 		for {
 			first, err := t.reader.Peek(1)
 			if err != nil {
@@ -51,6 +55,10 @@ func (t *transport) read() ([]byte, error) {
 			}
 			if first[0] == '\r' || first[0] == '\n' {
 				_, _ = t.reader.ReadByte()
+				blankBytes++
+				if blankBytes > maxHeaderBytes {
+					return nil, errors.New("too many blank bytes before MCP message")
+				}
 				continue
 			}
 			if first[0] == '{' || first[0] == '[' || first[0] == ' ' || first[0] == '\t' {
@@ -68,19 +76,22 @@ func (t *transport) read() ([]byte, error) {
 }
 
 func (t *transport) readNewline() ([]byte, error) {
-	for {
-		line, err := t.reader.ReadBytes('\n')
-		if len(line) > t.maxBody+1 {
-			return nil, fmt.Errorf("MCP message exceeds %d bytes", t.maxBody)
+	for blankLines := 0; ; blankLines++ {
+		if blankLines > maxBlankLines {
+			return nil, errors.New("too many blank lines between MCP messages")
 		}
+		line, err := readBoundedLine(t.reader, t.maxBody+1)
 		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, err
+			return nil, fmt.Errorf("read MCP newline message: %w", err)
 		}
 		if errors.Is(err, io.EOF) && len(line) == 0 {
 			return nil, io.EOF
 		}
 		line = bytes.TrimSuffix(line, []byte{'\n'})
 		line = bytes.TrimSuffix(line, []byte{'\r'})
+		if len(line) > t.maxBody {
+			return nil, fmt.Errorf("MCP message exceeds %d bytes", t.maxBody)
+		}
 		if len(bytes.TrimSpace(line)) == 0 {
 			if errors.Is(err, io.EOF) {
 				return nil, io.EOF
@@ -93,17 +104,26 @@ func (t *transport) readNewline() ([]byte, error) {
 
 func (t *transport) readContentLength() ([]byte, error) {
 	contentLength := -1
-	for {
-		line, err := t.reader.ReadString('\n')
-		if len(line) > maxHeaderLineBytes {
-			return nil, fmt.Errorf("MCP header line exceeds %d bytes", maxHeaderLineBytes)
+	headerBytes := 0
+	for lineNumber := 0; ; lineNumber++ {
+		if lineNumber >= maxHeaderLines {
+			return nil, fmt.Errorf("MCP headers exceed %d lines", maxHeaderLines)
+		}
+		lineBytes, err := readBoundedLine(t.reader, maxHeaderLineBytes)
+		headerBytes += len(lineBytes)
+		if headerBytes > maxHeaderBytes {
+			return nil, fmt.Errorf("MCP headers exceed %d bytes", maxHeaderBytes)
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) && line == "" && contentLength < 0 {
+			if errors.Is(err, io.EOF) && len(lineBytes) == 0 && contentLength < 0 {
 				return nil, io.EOF
+			}
+			if !errors.Is(err, io.EOF) {
+				return nil, fmt.Errorf("read MCP header: %w", err)
 			}
 			return nil, io.ErrUnexpectedEOF
 		}
+		line := string(lineBytes)
 		line = strings.TrimSuffix(line, "\n")
 		line = strings.TrimSuffix(line, "\r")
 		if line == "" {
@@ -136,6 +156,25 @@ func (t *transport) readContentLength() ([]byte, error) {
 		return nil, fmt.Errorf("read MCP message body: %w", err)
 	}
 	return body, nil
+}
+
+func readBoundedLine(reader *bufio.Reader, maximum int) ([]byte, error) {
+	result := make([]byte, 0, min(maximum, 4<<10))
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if len(result)+len(fragment) > maximum {
+			return nil, fmt.Errorf("line exceeds %d bytes", maximum)
+		}
+		result = append(result, fragment...)
+		switch {
+		case err == nil:
+			return result, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		default:
+			return result, err
+		}
+	}
 }
 
 func (t *transport) write(body []byte) error {

@@ -65,41 +65,52 @@ func Serve(ctx context.Context, in io.Reader, out io.Writer, options Options) er
 	if in == nil || out == nil {
 		return errors.New("MCP stdin and stdout must not be nil")
 	}
+
 	outDir := strings.TrimSpace(options.OutDir)
 	if outDir == "" {
 		outDir = ".reporavel"
 	}
+
 	version := strings.TrimSpace(options.Version)
 	if version == "" {
 		version = "dev"
 	}
+
 	s := &server{graphs: newGraphCache(outDir), version: version}
 	transport := newTransport(in, out, options.MaxMessageBytes)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
+
 		body, err := transport.read()
+
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
+
 		if err != nil {
 			_ = writeResponse(transport, errorResponse(nil, -32700, "Parse error", map[string]any{"detail": oneLine(err.Error())}))
 			return fmt.Errorf("read MCP frame: %w", err)
 		}
+
 		request, requestError := decodeRequest(body)
+
 		if requestError != nil {
 			if err := writeResponse(transport, requestError); err != nil {
 				return err
 			}
 			continue
 		}
+
 		result := s.handle(request)
 		if result == nil {
 			continue
 		}
+
 		if err := writeResponse(transport, result); err != nil {
 			return err
 		}
@@ -163,15 +174,18 @@ func (s *server) handle(request *request) *response {
 		s.handleNotification(request)
 		return nil
 	}
+
 	switch request.method {
 	case "ping":
 		return successResponse(request.id, map[string]any{})
 	case "initialize":
 		return s.initialize(request)
 	}
+
 	if !s.initialized {
 		return errorResponse(request.id, -32002, "Server not initialized", nil)
 	}
+
 	switch request.method {
 	case "tools/list":
 		return s.listTools(request)
@@ -205,14 +219,18 @@ func (s *server) initialize(request *request) *response {
 			Version string `json:"version"`
 		} `json:"clientInfo"`
 	}
+
 	if len(request.params) == 0 || json.Unmarshal(request.params, &params) != nil || strings.TrimSpace(params.ProtocolVersion) == "" || params.Capabilities == nil || strings.TrimSpace(params.ClientInfo.Name) == "" || strings.TrimSpace(params.ClientInfo.Version) == "" {
 		return errorResponse(request.id, -32602, "Invalid params", map[string]any{"detail": "initialize requires protocolVersion, capabilities, and clientInfo name/version"})
 	}
+
 	protocolVersion := latestProtocolVersion
 	if supportedProtocolVersions[params.ProtocolVersion] {
 		protocolVersion = params.ProtocolVersion
 	}
+
 	s.initialized = true
+
 	return successResponse(request.id, map[string]any{
 		"protocolVersion": protocolVersion,
 		"capabilities": map[string]any{
@@ -246,13 +264,16 @@ func (s *server) invokeTool(request *request) *response {
 	if err != nil {
 		return errorResponse(request.id, -32602, "Invalid params", map[string]any{"detail": oneLine(err.Error())})
 	}
+
 	name, err := requiredString(params, "name")
 	if err != nil {
 		return errorResponse(request.id, -32602, "Invalid params", map[string]any{"detail": oneLine(err.Error())})
 	}
+
 	if !knownTool(name) {
 		return errorResponse(request.id, -32602, "Unknown tool", map[string]any{"tool": name, "available": toolNames()})
 	}
+
 	return successResponse(request.id, s.callTool(name, params["arguments"]))
 }
 
@@ -280,5 +301,6 @@ func responseID(id json.RawMessage) json.RawMessage {
 	if len(id) == 0 {
 		return json.RawMessage("null")
 	}
+
 	return append(json.RawMessage(nil), id...)
 }

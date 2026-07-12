@@ -46,6 +46,9 @@ func TestExecutePrintsDiscoverableSubcommandHelp(t *testing.T) {
 		if args[0] != "benchmark" && !strings.Contains(stdout.String(), "--infer-relations") {
 			t.Fatalf("context help omits retrieval controls: %q", stdout.String())
 		}
+		if !strings.Contains(stdout.String(), "--branch-fanout") {
+			t.Fatalf("retrieval help omits branch fanout: %q", stdout.String())
+		}
 	}
 }
 
@@ -86,7 +89,7 @@ func TestExecuteContextReturnsConnectedBudgetedGraph(t *testing.T) {
 	}
 
 	stdout.Reset()
-	err = Execute(context.Background(), []string{"context", "checkout calls", "--out", out, "--json", "--token-budget", "256"}, &stdout, &stderr)
+	err = Execute(context.Background(), []string{"context", "checkout calls", "--out", out, "--json", "--branch-fanout", "7", "--token-budget", "256"}, &stdout, &stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +97,7 @@ func TestExecuteContextReturnsConnectedBudgetedGraph(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("JSON output: %v\n%s", err, stdout.String())
 	}
-	if len(result.Nodes) < 2 || len(result.Edges) != 1 || result.Stats.TokenBudget != 256 {
+	if len(result.Nodes) < 2 || len(result.Edges) != 1 || result.Stats.TokenBudget != 256 || result.Stats.BranchFanout != 7 {
 		t.Fatalf("retrieval = %#v", result)
 	}
 }
@@ -130,6 +133,7 @@ func TestExecuteBenchmarkUsesSharedRetrievalConfig(t *testing.T) {
   seedLimit: 2
   maxDepth: 3
   maxNodes: 7
+  branchFanout: 9
   hubDegreeThreshold: -1
   tokenBudget: 512
 `
@@ -147,7 +151,7 @@ func TestExecuteBenchmarkUsesSharedRetrievalConfig(t *testing.T) {
 		t.Fatalf("benchmark JSON: %v\n%s", err, stdout.String())
 	}
 	options := report.RetrievalOptions
-	if report.TopK != 7 || options.MaxNodes != 7 || options.Traversal != query.TraversalDFS || options.Direction != query.DirectionIn || !options.DisableRelationInference || options.TokenBudget != 512 || report.GraphSHA256 == "" || report.GraphRevision != "unspecified" {
+	if report.TopK != 7 || options.MaxNodes != 7 || options.BranchFanout != 9 || options.Traversal != query.TraversalDFS || options.Direction != query.DirectionIn || !options.DisableRelationInference || options.TokenBudget != 512 || report.GraphSHA256 == "" || report.GraphRevision != "unspecified" {
 		t.Fatalf("benchmark config not propagated: report = %#v", report)
 	}
 }

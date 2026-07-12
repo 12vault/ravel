@@ -73,6 +73,28 @@ func TestContentLengthTransportRejectsInvalidFrames(t *testing.T) {
 	}
 }
 
+func TestTransportBoundsLinesBeforeDelimiter(t *testing.T) {
+	newline := newTransport(strings.NewReader("{"+strings.Repeat("x", 256)), io.Discard, 100)
+	if _, err := newline.read(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized newline error = %v", err)
+	}
+
+	header := newTransport(strings.NewReader("X-Long: "+strings.Repeat("x", maxHeaderLineBytes+1)), io.Discard, 100)
+	if _, err := header.read(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversized header error = %v", err)
+	}
+
+	var manyHeaders strings.Builder
+	for i := 0; i < maxHeaderLines+1; i++ {
+		manyHeaders.WriteString("X: y\r\n")
+	}
+	manyHeaders.WriteString("\r\n")
+	transport := newTransport(strings.NewReader(manyHeaders.String()), io.Discard, 100)
+	if _, err := transport.read(); err == nil || !strings.Contains(err.Error(), "headers exceed") {
+		t.Fatalf("too many headers error = %v", err)
+	}
+}
+
 func contentLengthFrame(body []byte) []byte {
 	header := fmt.Sprintf("Content-Length: %d\r\nContent-Type: application/json\r\n\r\n", len(body))
 	return append([]byte(header), body...)

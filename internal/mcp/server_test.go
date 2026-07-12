@@ -105,7 +105,7 @@ func TestServeContentLengthLifecycleAndAllTools(t *testing.T) {
 	}{
 		{0, []string{"Checkout"}},
 		{1, []string{"RAVEL_CONTEXT", "Checkout", "ChargeCard"}},
-		{2, []string{"Checkout", "Outgoing relationships"}},
+		{2, []string{"Checkout", "Outgoing relationships", "function://charge", "confidence=inferred", `evidence="checkout.go:12"`, "resolved=true"}},
 		{3, []string{"Checkout", "ChargeCard", "->"}},
 		{4, []string{"RAVEL_AFFECTED", "Checkout", "ChargeCard"}},
 	}
