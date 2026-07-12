@@ -409,20 +409,30 @@ func runIngest(args []string, stdout io.Writer) error {
 }
 
 func runDashboard(args []string, stdout io.Writer) error {
+	configPath := flagValue(args, "config", ".reporavel.yaml")
+	cfg, err := loadCommandConfig(args, configPath)
+	if err != nil {
+		return err
+	}
 	fs := newFlagSet("dashboard")
-	outDir := fs.String("out", ".reporavel", "output directory")
-	if err := fs.Parse(flexibleFlags(args, "out")); err != nil {
+	configFlag := fs.String("config", configPath, "configuration file")
+	outDir := fs.String("out", cfg.Output.Dir, "output directory")
+	communities := fs.Bool("communities", cfg.Output.CommunityClustering, "detect and display graph communities")
+	if err := fs.Parse(flexibleFlags(args, "config", "out")); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return errors.New("dashboard does not accept positional arguments")
+	}
+	if *configFlag != configPath {
+		return errors.New("internal config flag parsing mismatch")
 	}
 	g, err := store.LoadGraph(*outDir)
 	if err != nil {
 		return err
 	}
 	path := filepath.Join(*outDir, "graph.html")
-	if err := dashboard.Write(path, g); err != nil {
+	if err := dashboard.WriteWithOptions(path, g, *communities); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Wrote %s\n", path)
@@ -519,7 +529,7 @@ func runBuild(ctx context.Context, args []string, stdout io.Writer) error {
 	if !filepath.IsAbs(out) {
 		out = filepath.Join(result.Scan.Root, out)
 	}
-	md := report.Markdown(result.Graph)
+	md := report.MarkdownConfigured(result.Graph, cfg.Output.CommunityClustering)
 	if err := store.WriteArtifacts(out, result.Graph, result.Scan, md, cfg.Output); err != nil {
 		return err
 	}
@@ -570,7 +580,7 @@ func runUpdate(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	markdown := report.Markdown(result.Build.Graph)
+	markdown := report.MarkdownConfigured(result.Build.Graph, cfg.Output.CommunityClustering)
 	if err := store.WriteArtifacts(out, result.Build.Graph, result.Build.Scan, markdown, cfg.Output); err != nil {
 		return err
 	}
@@ -738,6 +748,7 @@ func runContext(args []string, stdout io.Writer) error {
 	branchFanout := fs.Int("branch-fanout", cfg.Retrieval.BranchFanout, "0 for automatic, positive for neighbors expanded per node")
 	hubThreshold := fs.Int("hub-degree-threshold", cfg.Retrieval.HubDegreeThreshold, "0 for automatic, -1 to disable")
 	tokenBudget := fs.Int("token-budget", cfg.Retrieval.TokenBudget, "approximate output-token budget")
+	communityBoost := fs.Bool("community-boost", cfg.Retrieval.CommunityBoost, "prioritize neighbors in the same detected community")
 	valueFlags := []string{"config", "out", "traversal", "direction", "relations", "seed-limit", "max-depth", "max-nodes", "branch-fanout", "hub-degree-threshold", "token-budget"}
 	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
 		return err
@@ -762,6 +773,7 @@ func runContext(args []string, stdout io.Writer) error {
 		Traversal: query.Traversal(strings.ToLower(*traversal)), Direction: query.Direction(strings.ToLower(*direction)),
 		Relations: edgeKinds, DisableRelationInference: !*inferRelations, SeedLimit: *seedLimit,
 		MaxDepth: *maxDepth, MaxNodes: *maxNodes, BranchFanout: *branchFanout, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
+		CommunityBoost: *communityBoost,
 	})
 	if err != nil {
 		return err
@@ -1005,6 +1017,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	branchFanout := fs.Int("branch-fanout", cfg.Retrieval.BranchFanout, "0 for automatic, positive for neighbors expanded per node")
 	hubThreshold := fs.Int("hub-degree-threshold", cfg.Retrieval.HubDegreeThreshold, "0 for automatic, -1 to disable")
 	tokenBudget := fs.Int("token-budget", cfg.Retrieval.TokenBudget, "approximate output-token budget")
+	communityBoost := fs.Bool("community-boost", cfg.Retrieval.CommunityBoost, "prioritize neighbors in the same detected community")
 	datasetRevision := fs.String("dataset-revision", "unspecified", "dataset revision or commit")
 	graphRevision := fs.String("graph-revision", "unspecified", "source revision used to build the graph")
 	adapterVersion := fs.String("adapter-version", "graph-query-jsonl-v2", "dataset adapter version")
@@ -1042,6 +1055,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 			Traversal: query.Traversal(strings.ToLower(*traversal)), Direction: query.Direction(strings.ToLower(*direction)),
 			Relations: edgeKinds, SeedLimit: *seedLimit, MaxDepth: *maxDepth, MaxNodes: *topK, BranchFanout: *branchFanout,
 			DisableRelationInference: !*inferRelations, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
+			CommunityBoost: *communityBoost,
 		},
 		RavelVersion: Version, DatasetRevision: *datasetRevision, DatasetSHA256: datasetHash, AdapterVersion: *adapterVersion,
 		GraphSHA256: graphHash, GraphRevision: *graphRevision,
@@ -1250,7 +1264,7 @@ func commandUsage(w io.Writer, command string) error {
 		"uninstall":    "ravel uninstall [--platform <name>] [--project]",
 		"hook":         "ravel hook <install|uninstall|status> [root]",
 		"ingest":       "ravel ingest [--out <dir>] <fragment.json>",
-		"dashboard":    "ravel dashboard [--out <dir>]",
+		"dashboard":    "ravel dashboard [--out <dir>] [--communities=false]",
 		"doctor":       "ravel doctor",
 		"tools":        "ravel tools",
 		"extract":      "ravel extract [--json] <audited-doc-or-pdf>...",
@@ -1278,11 +1292,11 @@ func commandUsage(w io.Writer, command string) error {
 	switch command {
 	case "context":
 		fmt.Fprintln(w, "Usage: ravel context [options] <question>")
-		fmt.Fprintln(w, "Options: --config --out --json --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --branch-fanout --hub-degree-threshold --token-budget")
+		fmt.Fprintln(w, "Options: --config --out --json --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --branch-fanout --hub-degree-threshold --token-budget --community-boost")
 		return nil
 	case "benchmark":
 		fmt.Fprintln(w, "Usage: ravel benchmark --dataset <cases.jsonl> [options]")
-		fmt.Fprintln(w, "Options: --config --graph --answers --out --retriever --top-k --traversal --direction --relations --infer-relations --seed-limit --max-depth --branch-fanout --hub-degree-threshold --token-budget --dataset-revision --graph-revision --adapter-version")
+		fmt.Fprintln(w, "Options: --config --graph --answers --out --retriever --top-k --traversal --direction --relations --infer-relations --seed-limit --max-depth --branch-fanout --hub-degree-threshold --token-budget --community-boost --dataset-revision --graph-revision --adapter-version")
 		return nil
 	}
 	line, ok := lines[command]
@@ -1306,7 +1320,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel codex|claude|cursor|vscode|gemini|opencode <install|uninstall>")
 	fmt.Fprintln(w, "  ravel hook <install|uninstall|status> [root]")
 	fmt.Fprintln(w, "  ravel ingest [--out <dir>] <fragment.json>")
-	fmt.Fprintln(w, "  ravel dashboard [--out <dir>]")
+	fmt.Fprintln(w, "  ravel dashboard [--out <dir>] [--communities=false]")
 	fmt.Fprintln(w, "  ravel doctor")
 	fmt.Fprintln(w, "  ravel tools")
 	fmt.Fprintln(w, "  ravel extract [--json] <audited-doc-or-pdf>...")

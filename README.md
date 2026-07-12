@@ -282,7 +282,9 @@ Configure a client to launch the local process with `ravel` as the command and `
 
 Ravel also keeps canonical update state under `.reporavel/.state/`. Disabling JSON output removes the public JSON exports but preserves this internal state so updates and queries continue to work.
 
-`ravel dashboard` additionally creates `graph.html`, a dependency-free local dashboard with search, kind filters, node details, relationship navigation, and automatic community grouping. Ravel assigns stable community IDs from graph structure, stores them in node metadata, and uses them to group and color related nodes without changing query behavior.
+`ravel dashboard` additionally creates `graph.html`, a dependency-free local dashboard with search, kind and community filters, a community legend, node details, and relationship navigation. Ravel assigns stable community IDs, names, and sizes from graph structure, stores them in node metadata, and uses them to group and color related nodes. Clustering is deterministic and runs locally without an LLM.
+
+Community clustering is enabled by default. Set `output.communityClustering: false` to omit generated community metadata and report sections, or run `ravel dashboard --communities=false` for an unclustered dashboard. Normal retrieval remains unchanged. `retrieval.communityBoost: true` or `ravel context --community-boost` enables a conservative same-community tie-breaker; keep it opt-in and compare it against the repository benchmark before adopting it as a default.
 
 Create a reviewable team bundle that omits raw source and private scanner state:
 
@@ -340,7 +342,7 @@ ravel build --no-call-graph .
 ravel update .
 ```
 
-Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json` and `output.markdownReport` switches control which artifacts are written.
+Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json`, `output.markdownReport`, and `output.communityClustering` switches control generated artifacts and metadata.
 
 ### Supported languages
 
@@ -362,6 +364,14 @@ retrieval:
   branchFanout: 0 # automatic; positive values override neighbors expanded per node
   hubDegreeThreshold: 0 # automatic p99 with a floor of 50; -1 disables
   tokenBudget: 2000
+  communityBoost: false # opt-in same-community tie-breaker
+```
+
+Compare community-aware retrieval with the unchanged baseline using the same graph and dataset:
+
+```sh
+ravel benchmark --graph .reporavel --dataset benchmarks/ravel-retrieval.jsonl --out /tmp/baseline.json
+ravel benchmark --graph .reporavel --dataset benchmarks/ravel-retrieval.jsonl --community-boost --out /tmp/community.json
 ```
 
 ## Agent workflow

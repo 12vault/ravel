@@ -188,6 +188,34 @@ func TestExecuteContextRejectsMissingExplicitConfig(t *testing.T) {
 	}
 }
 
+func TestExecuteDashboardHonorsDisabledCommunityConfig(t *testing.T) {
+	root := t.TempDir()
+	graphDir := filepath.Join(root, "graph")
+	if err := os.MkdirAll(graphDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := graph.Graph{Nodes: []graph.Node{{ID: "a", Meta: map[string]string{"community": "stale"}}}}
+	if err := store.WriteJSON(filepath.Join(graphDir, "graph.json"), g); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "ravel.yaml")
+	configData := "output:\n  dir: \"" + graphDir + "\"\n  communityClustering: false\n"
+	if err := os.WriteFile(configPath, []byte(configData), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Execute(context.Background(), []string{"dashboard", "--config", configPath}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(graphDir, "graph.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"community":"`) {
+		t.Fatal("dashboard ignored disabled community config")
+	}
+}
+
 func TestExecuteBenchmarkUsesSharedRetrievalConfig(t *testing.T) {
 	root := t.TempDir()
 	graphDir := filepath.Join(root, "graph")
@@ -213,6 +241,7 @@ func TestExecuteBenchmarkUsesSharedRetrievalConfig(t *testing.T) {
   branchFanout: 9
   hubDegreeThreshold: -1
   tokenBudget: 512
+  communityBoost: true
 `
 	if err := os.WriteFile(configPath, []byte(configData), 0o644); err != nil {
 		t.Fatal(err)
@@ -228,7 +257,7 @@ func TestExecuteBenchmarkUsesSharedRetrievalConfig(t *testing.T) {
 		t.Fatalf("benchmark JSON: %v\n%s", err, stdout.String())
 	}
 	options := report.RetrievalOptions
-	if report.TopK != 7 || options.MaxNodes != 7 || options.BranchFanout != 9 || options.Traversal != query.TraversalDFS || options.Direction != query.DirectionIn || !options.DisableRelationInference || options.TokenBudget != 512 || report.GraphSHA256 == "" || report.GraphRevision != "unspecified" {
+	if report.TopK != 7 || options.MaxNodes != 7 || options.BranchFanout != 9 || options.Traversal != query.TraversalDFS || options.Direction != query.DirectionIn || !options.DisableRelationInference || options.TokenBudget != 512 || !options.CommunityBoost || report.GraphSHA256 == "" || report.GraphRevision != "unspecified" {
 		t.Fatalf("benchmark config not propagated: report = %#v", report)
 	}
 }

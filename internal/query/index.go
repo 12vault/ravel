@@ -28,9 +28,10 @@ const (
 // state out of graph.json while avoiding repeated normalization and adjacency
 // construction for benchmark suites and long-running integrations.
 type Index struct {
-	graph graph.Graph
-	docs  []indexedNode
-	byID  map[string]int
+	graph         graph.Graph
+	docs          []indexedNode
+	byID          map[string]int
+	communityByID map[string]string
 
 	documentFrequency map[string]int
 	trigramPostings   map[string][]int
@@ -83,6 +84,7 @@ func NewIndex(g graph.Graph) *Index {
 	idx := &Index{
 		graph:             g,
 		byID:              make(map[string]int, len(g.Nodes)),
+		communityByID:     make(map[string]string, len(g.Nodes)),
 		documentFrequency: map[string]int{},
 		trigramPostings:   map[string][]int{},
 		edgeKinds:         map[graph.EdgeKind]bool{},
@@ -91,6 +93,9 @@ func NewIndex(g graph.Graph) *Index {
 	for _, node := range g.Nodes {
 		doc := indexNode(node)
 		idx.byID[node.ID] = len(idx.docs)
+		if node.Meta != nil {
+			idx.communityByID[node.ID] = node.Meta["community"]
+		}
 		idx.docs = append(idx.docs, doc)
 		idx.averageLength.name += doc.lengths.name
 		idx.averageLength.path += doc.lengths.path
@@ -448,6 +453,7 @@ func searchableMeta(meta map[string]string) string {
 		"confidence": true, "evidence": true, "rationale": true, "hash": true,
 		"sourcehash": true, "sourcehashes": true, "resolved": true, "line": true,
 		"path": true, "size": true,
+		"community": true, "communitysize": true,
 	}
 	keys := make([]string, 0, len(meta))
 	for key := range meta {

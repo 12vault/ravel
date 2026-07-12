@@ -28,7 +28,11 @@ type ChangesFile struct {
 }
 
 func WriteArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report string, output config.OutputConfig) error {
-	g = community.Assign(g)
+	if output.CommunityClustering {
+		g = community.Assign(g)
+	} else {
+		g = community.Remove(g)
+	}
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}

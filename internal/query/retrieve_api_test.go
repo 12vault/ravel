@@ -448,6 +448,36 @@ func TestRetrieveOutputIsDeterministicAcrossRunsAndGraphOrder(t *testing.T) {
 	}
 }
 
+func TestRetrieveCommunityBoostPrioritizesSameCommunityNeighbors(t *testing.T) {
+	g := graph.Graph{
+		Nodes: []graph.Node{
+			{ID: "seed", Kind: graph.NodeFunction, Name: "Target", Meta: map[string]string{"community": "c-a"}},
+			{ID: "z-inside", Kind: graph.NodeFunction, Name: "Worker", Meta: map[string]string{"community": "c-a"}},
+			{ID: "a-outside", Kind: graph.NodeFunction, Name: "Worker", Meta: map[string]string{"community": "c-b"}},
+		},
+		Edges: []graph.Edge{{ID: "e1", Kind: graph.EdgeCalls, From: "seed", To: "z-inside"}, {ID: "e2", Kind: graph.EdgeCalls, From: "seed", To: "a-outside"}},
+	}
+	options := RetrieveOptions{Direction: DirectionOut, DisableRelationInference: true, SeedLimit: 1, MaxDepth: 1, MaxNodes: 3, TokenBudget: 2_000, BranchFanout: 2}
+	plain, err := Retrieve(g, "Target", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.CommunityBoost = true
+	boosted, err := Retrieve(g, "Target", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plain.Nodes) < 3 || len(boosted.Nodes) < 3 {
+		t.Fatalf("unexpected retrievals: plain=%#v boosted=%#v", plain.Nodes, boosted.Nodes)
+	}
+	if plain.Nodes[1].ID != "a-outside" {
+		t.Fatalf("plain second node = %q, want a-outside", plain.Nodes[1].ID)
+	}
+	if boosted.Nodes[1].ID != "z-inside" || !boosted.Stats.CommunityBoost {
+		t.Fatalf("boosted result = %#v, stats=%#v", boosted.Nodes, boosted.Stats)
+	}
+}
+
 func TestRetrieveBudgetTreatsDiscoveredNodeAndViaEdgeAtomically(t *testing.T) {
 	edge := testQueryEdge(graph.EdgeCalls, "root", "child")
 	edge.Meta = map[string]string{"evidence": strings.Repeat("large edge evidence ", 80)}

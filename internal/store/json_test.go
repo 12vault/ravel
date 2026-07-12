@@ -79,6 +79,26 @@ func TestWriteArtifactsAddsCommunityMetadata(t *testing.T) {
 	}
 }
 
+func TestWriteArtifactsCanDisableCommunityMetadata(t *testing.T) {
+	outDir := t.TempDir()
+	g := graph.Graph{Nodes: []graph.Node{{ID: "file://a", Kind: graph.NodeFile, Name: "a", Meta: map[string]string{"community": "stale", "keep": "yes"}}}}
+	output := config.Default().Output
+	output.CommunityClustering = false
+	if err := WriteArtifacts(outDir, g, scan.Result{}, "# Report\n", output); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := LoadGraph(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stored.Nodes[0].Meta["community"]; ok {
+		t.Fatal("disabled write retained community metadata")
+	}
+	if stored.Nodes[0].Meta["keep"] != "yes" {
+		t.Fatal("disabled write removed unrelated metadata")
+	}
+}
+
 func TestWriteJSONReplacesAtomicallyAndCleansTemporaryFiles(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "graph.json")

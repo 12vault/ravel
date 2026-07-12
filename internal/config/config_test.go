@@ -80,12 +80,13 @@ func TestLoadHonorsRetrievalSettings(t *testing.T) {
   branchFanout: 32
   hubDegreeThreshold: 75
   tokenBudget: 4096
+  communityBoost: true
 `)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := RetrievalConfig{Traversal: "dfs", Direction: "in", InferRelations: false, Relations: "calls,references", SeedLimit: 5, MaxDepth: 4, MaxNodes: 250, BranchFanout: 32, HubDegreeThreshold: 75, TokenBudget: 4096}
+	want := RetrievalConfig{Traversal: "dfs", Direction: "in", InferRelations: false, Relations: "calls,references", SeedLimit: 5, MaxDepth: 4, MaxNodes: 250, BranchFanout: 32, HubDegreeThreshold: 75, TokenBudget: 4096, CommunityBoost: true}
 	if cfg.Retrieval != want {
 		t.Fatalf("Retrieval = %#v, want %#v", cfg.Retrieval, want)
 	}

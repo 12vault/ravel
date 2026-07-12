@@ -5,10 +5,18 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/12vault/ravel/internal/community"
 	"github.com/12vault/ravel/internal/graph"
 )
 
 func Markdown(g graph.Graph) string {
+	return MarkdownConfigured(g, true)
+}
+
+func MarkdownConfigured(g graph.Graph, communities bool) string {
+	if communities {
+		g = community.Assign(g)
+	}
 	var b strings.Builder
 	b.WriteString("# RepoRavel Report\n\n")
 	b.WriteString("## Summary\n")
@@ -22,7 +30,11 @@ func Markdown(g graph.Graph) string {
 	fmt.Fprintf(&b, "- Schema objects: %d tables, %d views, %d indexes\n", g.Metrics.NodesByKind[graph.NodeTable], g.Metrics.NodesByKind[graph.NodeView], g.Metrics.NodesByKind[graph.NodeIndex])
 	fmt.Fprintf(&b, "- Business domains: %d\n", g.Metrics.NodesByKind[graph.NodeDomain])
 	fmt.Fprintf(&b, "- Business flows: %d\n", g.Metrics.NodesByKind[graph.NodeFlow])
-	fmt.Fprintf(&b, "- Edges: %d\n\n", len(g.Edges))
+	fmt.Fprintf(&b, "- Edges: %d\n", len(g.Edges))
+	if communities {
+		fmt.Fprintf(&b, "- Communities: %d\n", len(community.Summaries(g)))
+	}
+	b.WriteString("\n")
 
 	b.WriteString("## Languages\n")
 	if len(g.Metrics.Languages) == 0 {
@@ -36,6 +48,9 @@ func Markdown(g graph.Graph) string {
 
 	writeNodeList(&b, "Entry Points", entryPoints(g), 20)
 	writeNodeList(&b, "Core Packages", corePackages(g), 20)
+	if communities {
+		writeCommunities(&b, g)
+	}
 	writeNodeList(&b, "High Fan-In Symbols", highFan(g, true), 20)
 	writeNodeList(&b, "High Fan-Out Symbols", highFan(g, false), 20)
 	writeNodeList(&b, "Business Domains", nodesOfKind(g, graph.NodeDomain), 20)
@@ -48,6 +63,30 @@ func Markdown(g graph.Graph) string {
 	writeDiagnostics(&b, g)
 	writeReadingOrder(&b, g)
 	return b.String()
+}
+
+func writeCommunities(b *strings.Builder, g graph.Graph) {
+	b.WriteString("## Communities\n")
+	summaries := community.Summaries(g)
+	if len(summaries) == 0 {
+		b.WriteString("- None found\n\n")
+		return
+	}
+	for i, summary := range summaries {
+		if i >= 20 {
+			break
+		}
+		kinds := make([]string, len(summary.TopKinds))
+		for j, kind := range summary.TopKinds {
+			kinds[j] = string(kind)
+		}
+		fmt.Fprintf(b, "- **%s** (`%s`): %d nodes", summary.Name, summary.ID, summary.Size)
+		if len(kinds) > 0 {
+			fmt.Fprintf(b, " · %s", strings.Join(kinds, ", "))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 }
 
 func typeCount(g graph.Graph) int {

@@ -57,6 +57,7 @@ type RetrieveOptions struct {
 	BranchFanout             int              `json:"branchFanout"`
 	HubDegreeThreshold       int              `json:"hubDegreeThreshold"`
 	TokenBudget              int              `json:"tokenBudget"`
+	CommunityBoost           bool             `json:"communityBoost,omitempty"`
 }
 
 type Retrieval struct {
@@ -116,6 +117,7 @@ type RetrievalStats struct {
 	OmittedEdges        int              `json:"omittedEdges,omitempty"`
 	Truncated           bool             `json:"truncated"`
 	TruncatedReason     []string         `json:"truncatedReason,omitempty"`
+	CommunityBoost      bool             `json:"communityBoost,omitempty"`
 }
 
 type normalizedRetrieveOptions struct {
@@ -788,6 +790,14 @@ func (idx *Index) filteredAdjacency(options normalizedRetrieveOptions, scores ma
 			if degree[left.nodeID] != degree[right.nodeID] {
 				return degree[left.nodeID] < degree[right.nodeID]
 			}
+			if options.CommunityBoost {
+				origin := idx.nodeCommunity(nodeID)
+				leftSame := origin != "" && idx.nodeCommunity(left.nodeID) == origin
+				rightSame := origin != "" && idx.nodeCommunity(right.nodeID) == origin
+				if leftSame != rightSame {
+					return leftSame
+				}
+			}
 			if left.nodeID != right.nodeID {
 				return left.nodeID < right.nodeID
 			}
@@ -795,6 +805,10 @@ func (idx *Index) filteredAdjacency(options normalizedRetrieveOptions, scores ma
 		})
 	}
 	return adjacency, degree
+}
+
+func (idx *Index) nodeCommunity(id string) string {
+	return idx.communityByID[id]
 }
 
 func relationPriority(kind graph.EdgeKind) int {
@@ -961,7 +975,8 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		Traversal: options.Traversal, Direction: options.Direction, DirectionPreference: options.directionPreference, Depth: options.MaxDepth,
 		SeedIDs: append([]string(nil), seedIDs...), RelationFilters: append([]graph.EdgeKind(nil), options.Relations...),
 		RelationFilterFrom: options.filterFrom, TokenBudget: options.TokenBudget,
-		HubThreshold: walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed, BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order),
+		CommunityBoost: options.CommunityBoost,
+		HubThreshold:   walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed, BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order),
 	}
 	result := Retrieval{Version: 1, Query: safeTextBytes(question, 256), Stats: stats}
 	if len(walk.order) == 0 {
@@ -1254,6 +1269,9 @@ func retrievalHeader(question string, stats RetrievalStats) string {
 	}
 	if stats.DirectionPreference != "" {
 		parts = append(parts, "preference="+string(stats.DirectionPreference))
+	}
+	if stats.CommunityBoost {
+		parts = append(parts, "community_boost=true")
 	}
 	headerByteBudget := max(96, stats.TokenBudget) // one-third of the token budget at 3 bytes/token
 	base := strings.Join(parts, "\t")

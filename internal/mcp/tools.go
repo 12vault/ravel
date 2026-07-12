@@ -75,6 +75,7 @@ func toolDefinitions() []toolDefinition {
 				"branch_fanout":        integerSchema("0 for automatic; positive values override neighbors expanded per node", 0, 10_000, 0),
 				"hub_degree_threshold": integerMinimumSchema("Hub suppression threshold; -1 disables", -1, 0),
 				"token_budget":         integerSchema("Approximate output-token budget", minimumTokenBudget, maximumTokenBudget, defaultToolTokenBudget),
+				"community_boost":      booleanSchema("Prioritize neighbors in the same detected community", false),
 			}, "question"),
 			Annotations: readOnly,
 		},
@@ -212,7 +213,7 @@ func (s *server) queryTool(raw json.RawMessage) (string, *toolExecutionError) {
 }
 
 func (s *server) contextTool(raw json.RawMessage) (string, *toolExecutionError) {
-	allowed := []string{"question", "traversal", "direction", "relations", "infer_relations", "seed_limit", "max_depth", "max_nodes", "branch_fanout", "hub_degree_threshold", "token_budget"}
+	allowed := []string{"question", "traversal", "direction", "relations", "infer_relations", "seed_limit", "max_depth", "max_nodes", "branch_fanout", "hub_degree_threshold", "token_budget", "community_boost"}
 	args, err := decodeArguments(raw, allowed...)
 	if err != nil {
 		return "", invalidArguments(err)
@@ -391,10 +392,15 @@ func retrievalOptions(args map[string]json.RawMessage, defaultDirection query.Di
 	if err != nil && !affected {
 		return query.RetrieveOptions{}, 0, err
 	}
+	communityBoost, err := optionalBool(args, "community_boost", false)
+	if err != nil && !affected {
+		return query.RetrieveOptions{}, 0, err
+	}
 	return query.RetrieveOptions{
 		Traversal: query.Traversal(traversal), Direction: query.Direction(direction), Relations: relations,
 		DisableRelationInference: !inferRelations, SeedLimit: seedLimit, MaxDepth: maxDepth,
 		MaxNodes: maxNodes, BranchFanout: branchFanout, HubDegreeThreshold: hubThreshold, TokenBudget: budget,
+		CommunityBoost: communityBoost,
 	}, budget, nil
 }
 

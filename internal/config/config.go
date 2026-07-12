@@ -31,10 +31,11 @@ type AnalysisConfig struct {
 }
 
 type OutputConfig struct {
-	Dir            string
-	JSON           bool
-	SQLite         bool
-	MarkdownReport bool
+	Dir                 string
+	JSON                bool
+	SQLite              bool
+	MarkdownReport      bool
+	CommunityClustering bool
 }
 
 type RetrievalConfig struct {
@@ -48,6 +49,7 @@ type RetrievalConfig struct {
 	BranchFanout       int
 	HubDegreeThreshold int
 	TokenBudget        int
+	CommunityBoost     bool
 }
 
 func Default() Config {
@@ -77,12 +79,14 @@ func Default() Config {
 			BranchFanout:       0,
 			HubDegreeThreshold: 0,
 			TokenBudget:        2000,
+			CommunityBoost:     false,
 		},
 		Output: OutputConfig{
-			Dir:            ".reporavel",
-			JSON:           true,
-			SQLite:         false,
-			MarkdownReport: true,
+			Dir:                 ".reporavel",
+			JSON:                true,
+			SQLite:              false,
+			MarkdownReport:      true,
+			CommunityClustering: true,
 		},
 	}
 }
@@ -272,6 +276,12 @@ func applyValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		cfg.Retrieval.TokenBudget = int(parsed)
+	case "retrieval.communityBoost":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Retrieval.CommunityBoost = parsed
 	case "output.dir":
 		cfg.Output.Dir = value
 	case "output.json":
@@ -292,6 +302,12 @@ func applyValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		cfg.Output.MarkdownReport = parsed
+	case "output.communityClustering":
+		parsed, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Output.CommunityClustering = parsed
 	default:
 		return fmt.Errorf("unknown setting %q", key)
 	}
@@ -440,12 +456,14 @@ retrieval:
   branchFanout: 0
   hubDegreeThreshold: 0
   tokenBudget: 2000
+  communityBoost: false
 
 output:
   dir: ".reporavel"
   json: true
   sqlite: false
   markdownReport: true
+  communityClustering: true
 `
 }
 
