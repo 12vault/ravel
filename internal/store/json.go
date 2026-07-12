@@ -1,10 +1,13 @@
 package store
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 
 	"github.com/12ya/reporavel/internal/config"
@@ -76,7 +79,98 @@ func WriteJSON(path string, value any) error {
 		return err
 	}
 	data = append(data, '\n')
-	return os.WriteFile(path, data, 0644)
+	return writeFileAtomic(path, data, 0o644)
+}
+
+func writeFileAtomic(path string, data []byte, mode os.FileMode) (err error) {
+	directory := filepath.Dir(path)
+	preserveMode := false
+	if info, statErr := os.Lstat(path); statErr == nil {
+		// Replacing a symlink must not inherit metadata from, or otherwise
+		// depend on, a target that can live outside the artifact directory.
+		if info.Mode().IsRegular() {
+			mode = info.Mode().Perm()
+			preserveMode = true
+		}
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if !preserveMode {
+		mode, err = creationMode(directory, filepath.Base(path), mode)
+		if err != nil {
+			return err
+		}
+	}
+	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		if temporaryPath != "" {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	written, err := temporary.Write(data)
+	if err != nil {
+		return err
+	}
+	if written != len(data) {
+		return io.ErrShortWrite
+	}
+	// CreateTemp starts private. Keep the in-progress contents private until a
+	// complete payload exists, then apply the final permissions before syncing.
+	if err := temporary.Chmod(mode); err != nil {
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	temporaryPath = ""
+	return syncDirectory(directory)
+}
+
+func creationMode(directory, base string, requested os.FileMode) (os.FileMode, error) {
+	// CreateTemp always starts at 0600. Use an empty probe to let the operating
+	// system apply the process umask to a newly created artifact's requested
+	// mode, without ever exposing the artifact payload through that probe.
+	path := filepath.Join(directory, "."+base+".tmp-mode-"+rand.Text())
+	probe, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, requested)
+	if err != nil {
+		return 0, err
+	}
+	info, statErr := probe.Stat()
+	closeErr := probe.Close()
+	removeErr := os.Remove(path)
+	if statErr != nil {
+		return 0, statErr
+	}
+	if closeErr != nil {
+		return 0, closeErr
+	}
+	if removeErr != nil {
+		return 0, removeErr
+	}
+	return info.Mode().Perm(), nil
+}
+
+func syncDirectory(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil && runtime.GOOS != "windows" {
+		return err
+	}
+	return nil
 }
 
 func LoadGraph(outDir string) (graph.Graph, error) {
