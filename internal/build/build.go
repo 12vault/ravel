@@ -30,6 +30,10 @@ func Run(ctx context.Context, root string, cfg config.Config) (Result, error) {
 }
 
 func RunWithProgress(ctx context.Context, root string, cfg config.Config, progress func(Progress)) (Result, error) {
+	return RunWithCache(ctx, root, cfg, progress, CacheOptions{})
+}
+
+func RunWithCache(ctx context.Context, root string, cfg config.Config, progress func(Progress), cacheOptions CacheOptions) (Result, error) {
 	scanResult, err := scan.ScanWithProgress(root, cfg, func(path string, files int) {
 		if progress != nil {
 			progress(Progress{Stage: "Scanning", Path: path, Completed: files})
@@ -38,6 +42,7 @@ func RunWithProgress(ctx context.Context, root string, cfg config.Config, progre
 	if err != nil {
 		return Result{}, err
 	}
+	cache := newAnalysisCache(scanResult.Root, cacheOptions)
 
 	builder := graph.NewBuilder(scanResult.Root)
 	addFileTopology(builder, scanResult)
@@ -67,26 +72,101 @@ func RunWithProgress(ctx context.Context, root string, cfg config.Config, progre
 			completed += len(files)
 			continue
 		}
-		if progress != nil {
-			progress(Progress{Stage: "Analyzing " + language, Path: files[0].Path, Completed: completed, Total: len(scanResult.Files)})
+		units := analysisUnits(language, files)
+		for _, unit := range units {
+			status := func(cached bool) {
+				if progress == nil {
+					return
+				}
+				stage := "Analyzing " + language
+				if cached {
+					stage = "Cached " + language
+				}
+				progress(Progress{Stage: stage, Path: unit.files[0].Path, Completed: completed, Total: len(scanResult.Files)})
+			}
+			analysis, err := analyzeWithCache(ctx, cache, analyzerIdentity(language, cfg), unit.name, analyzer, scanResult.Root, unit.files, status)
+			if err != nil {
+				return Result{}, err
+			}
+			for _, n := range analysis.Nodes {
+				builder.AddNode(n)
+			}
+			for _, e := range analysis.Edges {
+				builder.AddEdge(e)
+			}
+			for _, d := range analysis.Diagnostics {
+				builder.AddDiagnostic(d)
+			}
+			completed += len(unit.files)
 		}
-		analysis, err := analyzer.Analyze(ctx, scanResult.Root, files)
-		if err != nil {
-			return Result{}, err
-		}
-		for _, n := range analysis.Nodes {
-			builder.AddNode(n)
-		}
-		for _, e := range analysis.Edges {
-			builder.AddEdge(e)
-		}
-		for _, d := range analysis.Diagnostics {
-			builder.AddDiagnostic(d)
-		}
-		completed += len(files)
 	}
 
+	if cache != nil {
+		cache.prune()
+	}
 	return Result{Scan: scanResult, Graph: builder.Build()}, nil
+}
+
+type analysisUnit struct {
+	name  string
+	files []scan.File
+}
+
+func analysisUnits(language string, files []scan.File) []analysisUnit {
+	if language != "markdown" {
+		return []analysisUnit{{name: "language:" + language, files: files}}
+	}
+	units := make([]analysisUnit, 0, len(files))
+	for _, file := range files {
+		units = append(units, analysisUnit{name: "markdown:" + file.Path, files: []scan.File{file}})
+	}
+	return units
+}
+
+func analyzerIdentity(language string, cfg config.Config) string {
+	switch language {
+	case "go":
+		return "go;callGraph=" + boolString(cfg.Analysis.CallGraph) + ";typeResolution=" + boolString(cfg.Analysis.TypeResolution)
+	case "markdown", "sql":
+		return "content:" + language
+	default:
+		return "tree-sitter:" + language
+	}
+}
+
+func boolString(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+func analyzeWithCache(ctx context.Context, cache *analysisCache, identity, unit string, analyzer lang.Analyzer, root string, files []scan.File, status func(cached bool)) (*lang.AnalysisResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if cache != nil {
+		key, err := cache.key(identity, files)
+		if err != nil {
+			return nil, err
+		}
+		if result, ok := cache.load(unit, key); ok {
+			status(true)
+			return result, nil
+		}
+		status(false)
+		result, err := analyzer.Analyze(ctx, root, files)
+		if err != nil {
+			return nil, err
+		}
+		// Cache failures never make a valid analysis fail; the next build simply
+		// analyzes the unit again.
+		_ = cache.save(unit, key, result)
+		return result, nil
+	}
+	status(false)
+	result, err := analyzer.Analyze(ctx, root, files)
+	return result, err
 }
 
 func addFileTopology(builder *graph.Builder, scanResult scan.Result) {

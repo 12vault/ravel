@@ -64,6 +64,11 @@ func ScanWithProgress(root string, cfg config.Config, visit func(path string, fi
 	if err != nil {
 		return Result{}, err
 	}
+	outputPath := cfg.Output.Dir
+	if !filepath.IsAbs(outputPath) {
+		outputPath = filepath.Join(absRoot, outputPath)
+	}
+	outputPath = filepath.Clean(outputPath)
 
 	err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -79,6 +84,10 @@ func ScanWithProgress(root string, cfg config.Config, visit func(path string, fi
 		relPath := rel(absRoot, path)
 		if visit != nil {
 			visit(filepath.ToSlash(relPath), len(result.Files))
+		}
+		if entry.IsDir() && filepath.Clean(path) == outputPath {
+			result.Ignored = append(result.Ignored, Ignored{Path: relPath + "/", Reason: "configured output directory"})
+			return filepath.SkipDir
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "symbolic link"})

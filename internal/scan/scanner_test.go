@@ -69,6 +69,38 @@ func TestScanDoesNotMistakeSourceDirectoryNamedBuildForGeneratedOutput(t *testin
 	}
 }
 
+func TestScanExcludesConfiguredOutputDirectory(t *testing.T) {
+	root := t.TempDir()
+	output := filepath.Join(root, "custom-ravel-output")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "cached.go"), []byte("package generated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Output.Dir = "custom-ravel-output"
+	result, err := Scan(root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) != 1 || result.Files[0].Path != "main.go" {
+		t.Fatalf("scanned files = %#v, want only main.go", result.Files)
+	}
+	ignoredOutput := false
+	for _, ignored := range result.Ignored {
+		if ignored.Path == "custom-ravel-output/" && ignored.Reason == "configured output directory" {
+			ignoredOutput = true
+		}
+	}
+	if !ignoredOutput {
+		t.Fatalf("configured output directory was not reported as ignored: %#v", result.Ignored)
+	}
+}
+
 func TestScanRejectsSymlinksBeforeReadingTargets(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "outside.go")
 	if err := os.WriteFile(outside, []byte("package leaked\nfunc SecretOutsideRoot() {}\n"), 0o644); err != nil {

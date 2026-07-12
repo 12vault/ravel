@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/12vault/ravel/internal/config"
@@ -84,6 +86,137 @@ func TestRunBuildsAndCanDisablePolyglotGraph(t *testing.T) {
 			t.Fatalf("found semantic node %s with polyglot analysis disabled", node.ID)
 		}
 	}
+}
+
+func TestRunWithCacheReusesAndInvalidatesMarkdownFilesIndependently(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"one.md": "# One\n",
+		"two.md": "# Two\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Default()
+	cfg.Analysis.Go = false
+	cfg.Analysis.Polyglot = false
+	cfg.Analysis.Schemas = false
+	cache := CacheOptions{OutputDir: cfg.Output.Dir, Version: "test-v1"}
+
+	first, firstStages := runCachedBuild(t, root, cfg, cache)
+	if got := countStage(firstStages, "Analyzing markdown"); got != 2 {
+		t.Fatalf("cold analysis stages = %v, want two markdown analyses", firstStages)
+	}
+
+	second, secondStages := runCachedBuild(t, root, cfg, cache)
+	if got := countStage(secondStages, "Cached markdown"); got != 2 {
+		t.Fatalf("warm analysis stages = %v, want two markdown cache hits", secondStages)
+	}
+	if !reflect.DeepEqual(first.Graph.Nodes, second.Graph.Nodes) || !reflect.DeepEqual(first.Graph.Edges, second.Graph.Edges) || !reflect.DeepEqual(first.Graph.Diagnostics, second.Graph.Diagnostics) {
+		t.Fatal("warm cached graph differs from cold graph")
+	}
+
+	if err := os.WriteFile(filepath.Join(root, "one.md"), []byte("# One changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, changedStages := runCachedBuild(t, root, cfg, cache)
+	if got := countStage(changedStages, "Analyzing markdown"); got != 1 {
+		t.Fatalf("changed analysis stages = %v, want one cache miss", changedStages)
+	}
+	if got := countStage(changedStages, "Cached markdown"); got != 1 {
+		t.Fatalf("changed analysis stages = %v, want one cache hit", changedStages)
+	}
+	if err := os.Remove(filepath.Join(root, "two.md")); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = runCachedBuild(t, root, cfg, cache)
+	entries, err := filepath.Glob(filepath.Join(root, cfg.Output.Dir, ".state", "cache", "analysis-v1", "*.json"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("pruned cache entries = %v, err = %v", entries, err)
+	}
+}
+
+func TestRunWithCacheRepairsCorruptEntriesAndInvalidatesVersions(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# Cached\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Analysis.Go = false
+	cfg.Analysis.Polyglot = false
+	cfg.Analysis.Schemas = false
+	cache := CacheOptions{OutputDir: cfg.Output.Dir, Version: "test-v1"}
+	_, _ = runCachedBuild(t, root, cfg, cache)
+
+	entries, err := filepath.Glob(filepath.Join(root, cfg.Output.Dir, ".state", "cache", "analysis-v1", "*.json"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("cache entries = %v, err = %v", entries, err)
+	}
+	if err := os.WriteFile(entries[0], []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, repairedStages := runCachedBuild(t, root, cfg, cache)
+	if countStage(repairedStages, "Analyzing markdown") != 1 {
+		t.Fatalf("corrupt cache stages = %v, want analysis fallback", repairedStages)
+	}
+	if data, err := os.ReadFile(entries[0]); err != nil || !strings.Contains(string(data), `"schema":1`) {
+		t.Fatalf("cache was not repaired: %q, %v", data, err)
+	}
+
+	_, versionStages := runCachedBuild(t, root, cfg, CacheOptions{OutputDir: cfg.Output.Dir, Version: "test-v2"})
+	if countStage(versionStages, "Analyzing markdown") != 1 {
+		t.Fatalf("new-version stages = %v, want cache invalidation", versionStages)
+	}
+}
+
+func TestRunWithCacheInvalidatesGoAnalyzerSettings(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc helper() {}\nfunc main() { helper() }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Analysis.Documents = false
+	cfg.Analysis.Polyglot = false
+	cfg.Analysis.Schemas = false
+	cache := CacheOptions{OutputDir: cfg.Output.Dir, Version: "test-v1"}
+	_, coldStages := runCachedBuild(t, root, cfg, cache)
+	if countStage(coldStages, "Analyzing go") != 1 {
+		t.Fatalf("cold Go stages = %v, want analysis", coldStages)
+	}
+	_, warmStages := runCachedBuild(t, root, cfg, cache)
+	if countStage(warmStages, "Cached go") != 1 {
+		t.Fatalf("warm Go stages = %v, want cache hit", warmStages)
+	}
+	cfg.Analysis.CallGraph = false
+	_, changedStages := runCachedBuild(t, root, cfg, cache)
+	if countStage(changedStages, "Analyzing go") != 1 {
+		t.Fatalf("changed Go settings stages = %v, want invalidation", changedStages)
+	}
+}
+
+func runCachedBuild(t *testing.T, root string, cfg config.Config, cache CacheOptions) (Result, []string) {
+	t.Helper()
+	var stages []string
+	result, err := RunWithCache(context.Background(), root, cfg, func(progress Progress) {
+		if progress.Stage != "Scanning" {
+			stages = append(stages, progress.Stage)
+		}
+	}, cache)
+	if err != nil {
+		t.Fatalf("RunWithCache() error = %v", err)
+	}
+	return result, stages
+}
+
+func countStage(stages []string, want string) int {
+	count := 0
+	for _, stage := range stages {
+		if stage == want {
+			count++
+		}
+	}
+	return count
 }
 
 func hasNode(g graph.Graph, id string) bool {
