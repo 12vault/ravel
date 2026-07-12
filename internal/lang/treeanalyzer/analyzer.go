@@ -104,11 +104,18 @@ type reference struct {
 }
 
 func (a *Analyzer) Analyze(ctx context.Context, _ string, files []scan.File) (*lang.AnalysisResult, error) {
+	return a.AnalyzeWithProgress(ctx, "", files, nil)
+}
+
+func (a *Analyzer) AnalyzeWithProgress(ctx context.Context, _ string, files []scan.File, progress func(path string, completed int)) (*lang.AnalysisResult, error) {
 	result := &lang.AnalysisResult{}
 	parsed := make([]parsedFile, 0, len(files))
-	for _, file := range files {
+	for i, file := range files {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if progress != nil {
+			progress(file.Path, i)
 		}
 		entry := entryForFile(a.language, file.Path)
 		if entry == nil || entry.Language == nil {
@@ -120,6 +127,9 @@ func (a *Analyzer) Analyze(ctx context.Context, _ string, files []scan.File) (*l
 			return nil, err
 		}
 		parsed = append(parsed, pf)
+	}
+	if progress != nil && len(files) > 0 {
+		progress(files[len(files)-1].Path, len(files))
 	}
 
 	emitDefinitions(parsed, result)

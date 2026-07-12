@@ -84,7 +84,12 @@ func RunWithCache(ctx context.Context, root string, cfg config.Config, progress 
 				}
 				progress(Progress{Stage: stage, Path: unit.files[0].Path, Completed: completed, Total: len(scanResult.Files)})
 			}
-			analysis, err := analyzeWithCache(ctx, cache, analyzerIdentity(language, cfg), unit.name, analyzer, scanResult.Root, unit.files, status)
+			fileProgress := func(path string, unitCompleted int) {
+				if progress != nil {
+					progress(Progress{Stage: "Analyzing " + language, Path: path, Completed: completed + unitCompleted, Total: len(scanResult.Files)})
+				}
+			}
+			analysis, err := analyzeWithCache(ctx, cache, analyzerIdentity(language, cfg), unit.name, analyzer, scanResult.Root, unit.files, status, fileProgress)
 			if err != nil {
 				return Result{}, err
 			}
@@ -141,7 +146,7 @@ func boolString(value bool) string {
 	return "false"
 }
 
-func analyzeWithCache(ctx context.Context, cache *analysisCache, identity, unit string, analyzer lang.Analyzer, root string, files []scan.File, status func(cached bool)) (*lang.AnalysisResult, error) {
+func analyzeWithCache(ctx context.Context, cache *analysisCache, identity, unit string, analyzer lang.Analyzer, root string, files []scan.File, status func(cached bool), fileProgress func(path string, completed int)) (*lang.AnalysisResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -155,7 +160,7 @@ func analyzeWithCache(ctx context.Context, cache *analysisCache, identity, unit 
 			return result, nil
 		}
 		status(false)
-		result, err := analyzer.Analyze(ctx, root, files)
+		result, err := analyze(ctx, analyzer, root, files, fileProgress)
 		if err != nil {
 			return nil, err
 		}
@@ -165,8 +170,15 @@ func analyzeWithCache(ctx context.Context, cache *analysisCache, identity, unit 
 		return result, nil
 	}
 	status(false)
-	result, err := analyzer.Analyze(ctx, root, files)
+	result, err := analyze(ctx, analyzer, root, files, fileProgress)
 	return result, err
+}
+
+func analyze(ctx context.Context, analyzer lang.Analyzer, root string, files []scan.File, progress func(path string, completed int)) (*lang.AnalysisResult, error) {
+	if progressive, ok := analyzer.(lang.ProgressAnalyzer); ok {
+		return progressive.AnalyzeWithProgress(ctx, root, files, progress)
+	}
+	return analyzer.Analyze(ctx, root, files)
 }
 
 func addFileTopology(builder *graph.Builder, scanResult scan.Result) {

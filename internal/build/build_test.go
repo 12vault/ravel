@@ -88,6 +88,51 @@ func TestRunBuildsAndCanDisablePolyglotGraph(t *testing.T) {
 	}
 }
 
+func TestRunReportsPerFilePolyglotProgress(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"App.swift", "Feature.swift"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("func run() {}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Default()
+	cfg.Analysis.Go = false
+	cfg.Analysis.Documents = false
+	cfg.Analysis.Schemas = false
+	var events []Progress
+	_, err := RunWithProgress(context.Background(), root, cfg, func(event Progress) {
+		if event.Stage == "Analyzing swift" {
+			events = append(events, event)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) < 3 {
+		t.Fatalf("Swift progress events = %#v, want start, per-file, and completion events", events)
+	}
+	want := []struct {
+		path      string
+		completed int
+	}{
+		{path: "App.swift", completed: 0},
+		{path: "Feature.swift", completed: 1},
+		{path: "Feature.swift", completed: 2},
+	}
+	for _, expected := range want {
+		found := false
+		for _, event := range events {
+			if event.Path == expected.path && event.Completed == expected.completed && event.Total == 2 {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing progress path=%q completed=%d in %#v", expected.path, expected.completed, events)
+		}
+	}
+}
+
 func TestRunWithCacheReusesAndInvalidatesMarkdownFilesIndependently(t *testing.T) {
 	root := t.TempDir()
 	for name, content := range map[string]string{

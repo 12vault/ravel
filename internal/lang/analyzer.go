@@ -18,3 +18,10 @@ type Analyzer interface {
 	Extensions() []string
 	Analyze(ctx context.Context, root string, files []scan.File) (*AnalysisResult, error)
 }
+
+// ProgressAnalyzer reports the file currently being analyzed while preserving
+// a language-wide analysis unit for cross-file relationship resolution.
+type ProgressAnalyzer interface {
+	Analyzer
+	AnalyzeWithProgress(ctx context.Context, root string, files []scan.File, progress func(path string, completed int)) (*AnalysisResult, error)
+}
