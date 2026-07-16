@@ -55,13 +55,14 @@ type indexedNode struct {
 	metaText    string
 	searchText  string
 
-	nameTerms    map[string]int
-	pathTerms    map[string]int
-	packageTerms map[string]int
-	idTerms      map[string]int
-	metaTerms    map[string]int
-	allTerms     map[string]bool
-	lengths      fieldLengths
+	nameTerms     map[string]int
+	nameTermOrder []string
+	pathTerms     map[string]int
+	packageTerms  map[string]int
+	idTerms       map[string]int
+	metaTerms     map[string]int
+	allTerms      map[string]bool
+	lengths       fieldLengths
 }
 
 type fieldLengths struct {
@@ -287,7 +288,7 @@ func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTerm
 		}
 		allNameTermsMatched := true
 		nameWeight := 0.0
-		for term := range doc.nameTerms {
+		for _, term := range doc.nameTermOrder {
 			if !querySet[term] {
 				allNameTermsMatched = false
 				break
@@ -555,6 +556,11 @@ func indexNode(node graph.Node) indexedNode {
 		metaTerms:    termCounts(searchTokens(meta)),
 		allTerms:     map[string]bool{},
 	}
+	doc.nameTermOrder = make([]string, 0, len(doc.nameTerms))
+	for term := range doc.nameTerms {
+		doc.nameTermOrder = append(doc.nameTermOrder, term)
+	}
+	sort.Strings(doc.nameTermOrder)
 	doc.searchText = strings.Join([]string{name, path, packageName, id, meta}, " ")
 	for term := range doc.nameTerms {
 		doc.allTerms[term] = true

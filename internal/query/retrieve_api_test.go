@@ -763,6 +763,32 @@ func TestRetrieveGraphWrapperMatchesReusableIndex(t *testing.T) {
 	}
 }
 
+func TestReusableIndexKeepsCompoundNameTieOrderDeterministic(t *testing.T) {
+	path := "src/provider/Registry.ts"
+	g := graph.Graph{Nodes: []graph.Node{
+		{ID: "call://registry#120", Kind: graph.NodeFunction, Name: "Snapshot Instance Routing Persistence Key", Path: path, StartLine: 120},
+		{ID: "call://registry#125", Kind: graph.NodeFunction, Name: "Snapshot Instance Routing Persistence Key", Path: path, StartLine: 125},
+		{ID: "call://registry#297", Kind: graph.NodeFunction, Name: "Snapshot Instance Routing Persistence Key", Path: path, StartLine: 297},
+	}}
+	idx := NewIndex(g)
+	options := RetrieveOptions{
+		Traversal: TraversalBFS, Direction: DirectionBoth, DisableRelationInference: true,
+		SeedLimit: 20, MaxDepth: 3, MaxNodes: 10_000, BranchFanout: 10_000,
+		TokenBudget: 2_000, CandidateShortlist: true,
+	}
+	question := "find the snapshot instance routing persistence key"
+	want := mustRetrieve(t, idx, question, options)
+	if len(want.Nodes) != 1 || want.Nodes[0].ID != "call://registry#120" {
+		t.Fatalf("first retrieval nodes = %#v, want lexicographically first duplicate", want.Nodes)
+	}
+	for run := 0; run < 100; run++ {
+		got := mustRetrieve(t, idx, question, options)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("run %d changed reusable retrieval\ngot:  %#v\nwant: %#v", run, got, want)
+		}
+	}
+}
+
 func traversalFixture() graph.Graph {
 	return graph.Graph{
 		Nodes: []graph.Node{
