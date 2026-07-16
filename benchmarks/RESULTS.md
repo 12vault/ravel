@@ -2,6 +2,21 @@
 
 This file is the human-readable record of Ravel vs Graphify runs. Raw, machine-readable results live in [`results/`](results/).
 
+## 2026-07-17: T3 Code TypeScript extraction development verification
+
+This Ravel-only working-tree verification reused the pinned, documentation-stripped T3 Code corpus and all 487 questions from the persistent run below. Graphify was not rerun; its archived result is included only as the fixed comparison point. The change adds syntax-backed module-level TypeScript/JavaScript bindings and narrowly recovers valid TypeScript declarations that the embedded grammar represents as `ERROR` nodes. Recovered declarations are marked partial rather than presented as complete parses.
+
+| Measurement | Previous Ravel | Updated Ravel | Archived Graphify |
+| --- | ---: | ---: | ---: |
+| Declaration graph coverage | 334/487 (68.58%) | 478/487 (98.15%) | 451/487 (92.61%) |
+| Exact declaration retrieval | 50/487 (10.27%) | 69/487 (14.17%) | 20/487 (4.11%) |
+| MRR | 0.0406 | 0.0520 | 0.0010 |
+| Graph nodes | 122,193 | 121,925 | 18,455 |
+| Graph edges | 148,724 | 152,324 | 35,998 |
+| Mean payload | 1,892 tokens | 1,893 tokens | 2,158 tokens |
+
+The updated Ravel-only run recorded warm mean/p50/p95/p99/max query times of 2.524/2.235/4.848/6.788/8.607 seconds. These timings were collected later under different machine state and are not a paired latency comparison with the archived runs. A rejected all-local-binding experiment reached 487/487 graph coverage but added about 26,000 nodes without improving the 135 `const`/`let` exact-hit count; it raised their mean/p95/max query latency to 4.256/7.432/16.255 seconds. The production change therefore keeps module declarations and omits function-local temporaries.
+
 ## 2026-07-17: TypeScript on T3 Code, persistent Ravel rerun
 
 Environment: Apple M1 Pro, macOS arm64, 2,000-token budget, Ravel broad retrieval profile, two query workers. The shared corpus is pinned upstream [`pingdotgg/t3code`](https://github.com/pingdotgg/t3code) revision `2a33a18716854b8d07378008cf3101ad999209ae`: 1,952 first-party TypeScript files, 513,548 lines, and 487 documentation-derived exact-declaration questions. Both tools received byte-identical documentation-stripped source.
