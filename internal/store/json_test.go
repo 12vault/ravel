@@ -99,6 +99,48 @@ func TestWriteArtifactsCanDisableCommunityMetadata(t *testing.T) {
 	}
 }
 
+func TestWritePreparedArtifactsPreservesPreparedCommunityMetadata(t *testing.T) {
+	outDir := t.TempDir()
+	g := graph.Graph{Nodes: []graph.Node{{
+		ID:   "file://a",
+		Kind: graph.NodeFile,
+		Name: "a",
+		Meta: map[string]string{"community": "c-prepared", "communityLabel": "Prepared label"},
+	}}}
+	if err := WritePreparedArtifacts(outDir, g, scan.Result{}, "# Report\n", config.Default().Output); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := LoadGraph(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.Nodes[0].Meta["community"]; got != "c-prepared" {
+		t.Fatalf("prepared community = %q, want c-prepared", got)
+	}
+	if got := stored.Nodes[0].Meta["communityLabel"]; got != "Prepared label" {
+		t.Fatalf("prepared label = %q, want Prepared label", got)
+	}
+}
+
+func TestWritePreparedArtifactsReportsRealArtifactProgress(t *testing.T) {
+	outDir := t.TempDir()
+	var events []ArtifactProgress
+	if err := WritePreparedArtifactsWithProgress(outDir, graph.Graph{}, scan.Result{}, "# Report\n", config.Default().Output, func(event ArtifactProgress) {
+		events = append(events, event)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Fatal("no artifact progress events")
+	}
+	if first := events[0]; first.Path != filepath.Join(stateDir, "graph.json") || first.Completed != 0 || first.Total != 6 {
+		t.Fatalf("first artifact progress = %#v", first)
+	}
+	if last := events[len(events)-1]; last.Path != "report.md" || last.Completed != 6 || last.Total != 6 {
+		t.Fatalf("last artifact progress = %#v", last)
+	}
+}
+
 func TestWriteJSONReplacesAtomicallyAndCleansTemporaryFiles(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "graph.json")

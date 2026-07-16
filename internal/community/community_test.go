@@ -32,6 +32,42 @@ func TestAssignFindsSeparateCommunities(t *testing.T) {
 	}
 }
 
+func TestAssignReportsRealGraphAndCommunityProgress(t *testing.T) {
+	g := graph.Graph{
+		Nodes: []graph.Node{{ID: "a"}, {ID: "b"}, {ID: "c"}},
+		Edges: []graph.Edge{{ID: "a-b", From: "a", To: "b", Kind: graph.EdgeCalls}, {ID: "b-c", From: "b", To: "c", Kind: graph.EdgeCalls}},
+	}
+	var events []Progress
+	got := AssignWithProgress(g, DefaultOptions(), func(event Progress) {
+		events = append(events, event)
+	})
+	if len(got.Nodes) != 3 || len(events) == 0 {
+		t.Fatalf("nodes=%d progress=%#v", len(got.Nodes), events)
+	}
+	wants := map[string]struct {
+		total int
+		unit  string
+	}{
+		"Indexing nodes":     {3, "nodes"},
+		"Indexing edges":     {2, "edges"},
+		"Weighting edges":    {2, "edges"},
+		"Naming communities": {1, "communities"},
+		"Communities built":  {1, "communities"},
+	}
+	for stage, want := range wants {
+		found := false
+		for _, event := range events {
+			if event.Stage == stage && event.Completed == want.total && event.Total == want.total && event.Unit == want.unit {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("missing final %q progress in %#v", stage, events)
+		}
+	}
+}
+
 func TestAssignNamesSummarizesAndRemovesCommunities(t *testing.T) {
 	g := graph.Graph{
 		Nodes: []graph.Node{{ID: "a", Kind: graph.NodeFile, Name: "a.go", Path: "internal/query/a.go"}, {ID: "b", Kind: graph.NodeFunction, Name: "Run", Path: "internal/query/a.go"}},

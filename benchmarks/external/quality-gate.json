@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "minimumCases": 18,
+  "minimumMeanRecall": 0.50,
+  "minimumMeanReciprocalRank": 0.45,
+  "minimumMeanEvidenceRecall": 0.40,
+  "maximumTruncationRate": 0.95,
+  "requireFreshExpectations": true
+}

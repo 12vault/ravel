@@ -12,12 +12,17 @@ import (
 )
 
 type traversalProgress struct {
-	w       io.Writer
-	enabled bool
-	last    time.Time
-	frame   int
-	stage   string
-	closed  bool
+	w          io.Writer
+	enabled    bool
+	last       time.Time
+	stage      string
+	path       string
+	count      int
+	total      int
+	unit       string
+	second     int
+	secondUnit string
+	closed     bool
 }
 
 func newTraversalProgress(w io.Writer) *traversalProgress {
@@ -35,37 +40,71 @@ func newTraversalProgress(w io.Writer) *traversalProgress {
 }
 
 func (p *traversalProgress) Scan(path string, files int) {
-	p.render("Scanning", path, files, 0)
+	p.render("Scanning", path, files, 0, "files", 0, "")
 }
 
 func (p *traversalProgress) Build(event buildrunner.Progress) {
-	p.render(event.Stage, event.Path, event.Completed, event.Total)
+	p.render(event.Stage, event.Path, event.Completed, event.Total, event.Unit, event.Secondary, event.SecondaryUnit)
 }
 
-func (p *traversalProgress) render(stage, path string, completed, total int) {
+func (p *traversalProgress) render(stage, path string, completed, total int, unit string, secondary int, secondaryUnit string) {
 	if !p.enabled {
 		return
 	}
-	now := time.Now()
-	if stage == p.stage && !p.last.IsZero() && now.Sub(p.last) < 45*time.Millisecond {
+	if p.closed {
 		return
 	}
-	p.last = now
+	now := time.Now()
+	sameStage := stage == p.stage
 	p.stage = stage
-	spinner := []string{"◐", "◓", "◑", "◒"}
-	count := fmt.Sprintf("%d files", completed)
-	if total > 0 {
-		count = fmt.Sprintf("%d/%d files", completed, total)
+	p.path = path
+	p.count = completed
+	p.total = total
+	p.unit = unit
+	if p.unit == "" {
+		p.unit = "files"
 	}
-	fmt.Fprintf(p.w, "\r\x1b[2K  %s %-18s %-15s %s", spinner[p.frame%len(spinner)], stage, count, shortenProgressPath(path, 72))
-	p.frame++
+	p.second = secondary
+	p.secondUnit = secondaryUnit
+	finished := total > 0 && completed == total
+	if sameStage && !finished && !p.last.IsZero() && now.Sub(p.last) < 45*time.Millisecond {
+		return
+	}
+	p.draw(now)
+}
+
+func (p *traversalProgress) draw(now time.Time) {
+	p.last = now
+	count := fmt.Sprintf("%s %s", formatProgressNumber(p.count), p.unit)
+	if p.total > 0 {
+		count = fmt.Sprintf("%s/%s %s", formatProgressNumber(p.count), formatProgressNumber(p.total), p.unit)
+	}
+	if p.secondUnit != "" {
+		count += fmt.Sprintf(" · %s %s", formatProgressNumber(p.second), p.secondUnit)
+	}
+	fmt.Fprintf(p.w, "\r\x1b[2K  %-22s %-28s %s", p.stage, count, shortenProgressPath(p.path, 72))
+}
+
+func formatProgressNumber(value int) string {
+	text := fmt.Sprintf("%d", value)
+	start := 0
+	if strings.HasPrefix(text, "-") {
+		start = 1
+	}
+	for i := len(text) - 3; i > start; i -= 3 {
+		text = text[:i] + "," + text[i:]
+	}
+	return text
 }
 
 func (p *traversalProgress) Close() {
-	if p.enabled && !p.closed {
-		fmt.Fprint(p.w, "\r\x1b[2K")
+	if p.closed {
+		return
 	}
 	p.closed = true
+	if p.enabled {
+		fmt.Fprint(p.w, "\r\x1b[2K")
+	}
 }
 
 func shortenProgressPath(path string, limit int) string {

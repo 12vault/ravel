@@ -199,4 +199,38 @@ if os.name != "nt" and payload_comparison.stat().st_mode & 0o111 == 0:
 payload_help = subprocess.run([sys.executable, str(payload_comparison), "--help"], check=False, capture_output=True, text=True)
 if payload_help.returncode != 0 or "--questions" not in payload_help.stdout:
     raise SystemExit(f"payload comparison adapter help smoke test failed: {payload_help.stdout}{payload_help.stderr}")
+
+repobench_comparison = root / "benchmarks/run_repobench_10k.py"
+if os.name != "nt" and repobench_comparison.stat().st_mode & 0o111 == 0:
+    raise SystemExit(f"RepoBench adapter is not executable: {repobench_comparison}")
+repobench_help = subprocess.run(
+    [sys.executable, str(repobench_comparison), "--help"],
+    check=False,
+    capture_output=True,
+    text=True,
+)
+if repobench_help.returncode != 0 or "{prepare,check,run}" not in repobench_help.stdout:
+    raise SystemExit(f"RepoBench adapter help smoke test failed: {repobench_help.stdout}{repobench_help.stderr}")
+
+for adapter_name, commands in (
+    ("run_codesearchnet_go.py", "{prepare,check,run}"),
+    ("run_crosscodeeval_typescript.py", "{prepare,check,run}"),
+    ("run_contextbench.py", "{prepare,check,fetch,run}"),
+    ("run_ghostty_swift.py", "{prepare,check,run}"),
+    ("run_real_fim_scale.py", "{prepare,check,run}"),
+):
+    adapter = root / "benchmarks" / adapter_name
+    if os.name != "nt" and adapter.stat().st_mode & 0o111 == 0:
+        raise SystemExit(f"polyglot comparison adapter is not executable: {adapter}")
+    adapter_help = subprocess.run(
+        [sys.executable, str(adapter), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if adapter_help.returncode != 0 or commands not in adapter_help.stdout:
+        raise SystemExit(
+            f"polyglot comparison adapter help smoke test failed: "
+            f"{adapter_help.stdout}{adapter_help.stderr}"
+        )
 print(f"Release versions synchronized at {version}")

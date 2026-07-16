@@ -137,6 +137,51 @@ func TestIndexPrefersSourceQualifiedExactSymbolOverVerboseCoverage(t *testing.T)
 	}
 }
 
+func TestIndexStronglyBoostsStructuredImportIdentifiersAndPaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		nodes []graph.Node
+		want  string
+	}{
+		{
+			name:  "java class import",
+			query: "Which definition is needed?\nImports:\nimport com.github.muskstark.echart.exception.EChartsException;\nCode:\nrose type selected offset clockwise start angle",
+			nodes: []graph.Node{
+				{ID: "noise", Kind: graph.NodeClass, Name: "RoseTypeSelectedOffsetClockwiseStartAngle"},
+				{ID: "gold", Kind: graph.NodeClass, Name: "EChartsException", Path: "src/main/java/com/github/muskstark/echart/exception/EChartsException.java"},
+			},
+			want: "gold",
+		},
+		{
+			name:  "java static import",
+			query: "Imports:\nimport static org.eclipse.jgit.lib.FileMode.GITLINK;\nCode:\nentry file mode",
+			nodes: []graph.Node{
+				{ID: "container", Kind: graph.NodeClass, Name: "FileMode", Path: "org/eclipse/jgit/lib/FileMode.java"},
+				{ID: "gold", Kind: graph.NodeVariable, Name: "GITLINK", Path: "org/eclipse/jgit/lib/FileMode.java"},
+			},
+			want: "gold",
+		},
+		{
+			name:  "python multiline from import",
+			query: "Imports:\nfrom project.models.account import (\n    OtherType,\n    UserAccount as Account,\n)\nCode:\nload current account",
+			nodes: []graph.Node{
+				{ID: "noise", Kind: graph.NodeClass, Name: "CurrentAccountLoader"},
+				{ID: "gold", Kind: graph.NodeClass, Name: "UserAccount", Path: "project/models/account.py"},
+			},
+			want: "gold",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			results := NewIndex(graph.Graph{Nodes: tc.nodes}).Search(tc.query, 2)
+			if len(results) == 0 || results[0].Node.ID != tc.want {
+				t.Fatalf("structured import results = %#v, want %q first", results, tc.want)
+			}
+		})
+	}
+}
+
 func TestIndexUsesPackagePlusExactNameToDisambiguateWrapperFromMethod(t *testing.T) {
 	nodes := []graph.Node{
 		{ID: "function://internal/query.Search", Kind: graph.NodeFunction, Name: "Search", Path: "internal/query/query.go", Package: "internal/query"},

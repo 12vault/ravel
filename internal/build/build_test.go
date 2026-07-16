@@ -164,6 +164,21 @@ func TestRunReportsPerFilePolyglotProgress(t *testing.T) {
 	}
 }
 
+func TestRunWithCacheReportsGraphFinalizationProgress(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	_, stages := runCachedBuild(t, root, cfg, CacheOptions{OutputDir: cfg.Output.Dir, Version: "test-v1"})
+
+	building := stageIndex(stages, "Building graph")
+	cleaning := stageIndex(stages, "Cleaning cache")
+	if building < 0 || cleaning < 0 || building >= cleaning {
+		t.Fatalf("finalization stages = %v, want Building graph before Cleaning cache", stages)
+	}
+}
+
 func TestRunWithCacheReusesAndInvalidatesMarkdownFilesIndependently(t *testing.T) {
 	root := t.TempDir()
 	for name, content := range map[string]string{
@@ -293,6 +308,15 @@ func countStage(stages []string, want string) int {
 		}
 	}
 	return count
+}
+
+func stageIndex(stages []string, want string) int {
+	for i, stage := range stages {
+		if stage == want {
+			return i
+		}
+	}
+	return -1
 }
 
 func hasNode(g graph.Graph, id string) bool {

@@ -25,8 +25,14 @@
       "name": "repository-questions",
       "adapter": "graph-query-jsonl-v2",
       "input": "id, dataset, question, expectedNodeIds or expectedEvidence; optional expectedKeyFacts plus a separate answer ledger"
+    },
+    {
+      "name": "external-repository-questions",
+      "adapter": "graph-query-jsonl-v2",
+      "input": "54 evidence-tagged relationship questions across pinned chi, Express, and Click revisions"
     }
   ],
   "answerLedger": "Strict external JSONL judgments keyed by case id; stores correctness, found rubric facts, tokens, cost, and provenance but never raw answers.",
-  "externalDatasets": "Custom dataset names are accepted after the caller converts them to graph-query JSONL. Ravel does not claim built-in LOCOMO or LongMemEval corpus adapters."
+  "qualityGates": "Strict JSON thresholds can require fresh graph IDs and fail benchmark commands when recall, evidence recall, reciprocal rank, truncation, or case-count limits regress.",
+  "externalDatasets": "The checked-in external suite uses pinned public repository commits. Other custom dataset names are accepted after the caller converts them to graph-query JSONL. Ravel does not claim built-in LOCOMO or LongMemEval corpus adapters."
 }

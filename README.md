@@ -56,7 +56,7 @@ Ravel creates that missing map:
 | More language-specific extraction passes | ◐ | ✅ |
 | Pre-build file audit | ✅ | — |
 | Built-in secret and key-material exclusions | ✅ | — |
-| Extracted, inferred, and unresolved evidence labels | ✅ | — |
+| Extracted, inferred, and unresolved evidence labels | ✅ | ✅ |
 | Embeddable Go packages | ✅ | — |
 | Read-only MCP server | ✅ | ✅ |
 | Self-contained HTML visualization | ✅ | ✅ |
@@ -72,6 +72,8 @@ Ravel does not try to win by having the longest feature list. It prioritizes a s
 
 - [Quick start](#quick-start)
 - [Explore the graph](#explore-the-graph)
+- [Cross-project graphs](#cross-project-graphs)
+- [Pull-request impact](#pull-request-impact)
 - [MCP server](#mcp-server)
 - [Generated artifacts](#generated-artifacts)
 - [Safety](#audit-first-safety)
@@ -142,7 +144,7 @@ ravel install --platform codex
 ravel install --project --platform codex
 ```
 
-That command installs the complete skill bundle: orchestration instructions, seven role prompts, references, and launchers. Marketplace packages also include native Ravel binaries for macOS, Linux, and Windows on amd64 and arm64. If `ravel` is not already on `PATH`, the skill uses the matching bundled binary in place, with no initial download or separate installation.
+That command installs the complete skill bundle: orchestration instructions, eight role prompts, references, and launchers. Marketplace packages also include native Ravel binaries for macOS, Linux, and Windows on amd64 and arm64. If `ravel` is not already on `PATH`, the skill uses the matching bundled binary in place, with no initial download or separate installation.
 
 Then invoke the skill in Codex:
 
@@ -204,7 +206,7 @@ ravel context --json "what imports the storage package?"
 
 When no explicit `--relations` filter is supplied, Ravel can infer one from words such as “called,” “imports,” “inherits,” or “tested.” Use `--infer-relations=false` to traverse every available relationship. `--json` returns the same selected context in a machine-readable envelope; `estimatedTokens` measures the compact text payload, so JSON field-name and formatting overhead is intentionally not included.
 
-Compact output reports every truncation cause. `token_budget` can be addressed by raising `--token-budget` or narrowing the output. `branch_limit` happens earlier during traversal: narrow relations/depth or raise `--branch-fanout`; more output tokens alone cannot recover a pruned branch. The default branch fanout of `0` chooses a safe automatic cap from the node, seed, and depth limits.
+Default compact output balances connected candidates and explanatory edges. The opt-in `--candidate-shortlist` profile instead spends most of the envelope on a ranked candidate list, then adds bounded explanatory edges; it is useful for broad retrieval comparisons where candidate recall matters more than edge evidence. JSON stats separate shortlist selection (`unselectedNodes`) from hard truncation (`truncated`, `omittedNodes`, and `truncatedReason`) and split the payload into header, candidate, and explanation tokens. Compact output reports every hard truncation cause. `token_budget` can be addressed by raising `--token-budget` or narrowing the output. `branch_limit` happens earlier during traversal: narrow relations/depth or raise `--branch-fanout`; more output tokens alone cannot recover a pruned branch. The default branch fanout of `0` chooses a safe automatic cap from the node, seed, and depth limits.
 
 ### Trace relationships
 
@@ -257,6 +259,41 @@ ravel diff internal/api.go # impact from explicit paths
 
 In an agent session, these routes also activate the specialized semantic roles and merge their evidence-tagged fragments.
 
+Native architecture reports also include deterministic import-cycle detection and representative local call flows. Polyglot symbol resolution checks the current file first, then directly imported files, then a unique repository-wide match. Ambiguous matches remain unresolved.
+
+## Cross-project graphs
+
+Merge existing Ravel graphs without rescanning their source repositories:
+
+```sh
+ravel merge --out .ravel-workspace api=../api/.reporavel web=../web/.reporavel
+```
+
+For graphs you query together often, register them once and use the global commands:
+
+```sh
+ravel global add api ../api/.reporavel
+ravel global add web ../web/.reporavel
+ravel global list
+ravel global query "session authentication"
+ravel global context "how does the web app reach the API session code?"
+ravel global build --out .ravel-global
+```
+
+The registry defaults to `~/.ravel/registry.json`, is written with private permissions, and stores absolute local graph-directory paths. Use `--registry <path>` to choose another registry. Merged graph IDs and paths are project-namespaced, while the generated graph does not embed registry paths or source-root locations.
+
+## Pull-request impact
+
+Overlay open GitHub pull requests on the local graph:
+
+```sh
+ravel prs --repo owner/repository
+ravel prs --conflicts
+ravel prs 42
+```
+
+Live mode uses the authenticated `gh` CLI to load changed files, checks, and review state. Ravel maps each changed file to its graph community and reverse dependency impact, then flags PR pairs that touch the same file or community. Use `--json` for structured output or `--manifest <gh-json-file>` for an offline, reproducible analysis.
+
 ## MCP server
 
 Expose the existing graph to MCP-capable coding agents without a network service or additional dependencies:
@@ -269,13 +306,24 @@ The stdio server provides five read-only tools: `query`, `context`, `explain`, `
 
 Configure a client to launch the local process with `ravel` as the command and `mcp --out /absolute/path/to/.reporavel` as its arguments. The server supports standard newline-delimited MCP stdio and Content-Length framing, locks to the client's first framing mode, and writes protocol messages only to stdout. It keeps one immutable in-memory index and hot-reloads it after an atomic graph-state replacement, so `ravel update` results become available without restarting the client.
 
+An optional Streamable HTTP transport is available for trusted local or service-to-service clients:
+
+```sh
+RAVEL_MCP_API_KEY='replace-me' ravel mcp \
+  --transport http \
+  --address 127.0.0.1:8080 \
+  --path /mcp
+```
+
+HTTP defaults to loopback. A non-loopback bind is rejected unless the environment variable named by `--api-key-env` contains an API key (`RAVEL_MCP_API_KEY` by default). The server accepts bearer or `X-API-Key` authentication, rejects browser `Origin` requests, bounds message and session state, and uses `Mcp-Session-Id` for session lifecycle. It deliberately exposes no CORS or legacy SSE endpoint.
+
 ## Generated artifacts
 
 `ravel build .` writes these files to `.reporavel/` by default:
 
 | File | Purpose |
 | --- | --- |
-| `report.md` | Human-readable architecture summary and reading order |
+| `report.md` | Human-readable architecture summary, import cycles, call flows, and reading order |
 | `graph.json` | Complete node, edge, metric, and diagnostic graph |
 | `files.json` | Scanned files, hashes, sizes, languages, and ignored paths |
 | `symbols.json` | Extracted functions, methods, types, variables, and related symbols |
@@ -323,7 +371,7 @@ See [`SECURITY.md`](SECURITY.md) for supported versions, private vulnerability
 reporting, the threat model, and CI security controls.
 
 - `ravel audit .` lists what will be analyzed and ignored.
-- Analysis, graph, query, dashboard, and corpus commands make no network requests and never call an LLM. Only the explicit `ravel update-check` and `ravel self-update` commands access the release server.
+- Analysis, graph, query, dashboard, and corpus commands make no outgoing network requests and never call an LLM. The explicit `ravel update-check` and `ravel self-update` commands access the release server; live `ravel prs` delegates GitHub access to the authenticated `gh` CLI. The optional MCP HTTP transport listens only when explicitly started.
 - `ravel extract` may execute a discovered, allowlisted local extractor (`pdftotext`, `mutool`, or `pandoc`) only when the user invokes that command.
 - Agent roles run only through the installed skill and the host assistant's normal permission model.
 - Nested `.gitignore` and `.ravelignore` rules, symlinks, `.env` files, private-key formats, credential directories, databases, archives, binary media, dependency folders, and common build output are rejected before file content is read. Ravel-specific rules are loaded after Git rules in each directory, so they can add exclusions or negate a file-level Git pattern.
@@ -398,7 +446,7 @@ The intended loop is:
 1. Audit the repository or corpus.
 2. Build deterministic graph facts with user consent.
 3. Run `ravel plan <route> --json` to create bounded, dependency-aware agent tasks.
-4. Dispatch the seven packaged agents in ready waves and validate every returned fragment with `ravel ingest`.
+4. Dispatch the eight packaged agents in ready waves and validate every returned fragment with `ravel ingest`.
 5. Use `context` for bounded relationship questions, `query` for exact lookups, and `explain`, `path`, and `dashboard` for focused exploration.
 
 Use `ravel tools` before document, PDF, or schema work. It discovers local extractors and database clients without executing them. `ravel extract <audited-file>` then processes PDF, DOCX, ODT, RTF, Markdown, or text locally into `.reporavel/corpus/`; it refuses unaudited paths. PDF content stays local unless the user separately authorizes an external service.
@@ -467,7 +515,7 @@ After CLI changes, run `python3 scripts/sync-packages.py` to rebuild all six nat
 
 macOS release jobs use `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_APP_PASSWORD`, and `APPLE_TEAM_ID` repository secrets when available. Until those are configured, releases use ad-hoc signatures for integrity but are not notarized by Apple.
 
-Maintainers prepare a synchronized release with `scripts/release.sh 0.2.0`. It updates CLI, Claude, and Codex versions, rebuilds the bundled binaries, synchronizes every packaged skill resource, runs tests and validators, and verifies that no package drift remains. Committing and pushing tag `v0.2.0` triggers the binary release workflow.
+Maintainers prepare a synchronized release with `scripts/release.sh <version>`. It updates CLI, Claude, and Codex versions, rebuilds the bundled binaries, synchronizes every packaged skill resource, runs tests and validators, and verifies that no package drift remains. Committing and pushing the matching `v<version>` tag triggers the binary release workflow.
 
 ## Roadmap
 
@@ -491,7 +539,7 @@ The distinction is intentional: a skill does not need a language allowlist, but 
 
 ## Benchmarks
 
-Run the local build/query performance suite with `./benchmarks/run.sh`. Run the checked-in relationship suite with `ravel benchmark --dataset benchmarks/ravel-retrieval.jsonl --retriever context`; use `--retriever flat` for the ranked-list baseline. [`benchmarks/datasets.json`](benchmarks/datasets.json) defines the implemented repository-question contract. Version 3 reports node recall/precision, evidence recall/precision, reciprocal rank, p50/p95 latency, compact context tokens, node and evidence recall per 1,000 tokens, truncation rate, index-build time, logical graph and dataset hashes/revisions, adapter version, Ravel version, Go version, and platform. An optional strict `--answers` ledger adds externally adjudicated accuracy, rubric key-fact coverage, total agent tokens, total spend, and provenance without retaining raw answers; see the [benchmark guide](benchmarks/README.md). Ravel does not claim native LOCOMO/LongMemEval corpus adapters and never invokes a model or judge. Every published score must retain the raw result file and configuration.
+Run the local build/query performance suite with `./benchmarks/run.sh`. The checked-in self-repository relationship suite uses `--gate benchmarks/self-quality-gate.json` to reject stale evidence IDs and fail on metric regressions. A second CI suite runs 54 evidence-tagged questions across pinned chi, Express, and Click revisions; validate it offline with `python3 benchmarks/run_external_quality.py --check`. [`benchmarks/datasets.json`](benchmarks/datasets.json) defines the repository-question contract. Version 3 reports node recall/precision, evidence recall/precision, reciprocal rank, p50/p95 latency, compact context tokens, node and evidence recall per 1,000 tokens, truncation rate, index-build time, logical graph and dataset hashes/revisions, adapter version, Ravel version, Go version, platform, and optional quality-gate results. An optional strict `--answers` ledger adds externally adjudicated accuracy, rubric key-fact coverage, total agent tokens, total spend, and provenance without retaining raw answers; see the [benchmark guide](benchmarks/README.md). Ravel does not claim native LOCOMO/LongMemEval corpus adapters and never invokes a model or judge. Every published score must retain the raw result file and configuration.
 
 ### T3 Code Ravel vs Graphify snapshot
 

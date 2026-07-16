@@ -2,15 +2,33 @@ package treeanalyzer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/12vault/ravel/internal/graph"
 	"github.com/12vault/ravel/internal/scan"
 )
+
+func TestMain(m *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == InternalWorkerCommand {
+		if err := RunProcessWorker(context.Background(), os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	if err := os.Setenv("RAVEL_TREE_WORKER_TEST_BINARY", "1"); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
 
 func BenchmarkAnalyzePythonHundredFunctions(b *testing.B) {
 	root := b.TempDir()
@@ -30,6 +48,209 @@ func BenchmarkAnalyzePythonHundredFunctions(b *testing.B) {
 		if _, err := analyzer.Analyze(context.Background(), root, files); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkAnalyzeTypeScriptFiles(b *testing.B) {
+	root := b.TempDir()
+	files := make([]scan.File, 64)
+	var source strings.Builder
+	for i := 0; i < 100; i++ {
+		fmt.Fprintf(&source, "export function function_%d(): number { return %d; }\n", i, i)
+	}
+	for i := range files {
+		name := fmt.Sprintf("service_%02d.ts", i)
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(source.String()), 0o644); err != nil {
+			b.Fatal(err)
+		}
+		files[i] = scan.File{Path: name, AbsPath: path, Language: "typescript"}
+	}
+	analyzer := New("typescript")
+	cases := []struct {
+		name    string
+		workers int
+	}{
+		{name: "workers-1", workers: 1},
+		{name: "workers-2", workers: 2},
+		{name: "workers-4", workers: 4},
+		{name: "workers-8", workers: 8},
+		{name: "default", workers: runtime.GOMAXPROCS(0)},
+	}
+	for _, test := range cases {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := analyzer.analyzeWithWorkers(context.Background(), files, nil, test.workers); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestParallelAnalysisMatchesSerialAndPreservesProgressOrder(t *testing.T) {
+	root := t.TempDir()
+	files := make([]scan.File, 16)
+	for i := range files {
+		name := fmt.Sprintf("service_%02d.ts", i)
+		path := filepath.Join(root, name)
+		source := fmt.Sprintf("export function function_%02d(): number { return %d; }\n", i, i)
+		if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files[i] = scan.File{Path: name, AbsPath: path, Language: "typescript"}
+	}
+
+	analyzer := New("typescript")
+	serial, err := analyzer.analyzeWithWorkers(context.Background(), files, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type progressEvent struct {
+		path      string
+		completed int
+	}
+	var events []progressEvent
+	parallel, err := analyzer.analyzeWithWorkers(context.Background(), files, func(path string, completed int) {
+		events = append(events, progressEvent{path: path, completed: completed})
+	}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parallel, serial) {
+		t.Fatalf("parallel analysis differs from serial analysis\nparallel=%#v\nserial=%#v", parallel, serial)
+	}
+	if len(events) != len(files)+1 {
+		t.Fatalf("progress events = %#v, want %d ordered events", events, len(files)+1)
+	}
+	for i, file := range files {
+		if events[i].path != file.Path || events[i].completed != i {
+			t.Fatalf("progress event %d = %#v, want path=%q completed=%d", i, events[i], file.Path, i)
+		}
+	}
+	last := events[len(events)-1]
+	if last.path != files[len(files)-1].Path || last.completed != len(files) {
+		t.Fatalf("final progress event = %#v, want path=%q completed=%d", last, files[len(files)-1].Path, len(files))
+	}
+}
+
+func TestParallelAnalysisHonorsCancellation(t *testing.T) {
+	root := t.TempDir()
+	files := make([]scan.File, 8)
+	for i := range files {
+		name := fmt.Sprintf("service_%02d.ts", i)
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte("export function run(): number { return 1; }\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files[i] = scan.File{Path: name, AbsPath: path, Language: "typescript"}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := New("typescript").analyzeWithWorkers(ctx, files, func(_ string, completed int) {
+		if completed == 0 {
+			cancel()
+		}
+	}, 4)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("parallel analysis error = %v, want context.Canceled", err)
+	}
+}
+
+func TestAnalysisWorkerCountCapsAtProcsAndFiles(t *testing.T) {
+	want := runtime.GOMAXPROCS(0)
+	if want > 8 {
+		want = 8
+	}
+	if got := analysisWorkerCount(8); got != want {
+		t.Fatalf("workers = %d, want %d", got, want)
+	}
+	if got := analysisWorkerCount(0); got != 0 {
+		t.Fatalf("empty input workers = %d, want 0", got)
+	}
+}
+
+func TestSmallTreeSitterInputsStaySerial(t *testing.T) {
+	if minProcessWorkerFiles != 20 {
+		t.Fatalf("process worker threshold = %d, want Graphify-compatible threshold 20", minProcessWorkerFiles)
+	}
+	if got := isolatedWorkerCount(minProcessWorkerFiles - 1); got != 0 {
+		t.Fatalf("small Tree-sitter process worker count = %d, want 0", got)
+	}
+	want := analysisWorkerCount(minProcessWorkerFiles)
+	if got := isolatedWorkerCount(minProcessWorkerFiles); got != want {
+		t.Fatalf("large Tree-sitter process worker count = %d, want %d", got, want)
+	}
+}
+
+func TestProcessAnalysisMatchesSerialAndPreservesProgressOrder(t *testing.T) {
+	root := t.TempDir()
+	files := make([]scan.File, 16)
+	for i := range files {
+		name := fmt.Sprintf("service_%02d.js", i)
+		path := filepath.Join(root, name)
+		source := fmt.Sprintf("export function helper_%02d() { return %d; }\nexport function run_%02d() { return helper_%02d(); }\n", i, i, i, i)
+		if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files[i] = scan.File{Path: name, AbsPath: path, Language: "javascript", Size: int64(len(source))}
+	}
+
+	analyzer := New("javascript")
+	serial, err := analyzer.analyzeWithWorkers(context.Background(), files, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type progressEvent struct {
+		path      string
+		completed int
+	}
+	var events []progressEvent
+	parallel, err := analyzer.analyzeWithProcessWorkers(context.Background(), files, func(path string, completed int) {
+		events = append(events, progressEvent{path: path, completed: completed})
+	}, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(parallel, serial) {
+		t.Fatalf("process analysis differs from serial analysis\nparallel=%#v\nserial=%#v", parallel, serial)
+	}
+	if len(events) != len(files)+1 {
+		t.Fatalf("progress events = %#v, want %d ordered events", events, len(files)+1)
+	}
+	for i, file := range files {
+		if events[i].path != file.Path || events[i].completed != i {
+			t.Fatalf("progress event %d = %#v, want path=%q completed=%d", i, events[i], file.Path, i)
+		}
+	}
+	last := events[len(events)-1]
+	if last.path != files[len(files)-1].Path || last.completed != len(files) {
+		t.Fatalf("final progress event = %#v, want path=%q completed=%d", last, files[len(files)-1].Path, len(files))
+	}
+}
+
+func TestProcessAnalysisHonorsCancellation(t *testing.T) {
+	root := t.TempDir()
+	files := make([]scan.File, 12)
+	for i := range files {
+		name := fmt.Sprintf("service_%02d.py", i)
+		path := filepath.Join(root, name)
+		source := []byte(fmt.Sprintf("def function_%02d():\n    return %d\n", i, i))
+		if err := os.WriteFile(path, source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files[i] = scan.File{Path: name, AbsPath: path, Language: "python", Size: int64(len(source))}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	_, err := New("python").analyzeWithProcessWorkers(ctx, files, func(_ string, completed int) {
+		if completed == 0 {
+			cancel()
+		}
+	}, 4)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("process analysis error = %v, want context.Canceled", err)
 	}
 }
 
@@ -101,6 +322,20 @@ func TestJavaScriptAndRustExtractLanguageNeutralSymbols(t *testing.T) {
 	}
 }
 
+func TestDedupeReferencesDeterministicallyOrdersSameStart(t *testing.T) {
+	outer := reference{name: "Service", kind: graph.EdgeCalls, path: "Config.ts", language: "typescript", startByte: 100, endByte: 200, startLine: 3, column: 3}
+	inner := reference{name: "Service", kind: graph.EdgeCalls, path: "Config.ts", language: "typescript", startByte: 100, endByte: 150, startLine: 1, column: 20}
+	for i := 0; i < 100; i++ {
+		input := []reference{inner, outer}
+		if i%2 == 0 {
+			input = []reference{outer, inner}
+		}
+		if got := dedupeReferences(input); !reflect.DeepEqual(got, []reference{outer, inner}) {
+			t.Fatalf("deduped references = %#v, want outer-before-inner deterministic order", got)
+		}
+	}
+}
+
 func TestDuplicateNamesRemainUnresolvedInsteadOfGuessing(t *testing.T) {
 	result := analyzeSources(t, "python", map[string]string{
 		"a.py":   "def shared():\n    pass\n",
@@ -137,6 +372,34 @@ func TestRelativeImportResolvesToAuditedFile(t *testing.T) {
 		if edge.Kind == graph.EdgeImports && edge.From == graph.FileID("src/app.js") && edge.To == graph.FileID("src/dep.js") {
 			if edge.Meta["confidence"] != "inferred" || edge.Meta["rationale"] == "" {
 				t.Fatalf("local import resolution lacks inferred provenance: %#v", edge)
+			}
+		}
+	}
+}
+
+func TestImportedScopeResolvesDuplicateCrossFileSymbols(t *testing.T) {
+	result := analyzeSources(t, "typescript", map[string]string{
+		"src/app.ts":    "import { Base, helper } from './chosen';\nexport class Child extends Base {}\nexport function run() { return helper(); }\n",
+		"src/chosen.ts": "export class Base {}\nexport function helper() { return 1; }\n",
+		"src/other.ts":  "export class Base {}\nexport function helper() { return 2; }\n",
+	})
+	run := nodeNamedAtPath(result.Nodes, "run", "src/app.ts")
+	child := nodeNamedAtPath(result.Nodes, "Child", "src/app.ts")
+	helper := nodeNamedAtPath(result.Nodes, "helper", "src/chosen.ts")
+	base := nodeNamedAtPath(result.Nodes, "Base", "src/chosen.ts")
+	if run == nil || child == nil || helper == nil || base == nil {
+		t.Fatalf("missing scoped definitions: nodes=%#v diagnostics=%#v", result.Nodes, result.Diagnostics)
+	}
+	if !hasEdge(result.Edges, graph.EdgeCalls, run.ID, helper.ID, "true") {
+		t.Fatalf("direct import did not disambiguate helper call: %#v", result.Edges)
+	}
+	if !hasEdge(result.Edges, graph.EdgeInherits, child.ID, base.ID, "true") {
+		t.Fatalf("direct import did not disambiguate Base heritage: %#v", result.Edges)
+	}
+	for _, edge := range result.Edges {
+		if (edge.Kind == graph.EdgeCalls && edge.From == run.ID) || (edge.Kind == graph.EdgeInherits && edge.From == child.ID) {
+			if !strings.Contains(edge.Meta["rationale"], "directly imported file") {
+				t.Fatalf("scoped resolution lacks import rationale: %#v", edge)
 			}
 		}
 	}
@@ -223,6 +486,15 @@ type structResult struct {
 func nodeNamed(nodes []graph.Node, name string) *graph.Node {
 	for i := range nodes {
 		if nodes[i].Name == name && graph.SymbolKind(nodes[i].Kind) && nodes[i].Meta["resolved"] != "false" {
+			return &nodes[i]
+		}
+	}
+	return nil
+}
+
+func nodeNamedAtPath(nodes []graph.Node, name, path string) *graph.Node {
+	for i := range nodes {
+		if nodes[i].Name == name && nodes[i].Path == path && graph.SymbolKind(nodes[i].Kind) && nodes[i].Meta["resolved"] != "false" {
 			return &nodes[i]
 		}
 	}

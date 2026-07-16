@@ -100,6 +100,73 @@ func TestRetrieveDoesNotFillMultiTermSeedSlotsWithCoveredNoise(t *testing.T) {
 	}
 }
 
+func TestRetrievePromotesStructuredImportsWithoutExpandingEveryCandidate(t *testing.T) {
+	nodes := make([]graph.Node, 0, 25)
+	var question strings.Builder
+	question.WriteString("Which cross-file definition is needed?\nImports:\n")
+	for i := 0; i < 25; i++ {
+		name := fmt.Sprintf("ImportedType%02d", i)
+		nodes = append(nodes, graph.Node{
+			ID: fmt.Sprintf("type-%02d", i), Kind: graph.NodeClass, Name: name,
+			Path: fmt.Sprintf("src/main/java/example/%s.java", name),
+		})
+		fmt.Fprintf(&question, "import example.%s;\n", name)
+	}
+	result := mustRetrieve(t, NewIndex(graph.Graph{Nodes: nodes}), question.String(), RetrieveOptions{
+		SeedLimit: 1, MaxNodes: 100, TokenBudget: 100_000,
+	})
+	if len(result.Stats.SeedIDs) != 1 {
+		t.Fatalf("seed IDs = %v, want configured traversal seed limit", result.Stats.SeedIDs)
+	}
+	if result.Stats.LexicalCandidates != 25 || len(result.Nodes) != 25 {
+		t.Fatalf("lexical candidates = %d, nodes = %d; want all 25 imports", result.Stats.LexicalCandidates, len(result.Nodes))
+	}
+	if _, ok := retrievalNode(result, "type-24"); !ok {
+		t.Fatalf("last non-seed import was not exposed: %v", retrievalNodeIDs(result))
+	}
+}
+
+func TestRetrieveDeduplicatesCandidatesAndWritesAllCandidatesBeforeEdges(t *testing.T) {
+	g := graph.Graph{
+		Nodes: []graph.Node{
+			{ID: "root", Kind: graph.NodeFunction, Name: "PackingRoot"},
+			{ID: "file", Kind: graph.NodeFile, Name: "Worker.java", Path: "src/Worker.java"},
+			{ID: "class", Kind: graph.NodeClass, Name: "Worker", Path: "src/Worker.java"},
+			{ID: "class-c", Kind: graph.NodeClass, Name: "WorkerC", Path: "src/Worker.java"},
+			{ID: "run-1", Kind: graph.NodeMethod, Name: "run", Path: "src/Worker.java"},
+			{ID: "run-2", Kind: graph.NodeMethod, Name: "run", Path: "src/Worker.java"},
+		},
+		Edges: []graph.Edge{
+			testQueryEdge(graph.EdgeCalls, "root", "file"),
+			testQueryEdge(graph.EdgeCalls, "root", "class"),
+			testQueryEdge(graph.EdgeCalls, "root", "class-c"),
+			testQueryEdge(graph.EdgeCalls, "root", "run-1"),
+			testQueryEdge(graph.EdgeCalls, "root", "run-2"),
+		},
+	}
+	result := mustRetrieve(t, NewIndex(g), "PackingRoot", RetrieveOptions{
+		Direction: DirectionOut, DisableRelationInference: true, SeedLimit: 1,
+		MaxDepth: 1, MaxNodes: 20, HubDegreeThreshold: -1, TokenBudget: 100_000,
+	})
+	if got, want := retrievalNodeIDs(result), []string{"root", "class", "class-c", "run-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("deduplicated nodes = %v, want %v", got, want)
+	}
+	if result.Stats.DeduplicatedNodes != 2 {
+		t.Fatalf("deduplicated node count = %d, want 2", result.Stats.DeduplicatedNodes)
+	}
+	lines := strings.Split(writeRetrievalText(t, result), "\n")
+	sawEdge := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "EDGE\t") {
+			sawEdge = true
+			continue
+		}
+		if sawEdge && (strings.HasPrefix(line, "NODE\t") || strings.HasPrefix(line, "SEED\t")) {
+			t.Fatalf("candidate emitted after explanation edge:\n%s", strings.Join(lines, "\n"))
+		}
+	}
+}
+
 func TestRetrieveBFSAndDFSOrdering(t *testing.T) {
 	g := traversalFixture()
 	base := RetrieveOptions{
@@ -478,7 +545,7 @@ func TestRetrieveCommunityBoostPrioritizesSameCommunityNeighbors(t *testing.T) {
 	}
 }
 
-func TestRetrieveBudgetTreatsDiscoveredNodeAndViaEdgeAtomically(t *testing.T) {
+func TestRetrieveBudgetPrioritizesDiscoveredCandidateOverLargeExplanationEdge(t *testing.T) {
 	edge := testQueryEdge(graph.EdgeCalls, "root", "child")
 	edge.Meta = map[string]string{"evidence": strings.Repeat("large edge evidence ", 80)}
 	g := graph.Graph{
@@ -493,22 +560,73 @@ func TestRetrieveBudgetTreatsDiscoveredNodeAndViaEdgeAtomically(t *testing.T) {
 		Traversal: TraversalBFS, Direction: DirectionOut, DisableRelationInference: true,
 		SeedLimit: 1, MaxDepth: 1, MaxNodes: 10, HubDegreeThreshold: -1, TokenBudget: 128,
 	})
-	if got, want := retrievalNodeIDs(result), []string{"root"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("budgeted nodes = %v, want child and discovery edge omitted atomically: %v", got, want)
+	if got, want := retrievalNodeIDs(result), []string{"root", "child"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("budgeted nodes = %v, want candidate retained ahead of evidence: %v", got, want)
 	}
 	if len(result.Edges) != 0 {
-		t.Fatalf("budgeted edges = %#v, want none when discovered child is omitted", result.Edges)
+		t.Fatalf("budgeted edges = %#v, want oversized explanation omitted", result.Edges)
 	}
-	if !result.Stats.Truncated || !containsString(result.Stats.TruncatedReason, "token_budget") || result.Stats.OmittedNodes != 1 {
-		t.Fatalf("budget stats = %#v, want one node omitted for token budget", result.Stats)
+	if result.Stats.Truncated || result.Stats.OmittedNodes != 0 || result.Stats.ExplanationEdgesOmitted != 1 {
+		t.Fatalf("budget stats = %#v, want only one intentionally omitted explanation", result.Stats)
 	}
 	for _, node := range result.Nodes {
-		if node.Seed {
-			continue
+		if node.ViaEdgeID != "" {
+			t.Fatalf("candidate %q retained a dangling discovery edge: %#v", node.ID, result)
 		}
-		if node.ViaEdgeID == "" || !retrievalHasEdge(result, node.ViaEdgeID) {
-			t.Fatalf("non-seed node %q lacks its discovery edge: %#v", node.ID, result)
-		}
+	}
+}
+
+func TestRetrieveDistinguishesRankedShortlistSelectionFromTokenTruncation(t *testing.T) {
+	nodes := []graph.Node{{ID: "root", Kind: graph.NodeFunction, Name: "ShortlistRoot"}}
+	edges := make([]graph.Edge, 0, 20)
+	for i := 0; i < 20; i++ {
+		id := fmt.Sprintf("child-%02d", i)
+		nodes = append(nodes, graph.Node{
+			ID: id, Kind: graph.NodeFunction, Name: fmt.Sprintf("Candidate%02d", i),
+			Path: fmt.Sprintf("internal/shortlist/candidate_%02d_with_a_descriptive_path.go", i),
+		})
+		edges = append(edges, testQueryEdge(graph.EdgeCalls, "root", id))
+	}
+	g := graph.Graph{Nodes: nodes, Edges: edges}
+	options := RetrieveOptions{
+		Direction: DirectionOut, DisableRelationInference: true, SeedLimit: 1,
+		MaxDepth: 1, MaxNodes: 100, BranchFanout: 100, HubDegreeThreshold: -1, TokenBudget: 256,
+		CandidateShortlist: true,
+	}
+	result := mustRetrieve(t, NewIndex(g), "ShortlistRoot", options)
+	if result.Stats.UnselectedNodes == 0 {
+		t.Fatalf("shortlist selected every traversal alternative: %#v", result.Stats)
+	}
+	if result.Stats.Truncated || result.Stats.OmittedNodes != 0 || containsString(result.Stats.TruncatedReason, "token_budget") {
+		t.Fatalf("ranked selection was misreported as hard truncation: %#v", result.Stats)
+	}
+	accounted := result.Stats.HeaderTokens + result.Stats.CandidateTokens + result.Stats.ExplanationTokens
+	if accounted != result.Stats.EstimatedTokens {
+		t.Fatalf("token accounting = %d, estimated = %d: %#v", accounted, result.Stats.EstimatedTokens, result.Stats)
+	}
+	if got := estimateTokens(writeRetrievalText(t, result)); got > result.Stats.TokenBudget {
+		t.Fatalf("rendered output estimate = %d, budget = %d", got, result.Stats.TokenBudget)
+	}
+
+	options.CandidateShortlist = false
+	balanced := mustRetrieve(t, NewIndex(g), "ShortlistRoot", options)
+	if balanced.Stats.UnselectedNodes != 0 || !balanced.Stats.Truncated || !containsString(balanced.Stats.TruncatedReason, "token_budget") {
+		t.Fatalf("default balanced packing no longer uses legacy truncation accounting: %#v", balanced.Stats)
+	}
+}
+
+func TestRetrieveReportsTokenTruncationWhenTopCandidateCannotFit(t *testing.T) {
+	long := strings.Repeat("very-long-path-segment/", 40)
+	g := graph.Graph{Nodes: []graph.Node{{
+		ID: strings.Repeat("candidate-id-", 40), Kind: graph.NodeFunction,
+		Name: strings.Repeat("OversizedCandidate", 30), Path: long + "candidate.go",
+	}}}
+	result := mustRetrieve(t, NewIndex(g), "OversizedCandidate", RetrieveOptions{TokenBudget: 128, CandidateShortlist: true})
+	if !result.Stats.Truncated || !containsString(result.Stats.TruncatedReason, "token_budget") || result.Stats.OmittedNodes != 1 {
+		t.Fatalf("oversized admitted candidate was not reported as token truncation: %#v", result.Stats)
+	}
+	if result.Stats.UnselectedNodes != 0 || len(result.Nodes) != 0 {
+		t.Fatalf("oversized candidate accounting = %#v, nodes = %#v", result.Stats, result.Nodes)
 	}
 }
 

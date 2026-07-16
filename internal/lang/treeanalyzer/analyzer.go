@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/12vault/ravel/internal/graph"
@@ -20,6 +22,11 @@ import (
 )
 
 const parseTimeoutMicros = 2_000_000
+
+// gotreesitter starts process-wide heap-growth accounting at this source size.
+// Those measurements include allocations from other parser goroutines, so
+// large files must parse exclusively to avoid false memory_budget failures.
+const concurrentParseMaxFileSize = 64*1024 - 1
 
 type Analyzer struct {
 	language string
@@ -108,26 +115,151 @@ func (a *Analyzer) Analyze(ctx context.Context, _ string, files []scan.File) (*l
 }
 
 func (a *Analyzer) AnalyzeWithProgress(ctx context.Context, _ string, files []scan.File, progress func(path string, completed int)) (*lang.AnalysisResult, error) {
+	processWorkers := isolatedWorkerCount(len(files))
+	if processWorkers > 1 {
+		result, err := a.analyzeWithProcessWorkers(ctx, files, progress, processWorkers)
+		if err == nil {
+			return result, nil
+		}
+		if !isProcessWorkerUnavailable(err) {
+			return nil, err
+		}
+		// Embedders may use treeanalyzer without exposing Ravel's hidden worker
+		// command. Preserve library compatibility with a safe serial fallback.
+	}
+	return a.analyzeWithWorkers(ctx, files, progress, 1)
+}
+
+type parseOutcome struct {
+	parsed      parsedFile
+	diagnostics []graph.Diagnostic
+	err         error
+	contributed bool
+}
+
+func analysisWorkerCount(fileCount int) int {
+	if fileCount <= 0 {
+		return 0
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > fileCount {
+		workers = fileCount
+	}
+	return workers
+}
+
+func isolatedWorkerCount(fileCount int) int {
+	if fileCount < minProcessWorkerFiles {
+		return 0
+	}
+	return analysisWorkerCount(fileCount)
+}
+
+func (a *Analyzer) analyzeWithWorkers(ctx context.Context, files []scan.File, progress func(path string, completed int), workers int) (*lang.AnalysisResult, error) {
 	result := &lang.AnalysisResult{}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return result, nil
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(files) {
+		workers = len(files)
+	}
+
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer gotreesitter.DrainArenaPools()
+
+	outcomes := make([]parseOutcome, len(files))
+	finished := make(chan int, workers)
+	var next atomic.Int64
+	var parseGate sync.RWMutex
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			for {
+				if workerCtx.Err() != nil {
+					return
+				}
+				index := int(next.Add(1)) - 1
+				if index >= len(files) {
+					return
+				}
+				file := files[index]
+				entry := entryForFile(a.language, file.Path)
+				if entry == nil || entry.Language == nil {
+					select {
+					case finished <- index:
+					case <-workerCtx.Done():
+						return
+					}
+					continue
+				}
+				// The parser timeout is wall-clock based. Scale it by the worker
+				// count so CPU sharing does not reduce each file's effective budget,
+				// including large files that parse exclusively.
+				timeoutMicros := uint64(parseTimeoutMicros) * uint64(workers)
+				if file.Size <= concurrentParseMaxFileSize {
+					parseGate.RLock()
+				} else {
+					parseGate.Lock()
+				}
+				pf, diagnostics, err := parseFile(workerCtx, file, *entry, timeoutMicros)
+				if file.Size <= concurrentParseMaxFileSize {
+					parseGate.RUnlock()
+				} else {
+					parseGate.Unlock()
+				}
+				outcomes[index] = parseOutcome{parsed: pf, diagnostics: diagnostics, err: err, contributed: true}
+				select {
+				case finished <- index:
+				case <-workerCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+
 	parsed := make([]parsedFile, 0, len(files))
+	ready := make([]bool, len(files))
 	for i, file := range files {
-		if err := ctx.Err(); err != nil {
+		if err := workerCtx.Err(); err != nil {
+			wg.Wait()
 			return nil, err
 		}
 		if progress != nil {
 			progress(file.Path, i)
 		}
-		entry := entryForFile(a.language, file.Path)
-		if entry == nil || entry.Language == nil {
-			continue
+		for !ready[i] {
+			select {
+			case index := <-finished:
+				ready[index] = true
+			case <-workerCtx.Done():
+				wg.Wait()
+				return nil, workerCtx.Err()
+			}
 		}
-		pf, diagnostics, err := parseFile(ctx, file, *entry)
-		result.Diagnostics = append(result.Diagnostics, diagnostics...)
-		if err != nil {
-			return nil, err
+		outcome := outcomes[i]
+		if outcome.err != nil {
+			cancel()
+			wg.Wait()
+			return nil, outcome.err
 		}
-		parsed = append(parsed, pf)
+		result.Diagnostics = append(result.Diagnostics, outcome.diagnostics...)
+		if outcome.contributed {
+			parsed = append(parsed, outcome.parsed)
+		}
 	}
+	wg.Wait()
 	if progress != nil && len(files) > 0 {
 		progress(files[len(files)-1].Path, len(files))
 	}
@@ -136,11 +268,10 @@ func (a *Analyzer) AnalyzeWithProgress(ctx context.Context, _ string, files []sc
 	emitReferences(parsed, result)
 	emitHeritage(parsed, result)
 	emitImports(parsed, result)
-	gotreesitter.DrainArenaPools()
 	return result, nil
 }
 
-func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry) (parsedFile, []graph.Diagnostic, error) {
+func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry, timeoutMicros uint64) (parsedFile, []graph.Diagnostic, error) {
 	pf := parsedFile{file: file, language: entry.Name}
 	data, err := os.ReadFile(file.AbsPath)
 	if err != nil {
@@ -153,7 +284,7 @@ func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry) (p
 	}
 
 	parser := gotreesitter.NewParser(grammar)
-	parser.SetTimeoutMicros(parseTimeoutMicros)
+	parser.SetTimeoutMicros(timeoutMicros)
 	var cancelled uint32
 	parser.SetCancellationFlag(&cancelled)
 	stop := context.AfterFunc(ctx, func() { atomic.StoreUint32(&cancelled, 1) })
@@ -406,6 +537,7 @@ func emitDefinitions(files []parsedFile, result *lang.AnalysisResult) {
 
 func emitReferences(files []parsedFile, result *lang.AnalysisResult) {
 	all, local := definitionIndexes(files)
+	imported := importedDefinitionIndexes(files, local)
 	for _, file := range files {
 		for _, ref := range file.references {
 			if ref.name == "" {
@@ -416,9 +548,16 @@ func emitReferences(files []parsedFile, result *lang.AnalysisResult) {
 			if caller != nil {
 				from = caller.id
 			}
-			candidates := local[ref.path][normalizeName(ref.name)]
-			if len(candidates) != 1 {
-				candidates = all[normalizeName(ref.name)]
+			key := normalizeName(ref.name)
+			candidates := local[ref.path][key]
+			rationale := "reference name uniquely matches a Tree-sitter definition in the same file"
+			if len(candidates) == 0 {
+				candidates = imported[ref.path][key]
+				rationale = "reference name uniquely matches a Tree-sitter definition in a directly imported file"
+			}
+			if len(candidates) == 0 {
+				candidates = all[key]
+				rationale = "reference name uniquely matches a Tree-sitter definition in the analyzed language"
 			}
 			meta := extractedMeta(ref.path, ref.startLine, ref.language)
 			meta["tree_sitter"] = "true"
@@ -427,11 +566,7 @@ func emitReferences(files []parsedFile, result *lang.AnalysisResult) {
 			if len(candidates) == 1 {
 				to = candidates[0].id
 				meta["confidence"] = "inferred"
-				if candidates[0].path == ref.path {
-					meta["rationale"] = "reference name uniquely matches a Tree-sitter definition in the same file"
-				} else {
-					meta["rationale"] = "reference name uniquely matches a Tree-sitter definition in the analyzed language"
-				}
+				meta["rationale"] = rationale
 			} else {
 				meta["resolved"] = "false"
 				kind := graph.NodeType
@@ -450,6 +585,7 @@ func emitReferences(files []parsedFile, result *lang.AnalysisResult) {
 
 func emitHeritage(files []parsedFile, result *lang.AnalysisResult) {
 	all, local := definitionIndexes(files)
+	imported := importedDefinitionIndexes(files, local)
 	for _, file := range files {
 		for _, heritage := range file.heritage {
 			child := uniqueDefinition(local[file.file.Path][normalizeName(heritage.Name)])
@@ -460,15 +596,22 @@ func emitHeritage(files []parsedFile, result *lang.AnalysisResult) {
 			meta := extractedMeta(file.file.Path, line, file.language)
 			meta["tree_sitter"] = "true"
 			meta["resolved"] = "true"
-			parent := uniqueDefinition(local[file.file.Path][normalizeName(heritage.Parent)])
-			if parent == nil {
-				parent = uniqueDefinition(all[normalizeName(heritage.Parent)])
+			key := normalizeName(heritage.Parent)
+			parent := uniqueDefinition(local[file.file.Path][key])
+			rationale := "heritage name uniquely matches a Tree-sitter type definition in the same file"
+			if parent == nil && len(local[file.file.Path][key]) == 0 {
+				parent = uniqueDefinition(imported[file.file.Path][key])
+				rationale = "heritage name uniquely matches a Tree-sitter type definition in a directly imported file"
+			}
+			if parent == nil && len(local[file.file.Path][key]) == 0 && len(imported[file.file.Path][key]) == 0 {
+				parent = uniqueDefinition(all[key])
+				rationale = "heritage name uniquely matches a Tree-sitter type definition in the analyzed language"
 			}
 			to := ""
 			if parent != nil {
 				to = parent.id
 				meta["confidence"] = "inferred"
-				meta["rationale"] = "heritage name uniquely matches a Tree-sitter type definition"
+				meta["rationale"] = rationale
 			} else {
 				meta["resolved"] = "false"
 				to = graph.ContentID("tree-unresolved-type", file.language, file.file.Path, fmt.Sprintf("%d", line), fmt.Sprintf("%d", column), heritage.Parent)
@@ -480,10 +623,7 @@ func emitHeritage(files []parsedFile, result *lang.AnalysisResult) {
 }
 
 func emitImports(files []parsedFile, result *lang.AnalysisResult) {
-	knownFiles := make(map[string]struct{}, len(files))
-	for _, file := range files {
-		knownFiles[filepath.ToSlash(filepath.Clean(file.file.Path))] = struct{}{}
-	}
+	knownFiles := knownSourceFiles(files)
 	for _, file := range files {
 		for _, ref := range file.imports {
 			name := cleanName(ref.Path)
@@ -513,6 +653,47 @@ func emitImports(files []parsedFile, result *lang.AnalysisResult) {
 			result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeImports, From: graph.FileID(file.file.Path), To: id, Meta: meta})
 		}
 	}
+}
+
+// importedDefinitionIndexes scopes name resolution through local import edges
+// before the analyzer falls back to repository-wide uniqueness. This keeps two
+// same-named symbols in different modules resolvable when the source file
+// explicitly imports only one of them, while ambiguous import scopes remain
+// unresolved rather than being guessed.
+func importedDefinitionIndexes(files []parsedFile, local map[string]map[string][]definition) map[string]map[string][]definition {
+	knownFiles := knownSourceFiles(files)
+	indexes := make(map[string]map[string][]definition, len(files))
+	for _, file := range files {
+		byName := map[string][]definition{}
+		seenTargets := map[string]bool{}
+		for _, ref := range file.imports {
+			name := cleanName(ref.Path)
+			if name == "" {
+				name = cleanName(ref.From)
+			}
+			if name == "" || ref.Kind == "package" {
+				continue
+			}
+			target := resolveLocalImport(file.file.Path, file.language, name, knownFiles)
+			if target == "" || seenTargets[target] {
+				continue
+			}
+			seenTargets[target] = true
+			for key, definitions := range local[target] {
+				byName[key] = append(byName[key], definitions...)
+			}
+		}
+		indexes[file.file.Path] = byName
+	}
+	return indexes
+}
+
+func knownSourceFiles(files []parsedFile) map[string]struct{} {
+	known := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		known[filepath.ToSlash(filepath.Clean(file.file.Path))] = struct{}{}
+	}
+	return known
 }
 
 func resolveLocalImport(fromPath, language, importPath string, known map[string]struct{}) string {
@@ -725,7 +906,28 @@ func dedupeReferences(refs []reference) []reference {
 		if out[i].startByte != out[j].startByte {
 			return out[i].startByte < out[j].startByte
 		}
-		return out[i].name < out[j].name
+		if out[i].name != out[j].name {
+			return out[i].name < out[j].name
+		}
+		// Nested parser candidates can share a start and normalized name. Emit
+		// the wider candidate first so the graph builder deterministically keeps
+		// the more precise inner call as the final edge evidence.
+		if out[i].endByte != out[j].endByte {
+			return out[i].endByte > out[j].endByte
+		}
+		if out[i].kind != out[j].kind {
+			return out[i].kind < out[j].kind
+		}
+		if out[i].startLine != out[j].startLine {
+			return out[i].startLine < out[j].startLine
+		}
+		if out[i].column != out[j].column {
+			return out[i].column < out[j].column
+		}
+		if out[i].path != out[j].path {
+			return out[i].path < out[j].path
+		}
+		return out[i].language < out[j].language
 	})
 	return out
 }

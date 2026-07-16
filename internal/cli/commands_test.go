@@ -127,6 +127,9 @@ func TestExecutePrintsDiscoverableSubcommandHelp(t *testing.T) {
 		if !strings.Contains(stdout.String(), "--branch-fanout") {
 			t.Fatalf("retrieval help omits branch fanout: %q", stdout.String())
 		}
+		if args[0] != "benchmark" && !strings.Contains(stdout.String(), "--candidate-shortlist") {
+			t.Fatalf("context help omits candidate shortlist profile: %q", stdout.String())
+		}
 	}
 }
 

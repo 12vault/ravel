@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "minimumTotalCases": 50,
+  "retriever": "context",
+  "topK": 25,
+  "tokenBudget": 1200,
+  "qualityGate": "benchmarks/external/quality-gate.json",
+  "repositories": [
+    {
+      "name": "chi",
+      "url": "https://github.com/go-chi/chi.git",
+      "revision": "8b258c7bb28f97a5f2a856ff7ef962578fec9215",
+      "dataset": "benchmarks/external/chi.jsonl",
+      "datasetRevision": "external-chi-v1"
+    },
+    {
+      "name": "express",
+      "url": "https://github.com/expressjs/express.git",
+      "revision": "ae6dd37680e3a00618d6c8a3e522f0ee4eeba1a4",
+      "dataset": "benchmarks/external/express.jsonl",
+      "datasetRevision": "external-express-v1"
+    },
+    {
+      "name": "click",
+      "url": "https://github.com/pallets/click.git",
+      "revision": "b67832c2167e5b0ff6764a8c04a0a9087e697b5a",
+      "dataset": "benchmarks/external/click.jsonl",
+      "datasetRevision": "external-click-v1"
+    }
+  ]
+}

@@ -1,5 +1,7 @@
 # Ravel benchmarks
 
+See [`RESULTS.md`](RESULTS.md) for the running human-readable Ravel vs Graphify results log.
+
 Run the repeatable local suite with:
 
 ```sh
@@ -23,13 +25,30 @@ The checked-in ten-question relationship suite runs against Ravel's own graph:
 ravel build .
 ravel benchmark --dataset benchmarks/ravel-retrieval.jsonl \
   --retriever context --top-k 25 --token-budget 800 \
-  --dataset-revision ravel-repository-v1 --graph-revision <commit>
+  --gate benchmarks/self-quality-gate.json \
+  --dataset-revision ravel-repository-v2 --graph-revision <commit>
 ravel benchmark --dataset benchmarks/ravel-retrieval.jsonl \
   --retriever flat --top-k 25 \
   --dataset-revision ravel-repository-v1 --graph-revision <commit>
 ```
 
-Benchmark defaults come from the same `.reporavel.yaml` retrieval section as `ravel context`; explicit flags are recorded overrides.
+Benchmark defaults come from the same `.reporavel.yaml` retrieval section as `ravel context`; explicit flags are recorded overrides. A quality gate is a strict JSON file containing case-count and metric thresholds. When `requireFreshExpectations` is true, Ravel rejects expected node or edge IDs that are absent from the current graph before scoring. Threshold failures still write the result report, attach a `qualityGate` result, and return a non-zero status.
+
+The CI corpus adds 54 relationship questions across exact revisions of chi (Go), Express (JavaScript), and Click (Python). Validate its manifest without network access:
+
+```sh
+python3 benchmarks/run_external_quality.py --check
+```
+
+Run the full pinned suite with a locally built Ravel binary:
+
+```sh
+go build -o /tmp/ravel ./cmd/ravel
+python3 benchmarks/run_external_quality.py \
+  --ravel /tmp/ravel --workspace /tmp/ravel-external-quality
+```
+
+The runner audits each checkout before building its graph, enforces at least 50 total cases, runs the shared quality gate independently for every repository, and leaves raw reports under the workspace `results/` directory. The repositories, full commit SHAs, datasets, and retrieval settings live in `external/suite.json`.
 
 Each JSONL record requires `id`, `dataset`, `question`, and either `expectedNodeIds` or `expectedEvidence`. Evidence IDs may be node IDs or edge IDs. Dataset names may be `repository-questions`, `LOCOMO`, `LongMemEval`, or a custom suite.
 
@@ -52,14 +71,141 @@ Version 3 results report:
 - Mean, p50, and p95 query latency plus separate index-build time.
 - Logical graph SHA-256/version/build time, graph and dataset revisions, dataset SHA-256, adapter version, Ravel version, Go version, OS, and architecture.
 - Optional externally adjudicated accuracy, key-fact coverage, total agent tokens, total spend, per-case provenance, and answer-ledger SHA-256.
+- Optional quality-gate status, failure reasons, and gate configuration SHA-256.
 
 The estimate conservatively uses three UTF-8 bytes per token for the compact text payload. A `--json` envelope adds field-name and formatting overhead and is not part of that estimate.
 
 ## Quality datasets
 
-`datasets.json` defines the implemented repository-question contract. Custom dataset names are accepted after the caller converts their corpus and questions into evidence-tagged Ravel graphs plus the common JSONL format. Ravel does not ship or claim native LOCOMO/LongMemEval corpus adapters, download external datasets, or call a model/judge. Case isolation and adjudication remain the benchmark author's responsibility; the optional answer ledger records their resulting quality and cost measurements reproducibly.
+`datasets.json` defines the implemented repository-question contract. The checked-in external suite uses pinned public repository revisions; custom dataset names are accepted after the caller converts their corpus and questions into evidence-tagged Ravel graphs plus the common JSONL format. Ravel does not ship or claim native LOCOMO/LongMemEval corpus adapters, download external datasets outside the explicit suite runner, or call a model/judge. Case isolation and adjudication remain the benchmark author's responsibility; the optional answer ledger records their resulting quality and cost measurements reproducibly.
 
 Pass `--dataset-revision <revision>` and `--adapter-version <version>` for publishable runs. Do not compare scores produced with different graphs, datasets, retrieval settings, or model settings.
+
+### RepoBench 10,000-case compatibility run
+
+`run_repobench_10k.py` adapts the CC-BY-4.0 RepoBench v1.1 `cross_file_first` splits into 5,000 Python and 5,000 Java retrieval cases. Each case is an isolated miniature repository containing the benchmark's candidate snippets and incomplete target file. Ravel and Graphify receive the same corpus and query; the adapter scores retrieval of the gold cross-file identifier or path, reciprocal rank, context size, latency, truncation, and per-case build time. It does not invoke a model or claim final-answer correctness.
+
+The runner defaults to `--ravel-profile broad` for a retrieval-shape comparison with Graphify: up to 20 lexical seeds, depth 3, effectively unpruned traversal on these small fragment graphs, and the explicit candidate-shortlist output profile. Use `--ravel-profile compact` to measure Ravel's normal balanced agent-context defaults instead. Ravel's raw records preserve token-component, deduplication, shortlist-selection, and omitted-explanation accounting; summaries report p99 build/query latency and aggregate those Ravel-specific fields. `truncationRate` measures hard output or traversal limits, while `shortlistSelectionRate` reports cases where lower-ranked discovery alternatives were intentionally left outside the output shortlist. The selected profile and exact flags are recorded in `run-config.json` and `summary.json`; a workspace cannot resume under different retrieval settings.
+
+Download the official Python and Java Parquet shards separately, install PyArrow in an isolated environment, then prepare a stable manifest:
+
+```sh
+python benchmarks/run_repobench_10k.py prepare \
+  --data-root /tmp/repobench-10k-data \
+  --output /tmp/repobench-10k-manifest
+python benchmarks/run_repobench_10k.py check \
+  --manifest /tmp/repobench-10k-manifest/manifest.json
+```
+
+Run a smoke sample before starting or resuming all 10,000 cases:
+
+```sh
+python benchmarks/run_repobench_10k.py run \
+  --manifest /tmp/repobench-10k-manifest/manifest.json \
+  --data-root /tmp/repobench-10k-data \
+  --workspace /tmp/repobench-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --limit 100
+python benchmarks/run_repobench_10k.py run \
+  --manifest /tmp/repobench-10k-manifest/manifest.json \
+  --data-root /tmp/repobench-10k-data \
+  --workspace /tmp/repobench-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify
+```
+
+The append-only `results.jsonl` is the raw resumable record. `summary.json` records aggregate scores, versions, hashes, and platform metadata. Do not combine the resulting deterministic retrieval score with SWE-QA-Pro's LLM-judged answer score.
+
+### TypeScript and Go comparisons
+
+`run_crosscodeeval_typescript.py` adapts the 3,356-case CrossCodeEval TypeScript release. Because CrossCodeEval does not publish its original repositories or explicit gold retrieval spans, this is deliberately labeled a compatibility benchmark rather than the official model-completion metric. The adapter joins all six published retrieval files by `task_id`, materializes the deduplicated candidate chunks as the same miniature repository for both tools, and derives scorable gold APIs from the hidden line's referenced imports or cross-file definitions. The current official release yields 3,122 scorable cases; source, payload, manifest, and result hashes make that derivation reproducible.
+
+```sh
+python3 benchmarks/run_crosscodeeval_typescript.py prepare \
+  --data-root /tmp/crosscodeeval_data \
+  --output /tmp/crosscodeeval-typescript-manifest
+python3 benchmarks/run_crosscodeeval_typescript.py check \
+  --manifest /tmp/crosscodeeval-typescript-manifest/manifest.json
+python3 benchmarks/run_crosscodeeval_typescript.py run \
+  --manifest /tmp/crosscodeeval-typescript-manifest/manifest.json \
+  --workspace /tmp/crosscodeeval-typescript-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --limit 100
+```
+
+Remove `--limit 100` to run or resume all scorable cases. Raw records report gold-identifier recall, hit rate, reciprocal rank, tokens, truncation, build latency, and query p95/p99 for both tools. The candidate union includes CrossCodeEval's oracle retrieval views, although neither tool receives their labels, scores, or ordering. This therefore measures reranking and graph traversal over the published candidate pool; it does not claim answer correctness or full-repository retrieval quality.
+
+`run_contextbench.py` uses ContextBench's human-labeled repository file and line spans. It checks out every exact public commit, builds each tool's graph once per case revision, sends the same issue statement and token budget to both tools, and reports file/span precision and recall, MRR, tokens, truncation, and build/query tail latency. Both tools receive the same checkout, but retain their native corpus coverage: Graphify uses its code-only extractor while Ravel also accepts its supported repository documents. Preparing Parquet input requires PyArrow; fetching the pinned repositories is an explicit network step, after which `run --offline` performs no repository fetches.
+
+```sh
+python benchmarks/run_contextbench.py prepare \
+  --parquet /tmp/ContextBench/full.parquet \
+  --output /tmp/contextbench-go-manifest --language go
+python benchmarks/run_contextbench.py fetch \
+  --manifest /tmp/contextbench-go-manifest/manifest.json \
+  --cache /tmp/contextbench-repository-cache
+python benchmarks/run_contextbench.py run \
+  --manifest /tmp/contextbench-go-manifest/manifest.json \
+  --cache /tmp/contextbench-repository-cache \
+  --workspace /tmp/contextbench-go-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --offline
+```
+
+ContextBench currently supplies 104 Go cases. Its gold spans may overlap; the adapter merges intervals before scoring so duplicated annotations do not inflate recall or precision. Graph build measurements are aggregated once per unique pinned revision rather than once per question.
+
+`run_codesearchnet_go.py` selects a deterministic 1,005-case slice from the 14,291-row CodeSearchNet Go test split. It builds one shared corpus containing the 1,005 paired functions, removes documentation from the corpus, redacts the exact gold symbol from each natural-language query, and scores retrieval of the exact paired function file. This is not the official CodeSearchNet challenge metric: the paired documentation/function relation is proxy gold and other functions may also satisfy a query. The source is the public CodeSearchNet corpus; the reproducible Parquet transport currently has SHA-256 `bedf275a31459a8ecf5bcaadfeec7f1b6971f07735f3b8a0ebd4ed4648b67af3`.
+
+```sh
+python-with-pyarrow benchmarks/run_codesearchnet_go.py prepare \
+  --parquet /tmp/codesearchnet-go-test.parquet \
+  --output /tmp/codesearchnet-go-manifest
+python3 benchmarks/run_codesearchnet_go.py check \
+  --manifest /tmp/codesearchnet-go-manifest/manifest.json
+python-with-pyarrow benchmarks/run_codesearchnet_go.py run \
+  --manifest /tmp/codesearchnet-go-manifest/manifest.json \
+  --parquet /tmp/codesearchnet-go-test.parquet \
+  --workspace /tmp/codesearchnet-go-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --limit 20
+```
+
+Use a fresh workspace and remove `--limit 20` for all 1,005 cases because the candidate corpus is shared and therefore changes with the limit. PyArrow is needed only for `prepare` and `run`; `check` remains dependency-free. The adapter records source, selection, manifest, executable, configuration, and result hashes, and rejects a run if either tool produces an empty graph. Graphify's multi-file AST worker must be allowed to create local process-synchronization primitives; a restricted sandbox can otherwise fail extraction with `Operation not permitted`.
+
+`run_ghostty_swift.py` runs a real-repository Swift comparison on a pinned Ghostty checkout. It copies every tracked `.swift` file under `macos/` into one shared corpus, blanks all `///` documentation while preserving line numbers, redacts the exact declaration symbol from each documentation-derived query, and scores the exact path, symbol, and declaration line. The adapter uses every eligible named class, struct, enum, protocol, actor, or function instead of padding the suite with weak undocumented cases. This is a retrieval compatibility benchmark, not an official Ghostty or Swift metric, and the documentation/declaration relation is proxy gold.
+
+```sh
+git clone https://github.com/ghostty-org/ghostty /tmp/ghostty
+git -C /tmp/ghostty checkout 73534c4680a809398b396c94ac7f12fcccb7963d
+python3 benchmarks/run_ghostty_swift.py prepare \
+  --repository /tmp/ghostty --output /tmp/ghostty-swift-manifest
+python3 benchmarks/run_ghostty_swift.py check \
+  --manifest /tmp/ghostty-swift-manifest/manifest.json
+python3 benchmarks/run_ghostty_swift.py run \
+  --manifest /tmp/ghostty-swift-manifest/manifest.json \
+  --repository /tmp/ghostty --workspace /tmp/ghostty-swift-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --limit 20
+```
+
+Use a fresh workspace and remove `--limit 20` for every eligible case. Unlike the snippet-based Go benchmark, smoke and full runs use the same complete Swift corpus. The manifest fingerprints the exact Ghostty commit and all tracked Swift source bytes; the runner rejects source drift, changed executables or settings, missing graphs, and empty graphs.
+
+The 2026-07-16 run's full metrics, per-kind retrieval, declaration coverage, executable and artifact hashes, and limitations are recorded in [`results/swift-ghostty-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-16.json`](results/swift-ghostty-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-16.json).
+
+`run_real_fim_scale.py` adds a large stability and tail-latency pass over all 5,769 TypeScript and Go cases in the official Real-FIM-Eval Add/Edit archives (3,182 TypeScript and 2,587 Go). Real-FIM-Eval does not provide gold retrieval spans, so this adapter must not be used to claim answer or retrieval correctness. It materializes the same pre-change file for both tools, fingerprints but never exposes the hidden canonical solution, and reports errors, non-empty output, target-file-return rate, payload, truncation, and build/query p50/p95/p99/max.
+
+```sh
+python3 benchmarks/run_real_fim_scale.py prepare \
+  --add /tmp/real-fim-eval-add.jsonl.gz \
+  --edit /tmp/real-fim-eval-edit.jsonl.gz \
+  --output /tmp/real-fim-typescript-go-manifest
+python3 benchmarks/run_real_fim_scale.py check \
+  --manifest /tmp/real-fim-typescript-go-manifest/manifest.json
+python3 benchmarks/run_real_fim_scale.py run \
+  --manifest /tmp/real-fim-typescript-go-manifest/manifest.json \
+  --add /tmp/real-fim-eval-add.jsonl.gz \
+  --edit /tmp/real-fim-eval-edit.jsonl.gz \
+  --workspace /tmp/real-fim-typescript-go-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --limit 20
+```
+
+Remove `--limit 20` to run or resume all 5,769 scale cases. Combined with the 3,122 scorable TypeScript CrossCodeEval cases, 104 gold-span Go ContextBench cases, and 1,005 paired-function CodeSearchNet Go cases above, this exercises exactly 10,000 benchmark cases: 6,304 TypeScript and 3,696 Go. The first 4,231 have explicit or deterministic retrieval gold; Real-FIM's 5,769 cases are scale/parser checks only.
+
+The isolated 2026-07-16 TypeScript and Go summaries, executable hashes, pairwise counts, and limitations are recorded in [`results/typescript-go-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-16.json`](results/typescript-go-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-16.json).
 
 ## Optional Graphify compatibility comparison
 

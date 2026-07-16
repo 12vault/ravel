@@ -21,6 +21,12 @@ func MarkdownWithCommunityOptions(g graph.Graph, communities bool, options commu
 	if communities {
 		g = community.AssignWithOptions(g, options)
 	}
+	return MarkdownPrepared(g, communities)
+}
+
+// MarkdownPrepared renders a graph whose optional community metadata has
+// already been prepared by the caller.
+func MarkdownPrepared(g graph.Graph, communities bool) string {
 	var b strings.Builder
 	b.WriteString("# RepoRavel Report\n\n")
 	b.WriteString("## Summary\n")
@@ -68,6 +74,8 @@ func MarkdownWithCommunityOptions(g graph.Graph, communities bool, options commu
 	writeNodeList(&b, "Schema Views", nodesOfKind(g, graph.NodeView), 20)
 	writeNodeList(&b, "Schema Indexes", nodesOfKind(g, graph.NodeIndex), 20)
 	writeImportList(&b, g)
+	writeImportCycles(&b, g)
+	writeCallFlows(&b, g)
 	writeDiagnostics(&b, g)
 	writeReadingOrder(&b, g)
 	return b.String()

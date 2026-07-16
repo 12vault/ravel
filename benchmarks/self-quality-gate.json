@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "minimumCases": 10,
+  "minimumMeanRecall": 0.75,
+  "minimumMeanReciprocalRank": 0.95,
+  "minimumMeanEvidenceRecall": 0.70,
+  "requireFreshExpectations": true
+}

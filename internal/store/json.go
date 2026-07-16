@@ -27,12 +27,28 @@ type ChangesFile struct {
 	Removed []string `json:"removed"`
 }
 
+type ArtifactProgress struct {
+	Path      string
+	Completed int
+	Total     int
+}
+
 func WriteArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report string, output config.OutputConfig) error {
 	if output.CommunityClustering {
 		g = community.AssignWithOptions(g, community.Options{Granularity: community.Preset(output.CommunityGranularity), HubDegreeThreshold: output.CommunityHubDegreeThreshold})
 	} else {
 		g = community.Remove(g)
 	}
+	return WritePreparedArtifacts(outDir, g, scanResult, report, output)
+}
+
+// WritePreparedArtifacts persists a graph whose optional community metadata
+// has already been prepared by the caller.
+func WritePreparedArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report string, output config.OutputConfig) error {
+	return WritePreparedArtifactsWithProgress(outDir, g, scanResult, report, output, nil)
+}
+
+func WritePreparedArtifactsWithProgress(outDir string, g graph.Graph, scanResult scan.Result, report string, output config.OutputConfig, progress func(ArtifactProgress)) error {
 	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
@@ -40,28 +56,61 @@ func WriteArtifacts(outDir string, g graph.Graph, scanResult scan.Result, report
 	if err := os.MkdirAll(statePath, 0o755); err != nil {
 		return err
 	}
-	if err := WriteJSON(filepath.Join(statePath, "graph.json"), g); err != nil {
+	total := 2
+	if output.JSON {
+		total += 3
+	}
+	if output.MarkdownReport {
+		total++
+	}
+	completed := 0
+	writeArtifact := func(path string, write func() error) error {
+		if progress != nil {
+			progress(ArtifactProgress{Path: path, Completed: completed, Total: total})
+		}
+		if err := write(); err != nil {
+			return err
+		}
+		completed++
+		if progress != nil {
+			progress(ArtifactProgress{Path: path, Completed: completed, Total: total})
+		}
+		return nil
+	}
+	if err := writeArtifact(filepath.Join(stateDir, "graph.json"), func() error {
+		return WriteJSON(filepath.Join(statePath, "graph.json"), g)
+	}); err != nil {
 		return err
 	}
-	if err := WriteJSON(filepath.Join(statePath, "files.json"), scanResult); err != nil {
+	if err := writeArtifact(filepath.Join(stateDir, "files.json"), func() error {
+		return WriteJSON(filepath.Join(statePath, "files.json"), scanResult)
+	}); err != nil {
 		return err
 	}
 	jsonFiles := []string{"graph.json", "files.json", "symbols.json"}
 	if output.JSON {
-		if err := WriteJSON(filepath.Join(outDir, "graph.json"), g); err != nil {
+		if err := writeArtifact("graph.json", func() error {
+			return WriteJSON(filepath.Join(outDir, "graph.json"), g)
+		}); err != nil {
 			return err
 		}
-		if err := WriteJSON(filepath.Join(outDir, "files.json"), scanResult); err != nil {
+		if err := writeArtifact("files.json", func() error {
+			return WriteJSON(filepath.Join(outDir, "files.json"), scanResult)
+		}); err != nil {
 			return err
 		}
-		if err := WriteJSON(filepath.Join(outDir, "symbols.json"), SymbolsFile{Symbols: symbols(g)}); err != nil {
+		if err := writeArtifact("symbols.json", func() error {
+			return WriteJSON(filepath.Join(outDir, "symbols.json"), SymbolsFile{Symbols: symbols(g)})
+		}); err != nil {
 			return err
 		}
 	} else if err := removeArtifacts(outDir, jsonFiles); err != nil {
 		return err
 	}
 	if output.MarkdownReport {
-		if err := os.WriteFile(filepath.Join(outDir, "report.md"), []byte(report), 0644); err != nil {
+		if err := writeArtifact("report.md", func() error {
+			return os.WriteFile(filepath.Join(outDir, "report.md"), []byte(report), 0644)
+		}); err != nil {
 			return err
 		}
 	} else if err := removeArtifacts(outDir, []string{"report.md"}); err != nil {

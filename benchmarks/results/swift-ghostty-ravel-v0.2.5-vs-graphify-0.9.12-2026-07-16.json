@@ -1,0 +1,136 @@
+{
+  "version": 1,
+  "date": "2026-07-16",
+  "benchmark": "Ghostty Swift documented-declaration retrieval compatibility",
+  "officialMetric": false,
+  "claimsAnswerCorrectness": false,
+  "environment": {
+    "os": "Darwin",
+    "arch": "arm64",
+    "hardware": "Apple M1 Pro",
+    "tokenBudget": 2000,
+    "workers": 2,
+    "ravelProfile": "broad",
+    "ravelProfileArgs": [
+      "--seed-limit", "20", "--max-depth", "3", "--max-nodes", "10000",
+      "--branch-fanout", "10000", "--candidate-shortlist"
+    ]
+  },
+  "source": {
+    "repository": "https://github.com/ghostty-org/ghostty",
+    "revision": "73534c4680a809398b396c94ac7f12fcccb7963d",
+    "swiftRoot": "macos",
+    "swiftFiles": 188,
+    "swiftLines": 36025,
+    "swiftSourceSha256": "63e94582fa8657469384db07a6f2a83d592725ba287c9458e7c85443e5c0477d"
+  },
+  "tools": {
+    "ravel": {
+      "version": "v0.2.5",
+      "executableSha256": "ae3b506247cb61d0c1d2316f9bb5bf3a8c290603b488d991b45f064cb1736c1e"
+    },
+    "graphify": {
+      "version": "0.9.12",
+      "executableSha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
+    }
+  },
+  "methodology": {
+    "adapterVersion": "ghostty-swift-doc-declaration-v1",
+    "queryMode": "swift-documentation-symbol-redacted-v1",
+    "cases": 455,
+    "retrievalGold": "exact documented Swift declaration path, symbol, and line",
+    "corpus": "all tracked .swift files under macos, shared by both tools",
+    "leakageControl": "all /// documentation blanked from the corpus with line numbers preserved; exact gold symbols redacted from queries",
+    "caseKinds": {
+      "actor": 1,
+      "class": 52,
+      "enum": 26,
+      "func": 299,
+      "protocol": 9,
+      "struct": 68
+    }
+  },
+  "results": {
+    "successfulCases": 455,
+    "failedCases": 0,
+    "ravel": {
+      "buildMs": 88551.32837500423,
+      "graphNodes": 491,
+      "graphEdges": 779,
+      "declarationCoverage": 0.210989010989011,
+      "coveredDeclarations": 96,
+      "recall": 0.0945054945054945,
+      "mrr": 0.07158517810691724,
+      "meanQueryMs": 39.177004657276385,
+      "queryP95Ms": 44.42345805000514,
+      "queryP99Ms": 50.15999998431653,
+      "queryMaxMs": 74.33933403808624,
+      "meanEstimatedTokens": 1914.778021978022,
+      "meanReturned": 28.483516483516482,
+      "truncationRate": 0.0
+    },
+    "graphify": {
+      "buildMs": 3356.8871250608936,
+      "graphNodes": 3542,
+      "graphEdges": 7020,
+      "declarationCoverage": 0.8197802197802198,
+      "coveredDeclarations": 373,
+      "recall": 0.08791208791208792,
+      "mrr": 0.0033190065897463978,
+      "meanQueryMs": 346.46647847564583,
+      "queryP95Ms": 385.1486670318991,
+      "queryP99Ms": 405.1633750787005,
+      "queryMaxMs": 448.3017079764977,
+      "meanEstimatedTokens": 2061.0461538461536,
+      "meanReturned": 52.63076923076923,
+      "truncationRate": 0.8967032967032967
+    },
+    "pairwise": {
+      "bothHit": 1,
+      "ravelOnlyHit": 42,
+      "graphifyOnlyHit": 39,
+      "bothMiss": 373,
+      "ravelQueryWins": 455
+    },
+    "retrievalByKind": {
+      "actor": {"cases": 1, "ravelHits": 0, "graphifyHits": 0},
+      "class": {"cases": 52, "ravelHits": 10, "graphifyHits": 10},
+      "enum": {"cases": 26, "ravelHits": 13, "graphifyHits": 0},
+      "func": {"cases": 299, "ravelHits": 0, "graphifyHits": 27},
+      "protocol": {"cases": 9, "ravelHits": 0, "graphifyHits": 1},
+      "struct": {"cases": 68, "ravelHits": 20, "graphifyHits": 2}
+    },
+    "declarationCoverageByKind": {
+      "ravel": {"actor": 1, "class": 38, "enum": 19, "func": 0, "protocol": 0, "struct": 38},
+      "graphify": {"actor": 1, "class": 38, "enum": 25, "func": 237, "protocol": 9, "struct": 63}
+    }
+  },
+  "derivedComparisons": {
+    "recallPointAdvantageRavel": 0.00659340659340658,
+    "mrrRatioRavelOverGraphify": 21.56825428671023,
+    "querySpeedRatioRavelOverGraphify": 8.843618380388259,
+    "payloadReductionRavel": 0.07096790704816491,
+    "buildSpeedRatioGraphifyOverRavel": 26.379000864796108,
+    "declarationCoveragePointAdvantageGraphify": 0.6087912087912088,
+    "recallConditionalOnExtractedDeclaration": {
+      "ravel": 0.44791666666666663,
+      "graphify": 0.10723860589812334
+    }
+  },
+  "artifactSha256": {
+    "manifest": "e93cb77b984647bc8f2fd678fce6e9b919e88bd951e847f8649d0705d37dddef",
+    "casesJsonl": "7a92bf259b20fe96af7a444a4942e972264d07a9fd53a0d16bb0605975a87b45",
+    "resultsJsonl": "5a538ad755e61f19b895af6210c71bd62c302f8f2d14a6b4286fa8aa86bd2611",
+    "runConfig": "0102764302ff0343b4defc1a05acfe9621df6c7239b7aca8f9f6d55a31c50954",
+    "ravelGraph": "9920e029573e6ca44679446a61597a58e7d06a939e1eb7d7513daa7b7b6eb438",
+    "graphifyGraph": "36f6108348c34d8a4a23a819fa6e117f4a01397cd5f458a33f45110a074257ef"
+  },
+  "limitations": [
+    "Documentation/declaration pairs are proxy retrieval gold; no model answers were generated or judged.",
+    "The tools retain their native graph schemas and extraction behavior, so graph coverage is intentionally not equalized.",
+    "Ravel emitted eight Swift parse-timeout diagnostics in the recorded full build and 89 diagnostics overall.",
+    "Ravel's smoke and full builds produced 506 and 491 nodes respectively because timeout-bounded Swift parsing is sensitive to runtime conditions.",
+    "Ravel extracted none of the 299 eligible function declarations; Graphify extracted 237.",
+    "Graphify marked 89.67% of query outputs truncated at the 2,000-token budget."
+  ]
+}

@@ -41,6 +41,14 @@ type Options struct {
 	HubDegreeThreshold int // 0 selects automatic p99; -1 disables down-weighting.
 }
 
+type Progress struct {
+	Stage     string
+	Path      string
+	Completed int
+	Total     int
+	Unit      string
+}
+
 func DefaultOptions() Options { return Options{Granularity: PresetBalanced, HubDegreeThreshold: 0} }
 
 func ParsePreset(value string) (Preset, error) {
@@ -76,6 +84,10 @@ func Assign(g graph.Graph) graph.Graph {
 }
 
 func AssignWithOptions(g graph.Graph, options Options) graph.Graph {
+	return AssignWithProgress(g, options, nil)
+}
+
+func AssignWithProgress(g graph.Graph, options Options, progress func(Progress)) graph.Graph {
 	if len(g.Nodes) == 0 {
 		return g
 	}
@@ -88,20 +100,23 @@ func AssignWithOptions(g graph.Graph, options Options) graph.Graph {
 	ids := make([]string, 0, len(g.Nodes))
 	known := make(map[string]bool, len(g.Nodes))
 	nodeByID := make(map[string]graph.Node, len(g.Nodes))
-	for _, node := range g.Nodes {
+	for i, node := range g.Nodes {
 		ids = append(ids, node.ID)
 		known[node.ID] = true
 		nodeByID[node.ID] = node
+		reportProgress(progress, Progress{Stage: "Indexing nodes", Path: node.ID, Completed: i + 1, Total: len(g.Nodes), Unit: "nodes"})
 	}
 	sort.Strings(ids)
 
 	rawDegree := make(map[string]int64, len(ids))
-	for _, edge := range g.Edges {
+	for i, edge := range g.Edges {
 		if edge.From == edge.To || !known[edge.From] || !known[edge.To] {
+			reportProgress(progress, Progress{Stage: "Indexing edges", Path: edge.ID, Completed: i + 1, Total: len(g.Edges), Unit: "edges"})
 			continue
 		}
 		rawDegree[edge.From]++
 		rawDegree[edge.To]++
+		reportProgress(progress, Progress{Stage: "Indexing edges", Path: edge.ID, Completed: i + 1, Total: len(g.Edges), Unit: "edges"})
 	}
 	hubThreshold := options.HubDegreeThreshold
 	if hubThreshold == 0 {
@@ -111,8 +126,9 @@ func AssignWithOptions(g graph.Graph, options Options) graph.Graph {
 	weights := make(map[string]map[string]int64, len(ids))
 	degree := make(map[string]int64, len(ids))
 	var twiceTotal int64
-	for _, edge := range g.Edges {
+	for i, edge := range g.Edges {
 		if edge.From == edge.To || !known[edge.From] || !known[edge.To] {
+			reportProgress(progress, Progress{Stage: "Weighting edges", Path: edge.ID, Completed: i + 1, Total: len(g.Edges), Unit: "edges"})
 			continue
 		}
 		w := edgeWeight(edge.Kind) * 1024
@@ -131,19 +147,22 @@ func AssignWithOptions(g graph.Graph, options Options) graph.Graph {
 		degree[edge.From] += w
 		degree[edge.To] += w
 		twiceTotal += 2 * w
+		reportProgress(progress, Progress{Stage: "Weighting edges", Path: edge.ID, Completed: i + 1, Total: len(g.Edges), Unit: "edges"})
 	}
 
 	labels := make(map[string]string, len(ids))
 	totals := make(map[string]int64, len(ids))
-	for _, id := range ids {
+	for i, id := range ids {
 		labels[id] = id
 		totals[id] = degree[id]
+		reportProgress(progress, Progress{Stage: "Seeding communities", Path: id, Completed: i + 1, Total: len(ids), Unit: "nodes"})
 	}
 
 	if twiceTotal > 0 {
 		for pass := 0; pass < 50; pass++ {
 			moved := false
-			for _, id := range ids {
+			for i, id := range ids {
+				reportProgress(progress, Progress{Stage: "Clustering pass " + strconv.Itoa(pass+1), Path: id, Completed: i + 1, Total: len(ids), Unit: "nodes"})
 				ki := degree[id]
 				if ki == 0 {
 					continue
@@ -187,12 +206,19 @@ func AssignWithOptions(g graph.Graph, options Options) graph.Graph {
 	}
 
 	members := map[string][]string{}
-	for _, id := range ids {
+	for i, id := range ids {
 		members[labels[id]] = append(members[labels[id]], id)
+		reportProgress(progress, Progress{Stage: "Grouping communities", Path: id, Completed: i + 1, Total: len(ids), Unit: "nodes"})
 	}
 	stable := make(map[string]string, len(members))
 	names := make(map[string]string, len(members))
-	for label, communityMembers := range members {
+	memberLabels := make([]string, 0, len(members))
+	for label := range members {
+		memberLabels = append(memberLabels, label)
+	}
+	sort.Strings(memberLabels)
+	for i, label := range memberLabels {
+		communityMembers := members[label]
 		hash := sha256.New()
 		for _, id := range communityMembers {
 			_, _ = hash.Write([]byte(id))
@@ -204,6 +230,7 @@ func AssignWithOptions(g graph.Graph, options Options) graph.Graph {
 			group = append(group, nodeByID[id])
 		}
 		names[label] = name(group)
+		reportProgress(progress, Progress{Stage: "Naming communities", Path: names[label], Completed: i + 1, Total: len(memberLabels), Unit: "communities"})
 	}
 
 	out := g
@@ -230,8 +257,19 @@ func AssignWithOptions(g graph.Graph, options Options) graph.Graph {
 		meta[MetaGranularityKey] = string(options.Granularity)
 		meta[MetaHubThresholdKey] = strconv.Itoa(hubThreshold)
 		out.Nodes[i].Meta = meta
+		reportProgress(progress, Progress{Stage: "Applying communities", Path: out.Nodes[i].ID, Completed: i + 1, Total: len(out.Nodes), Unit: "nodes"})
 	}
+	reportProgress(progress, Progress{Stage: "Communities built", Completed: len(memberLabels), Total: len(memberLabels), Unit: "communities"})
 	return out
+}
+
+func reportProgress(progress func(Progress), event Progress) {
+	if progress == nil {
+		return
+	}
+	if event.Completed == 1 || event.Completed == event.Total || event.Completed%256 == 0 {
+		progress(event)
+	}
 }
 
 func coarsenSmallCommunities(labels map[string]string, ids []string, weights map[string]map[string]int64) {

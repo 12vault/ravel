@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	buildrunner "github.com/12vault/ravel/internal/build"
@@ -76,6 +77,31 @@ func TestRunRemapsLabelAndInvalidatesDescriptionWhenMembershipChanges(t *testing
 		return
 	}
 	t.Fatal("updated app.go node not found")
+}
+
+func TestRunReportsPostBuildProgress(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	first, err := buildrunner.Run(context.Background(), root, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := community.AssignWithOptions(first.Graph, community.Options{Granularity: community.PresetBalanced})
+	var stages []string
+	_, err = RunWithProgress(context.Background(), root, cfg, previous, first.Scan, func(event buildrunner.Progress) {
+		stages = append(stages, event.Stage)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Merging enrichment", "Indexing nodes", "Indexing edges", "Communities built", "Remapping labels"} {
+		if !slices.Contains(stages, want) {
+			t.Errorf("progress stages = %v, missing %q", stages, want)
+		}
+	}
 }
 
 func TestPreserveEnrichmentDropsChangedFileNodes(t *testing.T) {

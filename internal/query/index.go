@@ -22,6 +22,8 @@ const (
 	prefixNameBonus      = 100.0
 	substringNameBonus   = 1.0
 	substringSourceBonus = 0.5
+	structuredNameBonus  = 100_000.0
+	structuredPathBonus  = 20_000.0
 )
 
 // Index is an immutable, reusable query index over a graph. It keeps retrieval
@@ -76,6 +78,12 @@ type rankedNode struct {
 	index        int
 	score        float64
 	matchedTerms map[string]bool
+	anchored     bool
+}
+
+type structuredQueryAnchors struct {
+	names map[string]bool
+	paths []string
 }
 
 // NewIndex constructs a deterministic, in-memory retrieval index.
@@ -177,12 +185,13 @@ func (idx *Index) rankWithAnchors(text, anchorText string) []rankedNode {
 	candidates := idx.candidates(terms)
 	phrase := strings.Join(terms, " ")
 	rawTermCounts := termCounts(searchTokens(anchorText))
+	anchors := extractStructuredQueryAnchors(anchorText)
 	ranked := make([]rankedNode, 0, len(candidates))
 	for _, docIndex := range candidates {
 		doc := &idx.docs[docIndex]
-		score, matched := idx.score(doc, terms, phrase, rawTermCounts)
+		score, matched, anchored := idx.score(doc, terms, phrase, rawTermCounts, anchors)
 		if score > 0 {
-			ranked = append(ranked, rankedNode{index: docIndex, score: score, matchedTerms: matched})
+			ranked = append(ranked, rankedNode{index: docIndex, score: score, matchedTerms: matched, anchored: anchored})
 		}
 	}
 	sort.Slice(ranked, func(i, j int) bool {
@@ -199,9 +208,10 @@ func (idx *Index) rankWithAnchors(text, anchorText string) []rankedNode {
 	return ranked
 }
 
-func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTermCounts map[string]int) (float64, map[string]bool) {
+func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTermCounts map[string]int, anchors structuredQueryAnchors) (float64, map[string]bool, bool) {
 	matched := map[string]bool{}
 	score := 0.0
+	anchorScore, anchored := idx.structuredAnchorScore(doc, anchors)
 	phraseWeight := 1.0
 	for _, term := range terms {
 		phraseWeight = math.Max(phraseWeight, idx.idf(term))
@@ -297,7 +307,133 @@ func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTerm
 	if len(terms) > 1 {
 		score *= 0.5 + coverage*coverage
 	}
-	return score, matched
+	// Structured import anchors are explicit code evidence. Keep their boost
+	// outside broad natural-language coverage penalties so a long source
+	// excerpt cannot drown out an exact imported identifier or path.
+	score += anchorScore
+	return score, matched, anchored
+}
+
+func (idx *Index) structuredAnchorScore(doc *indexedNode, anchors structuredQueryAnchors) (float64, bool) {
+	if len(anchors.names) == 0 && len(anchors.paths) == 0 {
+		return 0, false
+	}
+	name := strings.TrimSuffix(doc.nameText, " ()")
+	anchored := anchors.names[name]
+	score := 0.0
+	if anchored {
+		score += structuredNameBonus * idx.anchorWeight(name)
+	}
+	for _, anchorPath := range anchors.paths {
+		if containsNormalizedPhrase(doc.pathText, anchorPath) || containsNormalizedPhrase(doc.packageText, anchorPath) {
+			score += structuredPathBonus * idx.anchorWeight(anchorPath)
+			break
+		}
+	}
+	return score, anchored
+}
+
+func (idx *Index) anchorWeight(value string) float64 {
+	weight := 0.0
+	for _, term := range searchTokens(value) {
+		weight += idx.idf(term)
+	}
+	return math.Max(1, weight)
+}
+
+func containsNormalizedPhrase(value, phrase string) bool {
+	if value == "" || phrase == "" {
+		return false
+	}
+	return strings.Contains(" "+value+" ", " "+phrase+" ")
+}
+
+func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
+	result := structuredQueryAnchors{names: map[string]bool{}}
+	paths := map[string]bool{}
+	addName := func(value string) {
+		value = strings.TrimSpace(strings.Trim(value, "(){}[]"))
+		if normalized := normalizeSearchText(value); normalized != "" {
+			result.names[normalized] = true
+		}
+	}
+	addPath := func(value string) {
+		value = strings.TrimSpace(strings.Trim(value, ".*"))
+		normalized := normalizeSearchText(value)
+		if len(searchTokens(normalized)) < 2 || paths[normalized] {
+			return
+		}
+		paths[normalized] = true
+		result.paths = append(result.paths, normalized)
+	}
+	addDotted := func(value string, static bool) {
+		value = strings.TrimSpace(strings.TrimSuffix(value, ";"))
+		if comment := strings.Index(value, "//"); comment >= 0 {
+			value = strings.TrimSpace(value[:comment])
+		}
+		if alias := strings.Index(value, " as "); alias >= 0 {
+			addName(value[alias+4:])
+			value = strings.TrimSpace(value[:alias])
+		}
+		parts := strings.Split(strings.Trim(value, ".*"), ".")
+		if len(parts) == 0 {
+			return
+		}
+		addName(parts[len(parts)-1])
+		pathParts := parts
+		if static && len(parts) > 1 {
+			pathParts = parts[:len(parts)-1]
+		}
+		addPath(strings.Join(pathParts, "."))
+	}
+	addImportedNames := func(value string) {
+		value = strings.TrimSpace(strings.Trim(value, "()\\"))
+		for _, imported := range strings.Split(value, ",") {
+			imported = strings.TrimSpace(strings.Trim(imported, "()\\"))
+			if imported == "" {
+				continue
+			}
+			if alias := strings.Index(imported, " as "); alias >= 0 {
+				addName(imported[:alias])
+				addName(imported[alias+4:])
+			} else {
+				addName(imported)
+			}
+		}
+	}
+
+	pythonContinuation := false
+	pythonParenthesized := false
+	for _, rawLine := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(rawLine, "\r"))
+		if pythonContinuation {
+			addImportedNames(line)
+			if pythonParenthesized {
+				pythonContinuation = !strings.Contains(line, ")")
+			} else {
+				pythonContinuation = strings.HasSuffix(line, "\\")
+			}
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "import static "):
+			addDotted(strings.TrimPrefix(line, "import static "), true)
+		case strings.HasPrefix(line, "import "):
+			for _, imported := range strings.Split(strings.TrimPrefix(line, "import "), ",") {
+				addDotted(imported, false)
+			}
+		case strings.HasPrefix(line, "from ") && strings.Contains(line, " import "):
+			separator := strings.Index(line, " import ")
+			module := strings.TrimSpace(strings.TrimPrefix(line[:separator], "from "))
+			addPath(module)
+			imports := line[separator+8:]
+			addImportedNames(imports)
+			pythonParenthesized = strings.Contains(imports, "(") && !strings.Contains(imports, ")")
+			pythonContinuation = pythonParenthesized || strings.HasSuffix(strings.TrimSpace(imports), "\\")
+		}
+	}
+	sort.Strings(result.paths)
+	return result
 }
 
 func bm25FieldTF(count int, length, average, weight float64) float64 {

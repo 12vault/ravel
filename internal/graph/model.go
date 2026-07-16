@@ -158,6 +158,11 @@ func (b *Builder) AddDiagnostic(d Diagnostic) {
 	b.graph.Diagnostics = append(b.graph.Diagnostics, d)
 }
 
+// Counts returns the number of unique nodes and edges currently accumulated.
+func (b *Builder) Counts() (nodes, edges int) {
+	return len(b.nodes), len(b.edges)
+}
+
 func (b *Builder) Build() Graph {
 	b.graph.Nodes = make([]Node, 0, len(b.nodes))
 	for _, n := range b.nodes {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,8 +25,10 @@ import (
 	gitHooks "github.com/12vault/ravel/internal/hooks"
 	"github.com/12vault/ravel/internal/ingest"
 	installmgr "github.com/12vault/ravel/internal/install"
+	"github.com/12vault/ravel/internal/lang/treeanalyzer"
 	"github.com/12vault/ravel/internal/mcp"
 	"github.com/12vault/ravel/internal/orchestrate"
+	pranalysis "github.com/12vault/ravel/internal/prs"
 	"github.com/12vault/ravel/internal/query"
 	"github.com/12vault/ravel/internal/report"
 	"github.com/12vault/ravel/internal/scan"
@@ -34,6 +38,7 @@ import (
 	"github.com/12vault/ravel/internal/store"
 	updater "github.com/12vault/ravel/internal/update"
 	"github.com/12vault/ravel/internal/workflow"
+	"github.com/12vault/ravel/internal/workspace"
 )
 
 var Version = "v0.2.5"
@@ -71,6 +76,11 @@ func ExecuteIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	case "version", "--version":
 		fmt.Fprintf(stdout, "ravel %s\n", Version)
 		return nil
+	case treeanalyzer.InternalWorkerCommand:
+		if len(args) != 1 {
+			return errors.New("tree analyzer worker does not accept arguments")
+		}
+		return treeanalyzer.RunProcessWorker(ctx, stdin, stdout)
 	case "self-update":
 		return runSelfUpdate(ctx, args[1:], stdout)
 	case "update-check":
@@ -115,6 +125,12 @@ func ExecuteIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		return runWatch(ctx, args[1:], stdout)
 	case "share":
 		return runShare(args[1:], stdout)
+	case "merge":
+		return runMerge(args[1:], stdout)
+	case "global":
+		return runGlobal(args[1:], stdout)
+	case "prs":
+		return runPRs(ctx, args[1:], stdout)
 	case "report":
 		return runReport(args[1:], stdout)
 	case "query":
@@ -625,13 +641,25 @@ func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writ
 	if err != nil {
 		return err
 	}
-	progress.Build(buildrunner.Progress{Stage: "Writing graph", Completed: len(result.Scan.Files), Total: len(result.Scan.Files)})
 	out := cfg.Output.Dir
 	if !filepath.IsAbs(out) {
 		out = filepath.Join(result.Scan.Root, out)
 	}
-	md := report.MarkdownWithCommunityOptions(result.Graph, cfg.Output.CommunityClustering, communityOptions(cfg.Output))
-	if err := store.WriteArtifacts(out, result.Graph, result.Scan, md, cfg.Output); err != nil {
+	if cfg.Output.CommunityClustering {
+		result.Graph = community.AssignWithProgress(result.Graph, communityOptions(cfg.Output), func(event community.Progress) {
+			progress.Build(buildrunner.Progress{Stage: event.Stage, Path: event.Path, Completed: event.Completed, Total: event.Total, Unit: event.Unit})
+		})
+	} else {
+		result.Graph = community.Remove(result.Graph)
+	}
+	communityCount := graphCommunityCount(result.Graph)
+	progress.Build(buildrunner.Progress{Stage: "Generating report", Path: fmt.Sprintf("%d communities", communityCount), Completed: len(result.Graph.Nodes), Unit: "nodes", Secondary: len(result.Graph.Edges), SecondaryUnit: "edges"})
+	md := report.MarkdownPrepared(result.Graph, cfg.Output.CommunityClustering)
+	artifactsWritten := 0
+	if err := store.WritePreparedArtifactsWithProgress(out, result.Graph, result.Scan, md, cfg.Output, func(event store.ArtifactProgress) {
+		artifactsWritten = event.Completed
+		progress.Build(buildrunner.Progress{Stage: "Writing artifacts", Path: event.Path, Completed: event.Completed, Total: event.Total, Unit: "artifacts"})
+	}); err != nil {
 		return err
 	}
 	progress.Close()
@@ -643,6 +671,8 @@ func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writ
 	}
 	fmt.Fprintf(stdout, "Nodes: %d\n", len(result.Graph.Nodes))
 	fmt.Fprintf(stdout, "Edges: %d\n", len(result.Graph.Edges))
+	fmt.Fprintf(stdout, "Communities: %d\n", communityCount)
+	fmt.Fprintf(stdout, "Artifacts written: %d\n", artifactsWritten)
 	return nil
 }
 
@@ -688,11 +718,20 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	if err != nil {
 		return err
 	}
-	progress.Build(buildrunner.Progress{Stage: "Writing graph", Completed: len(result.Build.Scan.Files), Total: len(result.Build.Scan.Files)})
-	markdown := report.MarkdownWithCommunityOptions(result.Build.Graph, cfg.Output.CommunityClustering, communityOptions(cfg.Output))
-	if err := store.WriteArtifacts(out, result.Build.Graph, result.Build.Scan, markdown, cfg.Output); err != nil {
+	if !cfg.Output.CommunityClustering {
+		result.Build.Graph = community.Remove(result.Build.Graph)
+	}
+	communityCount := graphCommunityCount(result.Build.Graph)
+	progress.Build(buildrunner.Progress{Stage: "Generating report", Path: fmt.Sprintf("%d communities", communityCount), Completed: len(result.Build.Graph.Nodes), Unit: "nodes", Secondary: len(result.Build.Graph.Edges), SecondaryUnit: "edges"})
+	markdown := report.MarkdownPrepared(result.Build.Graph, cfg.Output.CommunityClustering)
+	artifactsWritten := 0
+	if err := store.WritePreparedArtifactsWithProgress(out, result.Build.Graph, result.Build.Scan, markdown, cfg.Output, func(event store.ArtifactProgress) {
+		artifactsWritten = event.Completed
+		progress.Build(buildrunner.Progress{Stage: "Writing artifacts", Path: event.Path, Completed: event.Completed, Total: event.Total, Unit: "artifacts"})
+	}); err != nil {
 		return err
 	}
+	progress.Build(buildrunner.Progress{Stage: "Writing changes", Completed: len(result.Build.Scan.Files), Total: len(result.Build.Scan.Files)})
 	if err := store.WriteChanges(out, result.Changed, result.Removed); err != nil {
 		return err
 	}
@@ -703,7 +742,21 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	if len(result.Build.Skipped) > 0 {
 		fmt.Fprintf(stdout, "Warning: %d file(s) produced no graph content and were skipped\n", len(result.Build.Skipped))
 	}
+	fmt.Fprintf(stdout, "Nodes: %d\n", len(result.Build.Graph.Nodes))
+	fmt.Fprintf(stdout, "Edges: %d\n", len(result.Build.Graph.Edges))
+	fmt.Fprintf(stdout, "Communities: %d\n", communityCount)
+	fmt.Fprintf(stdout, "Artifacts written: %d\n", artifactsWritten+1)
 	return nil
+}
+
+func graphCommunityCount(g graph.Graph) int {
+	ids := map[string]bool{}
+	for _, node := range g.Nodes {
+		if id := node.Meta[community.MetaKey]; id != "" {
+			ids[id] = true
+		}
+	}
+	return len(ids)
 }
 
 func runWatch(ctx context.Context, args []string, stdout io.Writer) error {
@@ -803,6 +856,328 @@ func runShare(args []string, stdout io.Writer) error {
 	return nil
 }
 
+func runMerge(args []string, stdout io.Writer) error {
+	fs := newFlagSet("merge")
+	outDir := fs.String("out", ".ravel-workspace", "merged graph directory")
+	if err := fs.Parse(flexibleFlags(args, "out")); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		return errors.New("merge requires at least one alias=graph-directory source")
+	}
+	sources := make([]workspace.Source, 0, fs.NArg())
+	for _, specification := range fs.Args() {
+		alias, graphDir, ok := strings.Cut(specification, "=")
+		if !ok || strings.TrimSpace(alias) == "" || strings.TrimSpace(graphDir) == "" {
+			return fmt.Errorf("invalid merge source %q: expected alias=graph-directory", specification)
+		}
+		absolute, err := filepath.Abs(graphDir)
+		if err != nil {
+			return err
+		}
+		g, err := store.LoadGraph(absolute)
+		if err != nil {
+			return fmt.Errorf("load project %q graph: %w", alias, err)
+		}
+		sources = append(sources, workspace.Source{Alias: alias, Location: absolute, Graph: g})
+	}
+	merged, err := workspace.Merge(sources)
+	if err != nil {
+		return err
+	}
+	if err := writeWorkspaceGraph(*outDir, merged); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Merged %d project graphs into %s\n", len(sources), *outDir)
+	return nil
+}
+
+func runGlobal(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("global requires add, remove, list, path, build, query, or context")
+	}
+	defaultPath, err := defaultRegistryPath()
+	if err != nil {
+		return err
+	}
+	subcommand := args[0]
+	args = args[1:]
+	switch subcommand {
+	case "add":
+		fs := newFlagSet("global add")
+		registryPath := fs.String("registry", defaultPath, "registry path")
+		if err := fs.Parse(flexibleFlags(args, "registry")); err != nil {
+			return err
+		}
+		if fs.NArg() != 2 {
+			return errors.New("global add requires an alias and graph directory")
+		}
+		registry, err := workspace.LoadRegistry(*registryPath)
+		if err != nil {
+			return err
+		}
+		registry, err = workspace.Register(registry, fs.Arg(0), fs.Arg(1))
+		if err != nil {
+			return err
+		}
+		if err := workspace.SaveRegistry(*registryPath, registry); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Registered %s in %s\n", fs.Arg(0), *registryPath)
+		return nil
+	case "remove":
+		fs := newFlagSet("global remove")
+		registryPath := fs.String("registry", defaultPath, "registry path")
+		if err := fs.Parse(flexibleFlags(args, "registry")); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return errors.New("global remove requires one alias")
+		}
+		registry, err := workspace.LoadRegistry(*registryPath)
+		if err != nil {
+			return err
+		}
+		registry, removed := workspace.Remove(registry, fs.Arg(0))
+		if !removed {
+			return fmt.Errorf("project alias %q is not registered", fs.Arg(0))
+		}
+		if err := workspace.SaveRegistry(*registryPath, registry); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Removed %s from %s\n", fs.Arg(0), *registryPath)
+		return nil
+	case "list":
+		fs := newFlagSet("global list")
+		registryPath := fs.String("registry", defaultPath, "registry path")
+		if err := fs.Parse(flexibleFlags(args, "registry")); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("global list does not accept positional arguments")
+		}
+		registry, err := workspace.LoadRegistry(*registryPath)
+		if err != nil {
+			return err
+		}
+		if len(registry.Projects) == 0 {
+			fmt.Fprintln(stdout, "No projects registered.")
+			return nil
+		}
+		for _, project := range registry.Projects {
+			fmt.Fprintf(stdout, "%s\t%s\n", project.Alias, project.GraphDir)
+		}
+		return nil
+	case "path":
+		fs := newFlagSet("global path")
+		registryPath := fs.String("registry", defaultPath, "registry path")
+		if err := fs.Parse(flexibleFlags(args, "registry")); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("global path does not accept positional arguments")
+		}
+		fmt.Fprintln(stdout, *registryPath)
+		return nil
+	case "build":
+		fs := newFlagSet("global build")
+		registryPath := fs.String("registry", defaultPath, "registry path")
+		outDir := fs.String("out", ".ravel-global", "merged graph directory")
+		if err := fs.Parse(flexibleFlags(args, "registry", "out")); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("global build does not accept positional arguments")
+		}
+		merged, projects, err := loadGlobalGraph(*registryPath)
+		if err != nil {
+			return err
+		}
+		if err := writeWorkspaceGraph(*outDir, merged); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "Built %d-project global graph in %s\n", projects, *outDir)
+		return nil
+	case "query":
+		fs := newFlagSet("global query")
+		registryPath := fs.String("registry", defaultPath, "registry path")
+		jsonOut := fs.Bool("json", false, "write JSON")
+		limit := fs.Int("limit", 25, "max results")
+		if err := fs.Parse(flexibleFlags(args, "registry", "limit")); err != nil {
+			return err
+		}
+		if fs.NArg() == 0 {
+			return errors.New("global query requires search text")
+		}
+		merged, _, err := loadGlobalGraph(*registryPath)
+		if err != nil {
+			return err
+		}
+		results := query.Search(merged, strings.Join(fs.Args(), " "), *limit)
+		return query.WriteSearch(stdout, results, *jsonOut)
+	case "context":
+		defaults := config.Default()
+		fs := newFlagSet("global context")
+		registryPath := fs.String("registry", defaultPath, "registry path")
+		jsonOut := fs.Bool("json", false, "write JSON")
+		tokenBudget := fs.Int("token-budget", defaults.Retrieval.TokenBudget, "approximate output-token budget")
+		maxDepth := fs.Int("max-depth", defaults.Retrieval.MaxDepth, "graph traversal depth")
+		maxNodes := fs.Int("max-nodes", defaults.Retrieval.MaxNodes, "hard node limit")
+		if err := fs.Parse(flexibleFlags(args, "registry", "token-budget", "max-depth", "max-nodes")); err != nil {
+			return err
+		}
+		if fs.NArg() == 0 {
+			return errors.New("global context requires a natural-language question")
+		}
+		merged, _, err := loadGlobalGraph(*registryPath)
+		if err != nil {
+			return err
+		}
+		result, err := query.NewIndex(merged).Retrieve(strings.Join(fs.Args(), " "), query.RetrieveOptions{
+			Traversal: query.Traversal(defaults.Retrieval.Traversal), Direction: query.Direction(defaults.Retrieval.Direction),
+			SeedLimit: defaults.Retrieval.SeedLimit, MaxDepth: *maxDepth, MaxNodes: *maxNodes,
+			BranchFanout: defaults.Retrieval.BranchFanout, HubDegreeThreshold: defaults.Retrieval.HubDegreeThreshold, TokenBudget: *tokenBudget,
+		})
+		if err != nil {
+			return err
+		}
+		return query.WriteRetrieval(stdout, result, *jsonOut)
+	default:
+		return fmt.Errorf("unknown global command %q", subcommand)
+	}
+}
+
+func defaultRegistryPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("locate home directory: %w", err)
+	}
+	return filepath.Join(home, ".ravel", "registry.json"), nil
+}
+
+func loadGlobalGraph(registryPath string) (graph.Graph, int, error) {
+	registry, err := workspace.LoadRegistry(registryPath)
+	if err != nil {
+		return graph.Graph{}, 0, err
+	}
+	merged, err := workspace.MergeRegistry(registry)
+	return merged, len(registry.Projects), err
+}
+
+func writeWorkspaceGraph(outDir string, merged graph.Graph) error {
+	prepared := community.Assign(merged)
+	markdown := report.MarkdownPrepared(prepared, true)
+	return store.RewriteGraphViews(outDir, prepared, markdown)
+}
+
+func runPRs(ctx context.Context, args []string, stdout io.Writer) error {
+	fs := newFlagSet("prs")
+	outDir := fs.String("out", ".reporavel", "graph directory")
+	manifest := fs.String("manifest", "", "offline GitHub PR JSON file")
+	repository := fs.String("repo", "", "GitHub repository in owner/name form")
+	base := fs.String("base", "", "base branch filter")
+	limit := fs.Int("limit", 50, "maximum open pull requests")
+	jsonOut := fs.Bool("json", false, "write JSON")
+	conflictsOnly := fs.Bool("conflicts", false, "show graph-overlap conflicts only")
+	valueFlags := []string{"out", "manifest", "repo", "base", "limit"}
+	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
+		return err
+	}
+	if fs.NArg() > 1 {
+		return errors.New("prs accepts at most one pull-request number")
+	}
+	if *limit < 1 || *limit > 200 {
+		return errors.New("prs limit must be between 1 and 200")
+	}
+	var number int
+	if fs.NArg() == 1 {
+		parsed, err := strconv.Atoi(fs.Arg(0))
+		if err != nil || parsed < 1 {
+			return fmt.Errorf("invalid pull-request number %q", fs.Arg(0))
+		}
+		number = parsed
+	}
+	pullRequests, err := loadPullRequests(ctx, *manifest, *repository, *base, *limit, number)
+	if err != nil {
+		return err
+	}
+	g, err := store.LoadGraph(*outDir)
+	if err != nil {
+		return err
+	}
+	analysis := pranalysis.Analyze(g, pullRequests)
+	if *jsonOut {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(analysis)
+	}
+	return pranalysis.WriteText(stdout, analysis, *conflictsOnly)
+}
+
+func loadPullRequests(ctx context.Context, manifest, repository, base string, limit, number int) ([]pranalysis.PullRequest, error) {
+	var data []byte
+	singleObject := manifest == "" && number > 0
+	if manifest != "" {
+		payload, err := os.ReadFile(manifest)
+		if err != nil {
+			return nil, err
+		}
+		if len(payload) > 32<<20 {
+			return nil, errors.New("PR manifest exceeds 32 MiB")
+		}
+		data = payload
+	} else {
+		fields := "number,title,url,headRefName,baseRefName,isDraft,reviewDecision,files,statusCheckRollup"
+		ghArgs := []string{"pr"}
+		if number > 0 {
+			ghArgs = append(ghArgs, "view", strconv.Itoa(number), "--json", fields)
+		} else {
+			ghArgs = append(ghArgs, "list", "--state", "open", "--limit", strconv.Itoa(limit), "--json", fields)
+			if base != "" {
+				ghArgs = append(ghArgs, "--base", base)
+			}
+		}
+		if repository != "" {
+			ghArgs = append(ghArgs, "--repo", repository)
+		}
+		command := exec.CommandContext(ctx, "gh", ghArgs...)
+		var output, commandError bytes.Buffer
+		command.Stdout = &output
+		command.Stderr = &commandError
+		if err := command.Run(); err != nil {
+			detail := strings.TrimSpace(commandError.String())
+			if detail == "" {
+				detail = err.Error()
+			}
+			return nil, fmt.Errorf("load GitHub pull requests: %s", detail)
+		}
+		data = output.Bytes()
+	}
+	if singleObject {
+		var pullRequest pranalysis.PullRequest
+		if err := json.Unmarshal(data, &pullRequest); err != nil {
+			return nil, fmt.Errorf("parse pull-request JSON: %w", err)
+		}
+		return []pranalysis.PullRequest{pullRequest}, nil
+	}
+	var pullRequests []pranalysis.PullRequest
+	if err := json.Unmarshal(data, &pullRequests); err != nil {
+		return nil, fmt.Errorf("parse pull-request JSON: %w", err)
+	}
+	if len(pullRequests) > 200 {
+		return nil, errors.New("PR input contains more than 200 pull requests")
+	}
+	if number > 0 {
+		for _, pullRequest := range pullRequests {
+			if pullRequest.Number == number {
+				return []pranalysis.PullRequest{pullRequest}, nil
+			}
+		}
+		return nil, fmt.Errorf("pull request #%d is not present in the manifest", number)
+	}
+	return pullRequests, nil
+}
+
 func runReport(args []string, stdout io.Writer) error {
 	fs := newFlagSet("report")
 	outDir := fs.String("out", ".reporavel", "output directory")
@@ -862,6 +1237,7 @@ func runContext(args []string, stdout io.Writer) error {
 	hubThreshold := fs.Int("hub-degree-threshold", cfg.Retrieval.HubDegreeThreshold, "0 for automatic, -1 to disable")
 	tokenBudget := fs.Int("token-budget", cfg.Retrieval.TokenBudget, "approximate output-token budget")
 	communityBoost := fs.Bool("community-boost", cfg.Retrieval.CommunityBoost, "prioritize neighbors in the same detected community")
+	candidateShortlist := fs.Bool("candidate-shortlist", false, "favor a compact ranked candidate list over explanatory edges")
 	valueFlags := []string{"config", "out", "traversal", "direction", "relations", "seed-limit", "max-depth", "max-nodes", "branch-fanout", "hub-degree-threshold", "token-budget"}
 	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
 		return err
@@ -886,7 +1262,8 @@ func runContext(args []string, stdout io.Writer) error {
 		Traversal: query.Traversal(strings.ToLower(*traversal)), Direction: query.Direction(strings.ToLower(*direction)),
 		Relations: edgeKinds, DisableRelationInference: !*inferRelations, SeedLimit: *seedLimit,
 		MaxDepth: *maxDepth, MaxNodes: *maxNodes, BranchFanout: *branchFanout, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
-		CommunityBoost: *communityBoost,
+		CommunityBoost:     *communityBoost,
+		CandidateShortlist: *candidateShortlist,
 	})
 	if err != nil {
 		return err
@@ -980,13 +1357,32 @@ func runPath(args []string, stdout io.Writer) error {
 func runMCP(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	fs := newFlagSet("mcp")
 	outDir := fs.String("out", ".reporavel", "graph directory")
-	if err := fs.Parse(flexibleFlags(args, "out")); err != nil {
+	transport := fs.String("transport", "stdio", "transport: stdio or http")
+	address := fs.String("address", "127.0.0.1:8080", "HTTP listen address")
+	path := fs.String("path", "/mcp", "HTTP endpoint path")
+	apiKeyEnv := fs.String("api-key-env", "RAVEL_MCP_API_KEY", "environment variable containing the HTTP API key")
+	maxMessageBytes := fs.Int("max-message-bytes", 0, "maximum MCP request size in bytes")
+	if err := fs.Parse(flexibleFlags(args, "out", "transport", "address", "path", "api-key-env", "max-message-bytes")); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return errors.New("mcp does not accept positional arguments")
 	}
-	return mcp.Serve(ctx, stdin, stdout, mcp.Options{OutDir: *outDir, Version: Version})
+	switch strings.ToLower(strings.TrimSpace(*transport)) {
+	case "stdio":
+		return mcp.Serve(ctx, stdin, stdout, mcp.Options{OutDir: *outDir, Version: Version, MaxMessageBytes: *maxMessageBytes})
+	case "http":
+		environmentName := strings.TrimSpace(*apiKeyEnv)
+		if environmentName == "" {
+			return errors.New("mcp --api-key-env must not be empty")
+		}
+		return mcp.ServeStreamableHTTP(ctx, mcp.HTTPOptions{
+			OutDir: *outDir, Version: Version, Address: *address, Path: *path,
+			APIKey: os.Getenv(environmentName), MaxMessageBytes: *maxMessageBytes,
+		})
+	default:
+		return fmt.Errorf("unsupported MCP transport %q (want stdio or http)", *transport)
+	}
 }
 
 func runWorkflow(mode string, args []string, stdout io.Writer) error {
@@ -1118,6 +1514,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	graphDir := fs.String("graph", cfg.Output.Dir, "graph directory")
 	dataset := fs.String("dataset", "", "evaluation JSONL file")
 	answers := fs.String("answers", "", "external answer-quality JSONL ledger")
+	gatePath := fs.String("gate", "", "retrieval quality gate JSON file")
 	out := fs.String("out", "-", "result JSON file or - for stdout")
 	topK := fs.Int("top-k", cfg.Retrieval.MaxNodes, "retrieval result count and context-node cap")
 	retriever := fs.String("retriever", "context", "context or flat")
@@ -1134,7 +1531,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	datasetRevision := fs.String("dataset-revision", "unspecified", "dataset revision or commit")
 	graphRevision := fs.String("graph-revision", "unspecified", "source revision used to build the graph")
 	adapterVersion := fs.String("adapter-version", "graph-query-jsonl-v2", "dataset adapter version")
-	valueFlags := []string{"config", "graph", "dataset", "answers", "out", "top-k", "retriever", "traversal", "direction", "relations", "seed-limit", "max-depth", "branch-fanout", "hub-degree-threshold", "token-budget", "dataset-revision", "graph-revision", "adapter-version"}
+	valueFlags := []string{"config", "graph", "dataset", "answers", "gate", "out", "top-k", "retriever", "traversal", "direction", "relations", "seed-limit", "max-depth", "branch-fanout", "hub-degree-threshold", "token-budget", "dataset-revision", "graph-revision", "adapter-version"}
 	if err := fs.Parse(flexibleFlags(args, valueFlags...)); err != nil {
 		return err
 	}
@@ -1151,6 +1548,21 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	cases, datasetHash, err := evaluation.LoadJSONLWithHash(*dataset)
 	if err != nil {
 		return err
+	}
+	var qualityGate *evaluation.QualityGate
+	var qualityGateHash string
+	if *gatePath != "" {
+		gate, hash, err := evaluation.LoadQualityGateWithHash(*gatePath)
+		if err != nil {
+			return err
+		}
+		qualityGate = &gate
+		qualityGateHash = hash
+		if gate.RequireFreshExpectations {
+			if err := evaluation.ValidateExpectedIDs(g, cases); err != nil {
+				return err
+			}
+		}
 	}
 	graphHash, err := evaluation.GraphHash(g)
 	if err != nil {
@@ -1179,8 +1591,17 @@ func runBenchmark(args []string, stdout io.Writer) error {
 	if err := attachAnswerLedger(&result, cases, *answers); err != nil {
 		return err
 	}
+	var gateErr error
+	if qualityGate != nil {
+		gateResult := evaluation.EvaluateQualityGate(result, *qualityGate, qualityGateHash)
+		result.QualityGate = &gateResult
+		gateErr = gateResult.Error()
+	}
 	if *out == "-" {
-		return evaluation.Write(stdout, result)
+		if err := evaluation.Write(stdout, result); err != nil {
+			return err
+		}
+		return gateErr
 	}
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
 		return err
@@ -1197,7 +1618,7 @@ func runBenchmark(args []string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Wrote benchmark results to %s\n", *out)
-	return nil
+	return gateErr
 }
 
 func loadCommandConfig(args []string, path string) (config.Config, error) {
@@ -1393,12 +1814,15 @@ func commandUsage(w io.Writer, command string) error {
 		"update":       "ravel update [--config <path>] [--out <dir>] [root]",
 		"watch":        "ravel watch [--interval 2s] [root]",
 		"share":        "ravel share [--from <dir>] [--out ravel-graph]",
+		"merge":        "ravel merge [--out <dir>] <alias=graph-directory>...",
+		"global":       "ravel global <add|remove|list|path|build|query|context> [options]",
+		"prs":          "ravel prs [--out <dir>] [--repo owner/name] [--base branch] [--conflicts] [--json] [number]",
 		"report":       "ravel report [--out <dir>]",
 		"query":        "ravel query [--out <dir>] [--limit 25] [--json] <text>",
 		"affected":     "ravel affected [--out <dir>] [--json] [--max-depth 2] [--branch-fanout 0] [--relations <kinds>] <file-or-symbol>",
 		"explain":      "ravel explain [--out <dir>] [--json] <file-or-symbol>",
 		"path":         "ravel path [--out <dir>] [--json] <from> <to>",
-		"mcp":          "ravel mcp [--out <graphdir>]",
+		"mcp":          "ravel mcp [--out <graphdir>] [--transport stdio|http] [--address 127.0.0.1:8080] [--path /mcp] [--api-key-env RAVEL_MCP_API_KEY]",
 		"tech":         "ravel tech [--out <dir>] [--json]",
 		"understand":   "ravel understand [--out <dir>] [--json]",
 		"learn":        "ravel learn [--out <dir>] [--json]",
@@ -1410,7 +1834,7 @@ func commandUsage(w io.Writer, command string) error {
 	switch command {
 	case "context":
 		fmt.Fprintln(w, "Usage: ravel context [options] <question>")
-		fmt.Fprintln(w, "Options: --config --out --json --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --branch-fanout --hub-degree-threshold --token-budget --community-boost")
+		fmt.Fprintln(w, "Options: --config --out --json --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --branch-fanout --hub-degree-threshold --token-budget --community-boost --candidate-shortlist")
 		return nil
 	case "benchmark":
 		fmt.Fprintln(w, "Usage: ravel benchmark --dataset <cases.jsonl> [options]")
@@ -1445,19 +1869,22 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel tools")
 	fmt.Fprintln(w, "  ravel extract [--json] <audited-doc-or-pdf>...")
 	fmt.Fprintln(w, "  ravel plan [--json] <route> [paths...]")
-	fmt.Fprintln(w, "  ravel benchmark --dataset <cases.jsonl> [--answers <judgments.jsonl>] [--retriever context|flat] [--token-budget 2000]")
+	fmt.Fprintln(w, "  ravel benchmark --dataset <cases.jsonl> [--answers <judgments.jsonl>] [--gate <quality-gate.json>] [--retriever context|flat] [--token-budget 2000]")
 	fmt.Fprintln(w, "  ravel audit [root]")
 	fmt.Fprintln(w, "  ravel build [root]")
 	fmt.Fprintln(w, "  ravel update [root]")
 	fmt.Fprintln(w, "  ravel watch [--interval 2s] [root]")
 	fmt.Fprintln(w, "  ravel share [--out ravel-graph]")
+	fmt.Fprintln(w, "  ravel merge [--out .ravel-workspace] <alias=graph-directory>...")
+	fmt.Fprintln(w, "  ravel global <add|remove|list|path|build|query|context> [options]")
+	fmt.Fprintln(w, "  ravel prs [--repo owner/name] [--base branch] [--conflicts] [--json] [number]")
 	fmt.Fprintln(w, "  ravel report")
 	fmt.Fprintln(w, "  ravel query [--json] <text>")
 	fmt.Fprintln(w, "  ravel context [--json] [--token-budget 2000] [--max-depth 2] [--branch-fanout 0] <question>")
 	fmt.Fprintln(w, "  ravel affected [--json] [--max-depth 2] [--branch-fanout 0] [--relations calls,references] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel explain [--json] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel path [--json] <from> <to>")
-	fmt.Fprintln(w, "  ravel mcp [--out <graphdir>]")
+	fmt.Fprintln(w, "  ravel mcp [--out <graphdir>] [--transport stdio|http]")
 	fmt.Fprintln(w, "  ravel tech|understand|learn|docs|pdf|schema [--json]")
 	fmt.Fprintln(w, "  ravel diff [--json] <changed-path>...")
 }

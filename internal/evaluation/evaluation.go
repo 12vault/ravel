@@ -80,6 +80,7 @@ type Report struct {
 	AnswerQuality    *AnswerMetrics           `json:"answerQuality,omitempty"`
 	AnswerDatasets   map[string]AnswerMetrics `json:"answerDatasets,omitempty"`
 	AnswerSHA256     string                   `json:"answerSha256,omitempty"`
+	QualityGate      *QualityGateResult       `json:"qualityGate,omitempty"`
 	RetrievalOptions query.RetrieveOptions    `json:"retrievalOptions,omitempty"`
 	IndexBuildMicros int64                    `json:"indexBuildMicros"`
 	IndexBuildMillis float64                  `json:"indexBuildMs"`

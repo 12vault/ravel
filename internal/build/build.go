@@ -21,10 +21,13 @@ type Result struct {
 }
 
 type Progress struct {
-	Stage     string
-	Path      string
-	Completed int
-	Total     int
+	Stage         string
+	Path          string
+	Completed     int
+	Total         int
+	Unit          string
+	Secondary     int
+	SecondaryUnit string
 }
 
 func Run(ctx context.Context, root string, cfg config.Config) (Result, error) {
@@ -112,22 +115,49 @@ func RunWithCache(ctx context.Context, root string, cfg config.Config, progress 
 
 	builder := graph.NewBuilder(scanResult.Root)
 	addFileTopology(builder, scanResult, contributed)
+	reportGraphProgress(progress, builder, "file topology", false)
+	processed := 0
 	for _, analysis := range analyses {
 		for _, n := range analysis.Nodes {
 			builder.AddNode(n)
+			processed++
+			if processed%256 == 0 {
+				reportGraphProgress(progress, builder, n.ID, false)
+			}
 		}
 		for _, e := range analysis.Edges {
 			builder.AddEdge(e)
+			processed++
+			if processed%256 == 0 {
+				reportGraphProgress(progress, builder, string(e.Kind)+" "+e.From+" → "+e.To, false)
+			}
 		}
 		for _, d := range analysis.Diagnostics {
 			builder.AddDiagnostic(d)
 		}
 	}
+	reportGraphProgress(progress, builder, "sorting and measuring graph", true)
 
+	graphResult := builder.Build()
 	if cache != nil {
+		if progress != nil {
+			progress(Progress{Stage: "Cleaning cache", Completed: len(scanResult.Files), Total: len(scanResult.Files)})
+		}
 		cache.prune()
 	}
-	return Result{Scan: scanResult, Graph: builder.Build(), Skipped: skipped}, nil
+	return Result{Scan: scanResult, Graph: graphResult, Skipped: skipped}, nil
+}
+
+func reportGraphProgress(progress func(Progress), builder *graph.Builder, path string, final bool) {
+	if progress == nil {
+		return
+	}
+	nodes, edges := builder.Counts()
+	total := 0
+	if final {
+		total = nodes
+	}
+	progress(Progress{Stage: "Building graph", Path: path, Completed: nodes, Total: total, Unit: "nodes", Secondary: edges, SecondaryUnit: "edges"})
 }
 
 func analysisContributed(path string, analysis *lang.AnalysisResult) bool {

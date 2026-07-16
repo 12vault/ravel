@@ -30,13 +30,16 @@ const (
 )
 
 const (
-	defaultSeedLimit    = 3
-	defaultMaxDepth     = 2
-	defaultMaxNodes     = 100
-	defaultTokenBudget  = 2_000
-	minimumTokenBudget  = 128
-	maximumTokenBudget  = 100_000
-	maximumBranchFanout = 10_000
+	defaultSeedLimit         = 3
+	defaultMaxDepth          = 2
+	defaultMaxNodes          = 100
+	defaultTokenBudget       = 2_000
+	minimumTokenBudget       = 128
+	maximumTokenBudget       = 100_000
+	maximumBranchFanout      = 10_000
+	maximumLexicalCandidates = 128
+	maximumExplanationEdges  = 8
+	candidateBudgetPercent   = 92
 	// Affected bootstrap seeds include the target plus bounded source/container
 	// and symbol nodes. This prevents very large files or packages from turning
 	// reverse-impact lookup into an unbounded traversal origin set.
@@ -58,6 +61,7 @@ type RetrieveOptions struct {
 	HubDegreeThreshold       int              `json:"hubDegreeThreshold"`
 	TokenBudget              int              `json:"tokenBudget"`
 	CommunityBoost           bool             `json:"communityBoost,omitempty"`
+	CandidateShortlist       bool             `json:"candidateShortlist,omitempty"`
 }
 
 type Retrieval struct {
@@ -99,25 +103,32 @@ type ContextEdge struct {
 }
 
 type RetrievalStats struct {
-	Traversal           Traversal        `json:"traversal"`
-	Direction           Direction        `json:"direction"`
-	DirectionPreference Direction        `json:"directionPreference,omitempty"`
-	Depth               int              `json:"depth"`
-	SeedIDs             []string         `json:"seedIds"`
-	RelationFilters     []graph.EdgeKind `json:"relationFilters,omitempty"`
-	RelationFilterFrom  string           `json:"relationFilterFrom,omitempty"`
-	TokenBudget         int              `json:"tokenBudget"`
-	EstimatedTokens     int              `json:"estimatedTokens"`
-	HubThreshold        int              `json:"hubThreshold,omitempty"`
-	BranchFanout        int              `json:"branchFanout,omitempty"`
-	HubsSuppressed      int              `json:"hubsSuppressed,omitempty"`
-	BranchesPruned      int              `json:"branchesPruned,omitempty"`
-	ExploredNodes       int              `json:"exploredNodes"`
-	OmittedNodes        int              `json:"omittedNodes,omitempty"`
-	OmittedEdges        int              `json:"omittedEdges,omitempty"`
-	Truncated           bool             `json:"truncated"`
-	TruncatedReason     []string         `json:"truncatedReason,omitempty"`
-	CommunityBoost      bool             `json:"communityBoost,omitempty"`
+	Traversal               Traversal        `json:"traversal"`
+	Direction               Direction        `json:"direction"`
+	DirectionPreference     Direction        `json:"directionPreference,omitempty"`
+	Depth                   int              `json:"depth"`
+	SeedIDs                 []string         `json:"seedIds"`
+	RelationFilters         []graph.EdgeKind `json:"relationFilters,omitempty"`
+	RelationFilterFrom      string           `json:"relationFilterFrom,omitempty"`
+	TokenBudget             int              `json:"tokenBudget"`
+	EstimatedTokens         int              `json:"estimatedTokens"`
+	HubThreshold            int              `json:"hubThreshold,omitempty"`
+	BranchFanout            int              `json:"branchFanout,omitempty"`
+	HubsSuppressed          int              `json:"hubsSuppressed,omitempty"`
+	BranchesPruned          int              `json:"branchesPruned,omitempty"`
+	ExploredNodes           int              `json:"exploredNodes"`
+	LexicalCandidates       int              `json:"lexicalCandidates,omitempty"`
+	DeduplicatedNodes       int              `json:"deduplicatedNodes,omitempty"`
+	ExplanationEdgesOmitted int              `json:"explanationEdgesOmitted,omitempty"`
+	UnselectedNodes         int              `json:"unselectedNodes,omitempty"`
+	HeaderTokens            int              `json:"headerTokens,omitempty"`
+	CandidateTokens         int              `json:"candidateTokens,omitempty"`
+	ExplanationTokens       int              `json:"explanationTokens,omitempty"`
+	OmittedNodes            int              `json:"omittedNodes,omitempty"`
+	OmittedEdges            int              `json:"omittedEdges,omitempty"`
+	Truncated               bool             `json:"truncated"`
+	TruncatedReason         []string         `json:"truncatedReason,omitempty"`
+	CommunityBoost          bool             `json:"communityBoost,omitempty"`
 }
 
 type normalizedRetrieveOptions struct {
@@ -129,14 +140,15 @@ type normalizedRetrieveOptions struct {
 }
 
 type traversalResult struct {
-	order          []string
-	distance       map[string]int
-	via            map[string]graph.Edge
-	hubThreshold   int
-	branchFanout   int
-	hubsSuppressed int
-	branchesPruned int
-	exploredLimit  bool
+	order             []string
+	distance          map[string]int
+	via               map[string]graph.Edge
+	hubThreshold      int
+	branchFanout      int
+	hubsSuppressed    int
+	branchesPruned    int
+	exploredLimit     bool
+	lexicalCandidates int
 }
 
 // Retrieve is the graph-level compatibility wrapper around Index.Retrieve.
@@ -248,12 +260,46 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 
 	adjacency, degree := idx.filteredAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, degree, normalized)
+	walk = idx.promoteAnchoredCandidates(walk, ranked)
 	for seedID, edge := range seedEvidence {
 		if seedSet[seedID] {
 			walk.via[seedID] = cloneEdge(edge)
 		}
 	}
 	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, degree, walk), nil
+}
+
+// promoteAnchoredCandidates exposes exact identifiers found in structured
+// import statements as compact lexical candidates without turning every
+// import into a traversal origin. This separates cheap discovery from graph
+// explanation and keeps broad queries bounded by their configured seed limit.
+func (idx *Index) promoteAnchoredCandidates(walk traversalResult, ranked []rankedNode) traversalResult {
+	seen := make(map[string]bool, len(walk.order))
+	order := make([]string, 0, len(walk.order)+min(maximumLexicalCandidates, len(ranked)))
+	for _, candidate := range ranked {
+		if !candidate.anchored || len(order) >= maximumLexicalCandidates {
+			continue
+		}
+		id := idx.docs[candidate.index].node.ID
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		order = append(order, id)
+		if _, traversed := walk.distance[id]; !traversed {
+			walk.distance[id] = 0
+		}
+		walk.lexicalCandidates++
+	}
+	for _, id := range walk.order {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		order = append(order, id)
+	}
+	walk.order = order
+	return walk
 }
 
 func affectedDirection(relations []graph.EdgeKind) (Direction, error) {
@@ -976,91 +1022,172 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		SeedIDs: append([]string(nil), seedIDs...), RelationFilters: append([]graph.EdgeKind(nil), options.Relations...),
 		RelationFilterFrom: options.filterFrom, TokenBudget: options.TokenBudget,
 		CommunityBoost: options.CommunityBoost,
-		HubThreshold:   walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed, BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order),
+		HubThreshold:   walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed,
+		BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order), LexicalCandidates: walk.lexicalCandidates,
 	}
 	result := Retrieval{Version: 1, Query: safeTextBytes(question, 256), Stats: stats}
 	if len(walk.order) == 0 {
 		return result
 	}
-	budgetUsed := lineTokens(retrievalHeader(question, stats))
+	headerTokens := lineTokens(retrievalHeader(question, stats))
+	budgetUsed := headerTokens
+	result.Stats.HeaderTokens = headerTokens
 	reserve := lineTokens(truncationLine(RetrievalStats{
 		TruncatedReason: []string{"token_budget", "max_nodes", "exploration_limit", "branch_limit"},
 		OmittedNodes:    50_000,
 		OmittedEdges:    999_999_999,
 	}))
-	included := map[string]bool{}
-	includedEdges := map[string]bool{}
-	maxCandidates := min(len(walk.order), options.MaxNodes)
-	seedEdgesHandled := false
 
-	for position, nodeID := range walk.order[:maxCandidates] {
-		if !seedSet[nodeID] && !seedEdgesHandled {
-			seedEdges := idx.edgesWithin(included, options.relationSet)
-			seedEdgesHandled = true
-			for _, edge := range seedEdges {
-				if includedEdges[edge.ID] {
-					continue
-				}
-				cost := lineTokens(edgeLine(edge))
-				if budgetUsed+cost+reserve > options.TokenBudget {
-					break
-				}
-				result.Edges = append(result.Edges, edge)
-				includedEdges[edge.ID] = true
-				budgetUsed += cost
-				break
-			}
-		}
+	// Collapse repeated file/class/overload representations before applying the
+	// token budget. Prefer the higher-scored representation, then concrete code
+	// symbols over container nodes when two candidates describe the same name
+	// and source path.
+	unique := make([]ContextNode, 0, len(walk.order))
+	identityIndex := map[string]int{}
+	for _, nodeID := range walk.order {
 		docIndex, ok := idx.byID[nodeID]
 		if !ok {
 			continue
 		}
 		node := contextNode(idx.docs[docIndex].node, scores[nodeID], walk.distance[nodeID], degree[nodeID], seedSet[nodeID])
-		var via ContextEdge
-		viaCost := 0
 		if edge, hasVia := walk.via[nodeID]; hasVia {
-			via = contextEdge(edge)
-			node.ViaEdgeID = via.ID
-			viaCost = lineTokens(edgeLine(via))
+			node.ViaEdgeID = stableEdgeID(edge)
 		}
-		cost := lineTokens(nodeLine(node)) + viaCost
-		if budgetUsed+cost+reserve > options.TokenBudget {
-			result.Stats.Truncated = true
-			result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "token_budget")
-			result.Stats.OmittedNodes += maxCandidates - position
-			break
-		}
-		result.Nodes = append(result.Nodes, node)
-		included[nodeID] = true
-		budgetUsed += lineTokens(nodeLine(node))
-		if via.ID != "" {
-			result.Edges = append(result.Edges, via)
-			includedEdges[via.ID] = true
-			budgetUsed += viaCost
-		}
-	}
-	if !seedEdgesHandled {
-		seedEdgesHandled = true
-		seedEdges := idx.edgesWithin(included, options.relationSet)
-		for _, edge := range seedEdges {
-			if includedEdges[edge.ID] {
-				continue
+		identity := contextCandidateIdentity(node)
+		if position, duplicate := identityIndex[identity]; duplicate {
+			result.Stats.DeduplicatedNodes++
+			if betterContextCandidate(node, unique[position]) {
+				unique[position] = node
 			}
-			cost := lineTokens(edgeLine(edge))
-			if budgetUsed+cost+reserve > options.TokenBudget {
-				break
-			}
-			result.Edges = append(result.Edges, edge)
-			includedEdges[edge.ID] = true
-			budgetUsed += cost
-			break
+			continue
 		}
+		identityIndex[identity] = len(unique)
+		unique = append(unique, node)
 	}
-	if len(walk.order) > options.MaxNodes {
+
+	maxCandidates := min(len(unique), options.MaxNodes)
+	candidates := unique[:maxCandidates]
+	if len(unique) > options.MaxNodes {
 		result.Stats.Truncated = true
 		result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "max_nodes")
-		result.Stats.OmittedNodes += len(walk.order) - options.MaxNodes
+		result.Stats.OmittedNodes += len(unique) - options.MaxNodes
 	}
+
+	// Spend most of the available envelope on a ranked candidate shortlist and
+	// reserve the remainder for explanations. Traversal nodes outside this
+	// shortlist are internal discovery alternatives, not token-truncated output.
+	// Count them explicitly so consumers can distinguish ranking selection from
+	// an admitted candidate that could not fit the hard envelope.
+	candidatePercent := 82
+	if options.CandidateShortlist {
+		candidatePercent = candidateBudgetPercent
+	}
+	primaryLimit := budgetUsed
+	if available := options.TokenBudget - reserve - budgetUsed; available > 0 {
+		primaryLimit += available * candidatePercent / 100
+	}
+	hardCandidateLimit := options.TokenBudget - reserve
+	included := map[string]bool{}
+	unselected := make([]ContextNode, 0)
+	packCandidate := func(node ContextNode, limit int) bool {
+		cost := lineTokens(nodeLine(node))
+		if budgetUsed+cost > limit {
+			return false
+		}
+		result.Nodes = append(result.Nodes, node)
+		included[node.ID] = true
+		budgetUsed += cost
+		result.Stats.CandidateTokens += cost
+		return true
+	}
+	for position, node := range candidates {
+		limit := primaryLimit
+		if options.CandidateShortlist && position == 0 {
+			// Always give the top-ranked candidate the full hard envelope before
+			// treating it as a genuine token-budget omission.
+			limit = hardCandidateLimit
+		}
+		if !packCandidate(node, limit) {
+			unselected = append(unselected, node)
+		}
+	}
+
+	includedEdges := map[string]bool{}
+	explanations := make([]ContextEdge, 0, maximumExplanationEdges)
+	for _, node := range result.Nodes {
+		if node.ViaEdgeID == "" {
+			continue
+		}
+		edge, ok := walk.via[node.ID]
+		if !ok || !included[edge.From] || !included[edge.To] {
+			continue
+		}
+		candidate := contextEdge(edge)
+		if !includedEdges[candidate.ID] {
+			includedEdges[candidate.ID] = true
+			explanations = append(explanations, candidate)
+		}
+	}
+	for _, edge := range idx.edgesWithin(included, options.relationSet) {
+		if !includedEdges[edge.ID] {
+			includedEdges[edge.ID] = true
+			explanations = append(explanations, edge)
+		}
+	}
+	includedEdges = map[string]bool{}
+	omittedExplanationEdges := map[string]bool{}
+	for _, edge := range explanations {
+		if len(result.Edges) >= maximumExplanationEdges {
+			if !omittedExplanationEdges[edge.ID] {
+				omittedExplanationEdges[edge.ID] = true
+				result.Stats.ExplanationEdgesOmitted++
+			}
+			continue
+		}
+		cost := lineTokens(edgeLine(edge))
+		if budgetUsed+cost+reserve > options.TokenBudget {
+			if !omittedExplanationEdges[edge.ID] {
+				omittedExplanationEdges[edge.ID] = true
+				result.Stats.ExplanationEdgesOmitted++
+			}
+			continue
+		}
+		result.Edges = append(result.Edges, edge)
+		includedEdges[edge.ID] = true
+		budgetUsed += cost
+		result.Stats.ExplanationTokens += cost
+	}
+	if options.CandidateShortlist {
+		result.Stats.UnselectedNodes = len(unselected)
+		if len(result.Nodes) == 0 && len(unselected) > 0 {
+			result.Stats.Truncated = true
+			result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "token_budget")
+			result.Stats.OmittedNodes += len(unselected)
+			result.Stats.UnselectedNodes = 0
+		}
+	} else {
+		stillDeferred := unselected[:0]
+		for _, node := range unselected {
+			if !packCandidate(node, hardCandidateLimit) {
+				stillDeferred = append(stillDeferred, node)
+			}
+		}
+		if len(stillDeferred) > 0 {
+			result.Stats.Truncated = true
+			result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "token_budget")
+			result.Stats.OmittedNodes += len(stillDeferred)
+		}
+	}
+	for i := range result.Nodes {
+		if result.Nodes[i].ViaEdgeID != "" && !includedEdges[result.Nodes[i].ViaEdgeID] {
+			if !omittedExplanationEdges[result.Nodes[i].ViaEdgeID] {
+				omittedExplanationEdges[result.Nodes[i].ViaEdgeID] = true
+				result.Stats.ExplanationEdgesOmitted++
+			}
+			result.Nodes[i].ViaEdgeID = ""
+		}
+	}
+
 	if walk.exploredLimit {
 		result.Stats.Truncated = true
 		result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "exploration_limit")
@@ -1069,42 +1196,39 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		result.Stats.Truncated = true
 		result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "branch_limit")
 	}
-
-	// Add non-discovery relationships only after every included node retains the
-	// edge that explains why it was retrieved.
-	var extraEdges []ContextEdge
-	for _, edge := range idx.graph.Edges {
-		if !included[edge.From] || !included[edge.To] || includedEdges[stableEdgeID(edge)] {
-			continue
-		}
-		if len(options.relationSet) > 0 && !options.relationSet[edge.Kind] {
-			continue
-		}
-		extraEdges = append(extraEdges, contextEdge(edge))
-	}
-	sort.Slice(extraEdges, func(i, j int) bool {
-		if relationPriority(extraEdges[i].Kind) != relationPriority(extraEdges[j].Kind) {
-			return relationPriority(extraEdges[i].Kind) < relationPriority(extraEdges[j].Kind)
-		}
-		return extraEdges[i].ID < extraEdges[j].ID
-	})
-	for position, edge := range extraEdges {
-		cost := lineTokens(edgeLine(edge))
-		if budgetUsed+cost+reserve > options.TokenBudget {
-			result.Stats.Truncated = true
-			result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "token_budget")
-			result.Stats.OmittedEdges += len(extraEdges) - position
-			break
-		}
-		result.Edges = append(result.Edges, edge)
-		includedEdges[edge.ID] = true
-		budgetUsed += cost
-	}
 	result.Stats.EstimatedTokens = budgetUsed
 	if result.Stats.Truncated {
 		result.Stats.EstimatedTokens += lineTokens(truncationLine(result.Stats))
 	}
 	return result
+}
+
+func contextCandidateIdentity(node ContextNode) string {
+	name := normalizeSearchText(strings.TrimSuffix(node.Name, "()"))
+	if node.Kind == graph.NodeFile {
+		for _, extension := range []string{" go", " java", " py", " js", " jsx", " ts", " tsx", " kt", " kts", " swift", " rs", " rb", " php", " cs", " cpp", " c", " h"} {
+			name = strings.TrimSuffix(name, extension)
+		}
+	}
+	path := strings.ToLower(strings.ReplaceAll(node.Path, "\\", "/"))
+	if path == "" {
+		return node.ID
+	}
+	return path + "\x00" + name
+}
+
+func betterContextCandidate(left, right ContextNode) bool {
+	if left.Score != right.Score {
+		return left.Score > right.Score
+	}
+	leftSymbol, rightSymbol := graph.SymbolKind(left.Kind), graph.SymbolKind(right.Kind)
+	if leftSymbol != rightSymbol {
+		return leftSymbol
+	}
+	if left.Seed != right.Seed {
+		return left.Seed
+	}
+	return left.ID < right.ID
 }
 
 func (idx *Index) edgesWithin(nodes map[string]bool, relationSet map[graph.EdgeKind]bool) []ContextEdge {
@@ -1188,52 +1312,14 @@ func WriteRetrieval(w io.Writer, result Retrieval, jsonOut bool) error {
 	if _, err := fmt.Fprintln(w, retrievalHeader(result.Query, result.Stats)); err != nil {
 		return err
 	}
-	edges := map[string]ContextEdge{}
-	for _, edge := range result.Edges {
-		edges[edge.ID] = edge
-	}
-	writtenEdges := map[string]bool{}
-	seedIDs := map[string]bool{}
+	// Keep discovery and explanation as distinct phases: emit the complete
+	// compact candidate list first, then the bounded evidence edges.
 	for _, node := range result.Nodes {
-		if node.Seed {
-			seedIDs[node.ID] = true
-		}
-	}
-	for _, node := range result.Nodes {
-		if !node.Seed {
-			continue
-		}
 		if _, err := fmt.Fprintln(w, nodeLine(node)); err != nil {
 			return err
 		}
 	}
 	for _, edge := range result.Edges {
-		if !seedIDs[edge.From] || !seedIDs[edge.To] {
-			continue
-		}
-		if _, err := fmt.Fprintln(w, edgeLine(edge)); err != nil {
-			return err
-		}
-		writtenEdges[edge.ID] = true
-	}
-	for _, node := range result.Nodes {
-		if node.Seed {
-			continue
-		}
-		if _, err := fmt.Fprintln(w, nodeLine(node)); err != nil {
-			return err
-		}
-		if edge, ok := edges[node.ViaEdgeID]; ok {
-			if _, err := fmt.Fprintln(w, edgeLine(edge)); err != nil {
-				return err
-			}
-			writtenEdges[edge.ID] = true
-		}
-	}
-	for _, edge := range result.Edges {
-		if writtenEdges[edge.ID] {
-			continue
-		}
 		if _, err := fmt.Fprintln(w, edgeLine(edge)); err != nil {
 			return err
 		}
@@ -1304,7 +1390,10 @@ func nodeLine(node ContextNode) string {
 	if node.Seed {
 		prefix = "SEED"
 	}
-	parts := []string{prefix, safeText(string(node.Kind)), compactID(node.ID), quoteField(node.Name), "depth=" + strconv.Itoa(node.Depth), "degree=" + strconv.Itoa(node.Degree)}
+	parts := []string{prefix, safeText(string(node.Kind)), compactID(node.ID), quoteField(node.Name)}
+	if node.Depth > 0 {
+		parts = append(parts, "depth="+strconv.Itoa(node.Depth))
+	}
 	if node.Path != "" {
 		location := node.Path
 		if node.StartLine > 0 {

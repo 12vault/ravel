@@ -31,10 +31,20 @@ func RunWithCache(ctx context.Context, root string, cfg config.Config, previous 
 		return Result{}, err
 	}
 	changed, removed := changes(previousScan.Files, built.Scan.Files)
+	if progress != nil {
+		progress(buildrunner.Progress{Stage: "Merging enrichment", Completed: len(built.Graph.Nodes), Unit: "nodes", Secondary: len(built.Graph.Edges), SecondaryUnit: "edges"})
+	}
 	built.Graph = preserveEnrichment(built.Graph, previous)
 	if cfg.Output.CommunityClustering {
 		options := community.Options{Granularity: community.Preset(cfg.Output.CommunityGranularity), HubDegreeThreshold: cfg.Output.CommunityHubDegreeThreshold}
-		built.Graph = community.AssignWithOptions(built.Graph, options)
+		built.Graph = community.AssignWithProgress(built.Graph, options, func(event community.Progress) {
+			if progress != nil {
+				progress(buildrunner.Progress{Stage: event.Stage, Path: event.Path, Completed: event.Completed, Total: event.Total, Unit: event.Unit})
+			}
+		})
+		if progress != nil {
+			progress(buildrunner.Progress{Stage: "Remapping labels", Completed: len(built.Graph.Nodes), Total: len(built.Graph.Nodes), Unit: "nodes"})
+		}
 		built.Graph = community.RemapLabels(built.Graph, previous)
 	}
 	return Result{Build: built, Changed: changed, Removed: removed}, nil
