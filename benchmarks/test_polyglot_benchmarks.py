@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 
@@ -20,6 +21,64 @@ import run_t3code_typescript
 
 
 class PolyglotCompareTests(unittest.TestCase):
+    def test_context_batch_session_parses_ready_and_structured_result(self) -> None:
+        script_body = textwrap.dedent("""\
+            #!/usr/bin/env python3
+            import json
+            import sys
+            print(json.dumps({
+                "type": "ready", "version": 1, "graphLoadMs": 12.5,
+                "indexBuildMs": 3.25, "graphNodes": 2, "graphEdges": 1,
+            }), flush=True)
+            for line in sys.stdin:
+                request = json.loads(line)
+                retrieval = {
+                    "version": 1,
+                    "query": request["question"],
+                    "nodes": [{
+                        "name": "Checkout", "path": "checkout.go",
+                        "startLine": 10, "endLine": 12,
+                    }],
+                    "edges": [],
+                    "stats": {"estimatedTokens": 42, "exploredNodes": 2},
+                }
+                print(json.dumps({
+                    "type": "result", "id": request["id"],
+                    "queryMs": 0.75, "retrieval": retrieval,
+                }), flush=True)
+        """)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            script = root / "fake-ravel"
+            script.write_text(script_body)
+            script.chmod(0o755)
+            graph = root / "graph"
+            graph.mkdir()
+            session = polyglot_compare.RavelBatchSession(
+                str(script), graph, 2000, "broad", 5, 1
+            )
+            try:
+                result = session.query("find checkout")
+                metadata = session.metadata()
+            finally:
+                session.close()
+        self.assertEqual(result["queryMs"], 0.75)
+        self.assertEqual(result["estimatedTokens"], 42)
+        self.assertEqual(result["items"][0]["name"], "Checkout")
+        self.assertGreaterEqual(result["roundTripMs"], 0)
+        self.assertEqual(metadata["graphLoadMs"], 12.5)
+        self.assertEqual(metadata["indexBuildMs"], 3.25)
+
+    def test_ravel_result_parser_is_shared_by_one_shot_and_batch(self) -> None:
+        value = {
+            "nodes": [{"name": "Build", "path": "src/build.go", "startLine": 4}],
+            "stats": {"estimatedTokens": 10, "truncated": True, "truncatedReason": ["token_budget"]},
+        }
+        parsed = polyglot_compare.ravel_result_from_value(value, 1.5, "compact")
+        self.assertEqual(parsed["queryMs"], 1.5)
+        self.assertEqual(parsed["items"][0]["endLine"], 4)
+        self.assertEqual(parsed["truncatedReasons"], ["token_budget"])
+
     def test_graphify_result_parses_paths_and_line_ranges(self) -> None:
         output = "\n".join((
             "Start: ['apiReport'] | budget=2000",

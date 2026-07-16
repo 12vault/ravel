@@ -19,7 +19,9 @@ import re
 
 from polyglot_compare import (
     COMMON_ADAPTER_VERSION,
+    RAVEL_EXECUTION_ADAPTER_VERSION,
     RAVEL_PROFILES,
+    RavelBatchPool,
     executable_metadata,
     normalized,
     run_command,
@@ -322,6 +324,9 @@ def execute(args: argparse.Namespace) -> None:
         "queryOrder": "alternating-by-selection-key",
         "ravelProfile": args.ravel_profile,
         "ravelProfileArgs": list(RAVEL_PROFILES[args.ravel_profile]),
+        "ravelExecutionAdapterVersion": RAVEL_EXECUTION_ADAPTER_VERSION,
+        "ravelQueryMode": args.ravel_query_mode,
+        "ravelQueryTimeoutSeconds": args.ravel_query_timeout,
         "tokenBudget": args.token_budget,
         "workers": args.workers,
         "keepItems": args.keep_items,
@@ -343,16 +348,44 @@ def execute(args: argparse.Namespace) -> None:
     pending = [case for case in cases if case["id"] not in completed]
     print(f"Running {len(pending)} pending of {len(cases)} TypeScript cases", flush=True)
     failures = 0
-    with results_path.open("a", encoding="utf-8") as output:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
-            futures = [pool.submit(harness.run_case, args, case, graphs) for case in pending]
-            for finished, future in enumerate(concurrent.futures.as_completed(futures), 1):
-                result = future.result()
-                failures += result.get("status") != "ok"
-                output.write(json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n")
-                output.flush()
-                if finished <= 10 or finished % args.progress_every == 0:
-                    print(f"finished={finished}/{len(pending)} failures={failures} last={result['id']}", flush=True)
+    execution_path = workspace / "ravel-execution.json"
+    ravel_backend = None
+    try:
+        if args.ravel_query_mode == "batch" and pending:
+            ravel_backend = RavelBatchPool(
+                args.ravel,
+                graphs["ravel"],
+                args.token_budget,
+                args.ravel_profile,
+                args.workers,
+                args.ravel_query_timeout,
+            )
+            execution_path.write_text(json.dumps(ravel_backend.metadata(), indent=2, sort_keys=True) + "\n")
+        elif args.ravel_query_mode == "process":
+            execution_path.write_text(json.dumps({
+                "executionAdapterVersion": RAVEL_EXECUTION_ADAPTER_VERSION,
+                "mode": "one-shot-process",
+                "latencySemantics": {
+                    "queryMs": "one-shot subprocess including graph load and index build",
+                    "comparableToGraphifyQueryMs": True,
+                },
+                "sessions": [],
+            }, indent=2, sort_keys=True) + "\n")
+        elif not execution_path.exists():
+            raise SystemExit("completed batch workspace lacks ravel-execution.json")
+        with results_path.open("a", encoding="utf-8") as output:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
+                futures = [pool.submit(harness.run_case, args, case, graphs, ravel_backend) for case in pending]
+                for finished, future in enumerate(concurrent.futures.as_completed(futures), 1):
+                    result = future.result()
+                    failures += result.get("status") != "ok"
+                    output.write(json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n")
+                    output.flush()
+                    if finished <= 10 or finished % args.progress_every == 0:
+                        print(f"finished={finished}/{len(pending)} failures={failures} last={result['id']}", flush=True)
+    finally:
+        if ravel_backend is not None:
+            ravel_backend.close()
     summary = harness.summarize(results_path, build, "typescript", args.keep_items)
     summary.update({
         "adapterVersion": ADAPTER_VERSION,
@@ -368,6 +401,7 @@ def execute(args: argparse.Namespace) -> None:
         "workers": args.workers,
         "ravelProfile": args.ravel_profile,
         "ravelProfileArgs": list(RAVEL_PROFILES[args.ravel_profile]),
+        "ravelExecution": json.loads(execution_path.read_text()),
         "ravelVersion": run_command([args.ravel, "version"], workspace)[0].strip(),
         "graphifyVersion": run_command([args.graphify, "--version"], workspace)[0].strip(),
         "ravelExecutable": executable_metadata(args.ravel),
@@ -398,6 +432,8 @@ def main() -> None:
     run_parser.add_argument("--workers", type=int, default=2)
     run_parser.add_argument("--token-budget", type=int, default=2000)
     run_parser.add_argument("--ravel-profile", choices=sorted(RAVEL_PROFILES), default="broad")
+    run_parser.add_argument("--ravel-query-mode", choices=("batch", "process"), default="batch")
+    run_parser.add_argument("--ravel-query-timeout", type=float, default=360)
     run_parser.add_argument("--keep-items", type=int, default=20)
     run_parser.add_argument("--limit", type=int)
     run_parser.add_argument("--progress-every", type=int, default=100)
@@ -409,6 +445,8 @@ def main() -> None:
             parser.error(f"--{field.replace('_', '-')} must be positive")
     if getattr(args, "token_budget", 64) < 64:
         parser.error("--token-budget must be at least 64")
+    if getattr(args, "ravel_query_timeout", 1) <= 0:
+        parser.error("--ravel-query-timeout must be positive")
     args.function(args)
 
 

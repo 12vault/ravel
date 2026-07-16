@@ -8,14 +8,18 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import queue
 import re
+import select
 import shutil
 import subprocess
+import tempfile
 import time
 from typing import Iterable
 
 
 COMMON_ADAPTER_VERSION = "ravel-graphify-polyglot-v1"
+RAVEL_EXECUTION_ADAPTER_VERSION = "ravel-context-batch-v1"
 NORMALIZER = re.compile(r"[^a-z0-9]+")
 RAVEL_PROFILES = {
     "compact": (),
@@ -111,7 +115,17 @@ def ravel_result(
         ],
         graph.parent,
     )
-    value = json.loads(output)
+    return ravel_result_from_value(json.loads(output), query_ms, profile)
+
+
+def ravel_result_from_value(
+    value: dict,
+    query_ms: float,
+    profile: str,
+    *,
+    round_trip_ms: float | None = None,
+    queue_wait_ms: float | None = None,
+) -> dict:
     stats = value.get("stats") or {}
     items = []
     for node in value.get("nodes") or []:
@@ -123,7 +137,7 @@ def ravel_result(
             "startLine": int(node.get("startLine") or 0),
             "endLine": int(node.get("endLine") or node.get("startLine") or 0),
         })
-    return {
+    result = {
         "queryMs": query_ms,
         "profile": profile,
         "estimatedTokens": int(stats.get("estimatedTokens") or 0),
@@ -139,6 +153,199 @@ def ravel_result(
         "explanationEdgesOmitted": int(stats.get("explanationEdgesOmitted") or 0),
         "items": items,
     }
+    if round_trip_ms is not None:
+        result["roundTripMs"] = round_trip_ms
+    if queue_wait_ms is not None:
+        result["queueWaitMs"] = queue_wait_ms
+    return result
+
+
+class RavelBatchSession:
+    """One fixed-snapshot Ravel context-batch process."""
+
+    def __init__(
+        self,
+        binary: str,
+        graph: Path,
+        budget: int,
+        profile: str,
+        timeout_seconds: float,
+        session_id: int,
+    ) -> None:
+        self.profile = profile
+        self.timeout_seconds = timeout_seconds
+        self.session_id = session_id
+        self.request_id = 0
+        self.stderr = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+        command = [
+            binary,
+            "context-batch",
+            "--out",
+            str(graph),
+            "--token-budget",
+            str(budget),
+            *RAVEL_PROFILES[profile],
+        ]
+        started = time.perf_counter()
+        self.process = subprocess.Popen(
+            command,
+            cwd=graph.parent,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=self.stderr,
+            text=True,
+            bufsize=1,
+        )
+        try:
+            ready = self._read_message()
+            self.startup_ms = (time.perf_counter() - started) * 1000
+            if ready.get("type") != "ready" or ready.get("version") != 1:
+                raise RuntimeError(f"invalid context-batch readiness message: {ready!r}")
+            self.ready = ready
+        except Exception:
+            self.close()
+            raise
+
+    def _stderr_text(self) -> str:
+        self.stderr.flush()
+        self.stderr.seek(0)
+        return self.stderr.read()[-4000:]
+
+    def _read_message(self) -> dict:
+        if self.process.stdout is None:
+            raise RuntimeError("context-batch stdout is unavailable")
+        readable, _, _ = select.select([self.process.stdout], [], [], self.timeout_seconds)
+        if not readable:
+            raise TimeoutError(f"context-batch timed out after {self.timeout_seconds:g}s")
+        line = self.process.stdout.readline()
+        if not line:
+            code = self.process.poll()
+            raise RuntimeError(
+                f"context-batch exited before a response (code={code}): {self._stderr_text()}"
+            )
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"invalid context-batch JSON: {line[:500]!r}") from error
+        if not isinstance(value, dict):
+            raise RuntimeError(f"invalid context-batch message: {value!r}")
+        return value
+
+    def query(self, question: str) -> dict:
+        if self.process.stdin is None:
+            raise RuntimeError("context-batch stdin is unavailable")
+        self.request_id += 1
+        request_id = f"{self.session_id}-{self.request_id}"
+        started = time.perf_counter()
+        self.process.stdin.write(json.dumps({"id": request_id, "question": question}) + "\n")
+        self.process.stdin.flush()
+        response = self._read_message()
+        round_trip_ms = (time.perf_counter() - started) * 1000
+        if response.get("id") != request_id:
+            raise RuntimeError(
+                f"context-batch response id mismatch: expected {request_id!r}, found {response.get('id')!r}"
+            )
+        if response.get("type") == "error":
+            raise RuntimeError(f"context-batch query failed: {response.get('error', 'unknown error')}")
+        retrieval = response.get("retrieval")
+        if response.get("type") != "result" or not isinstance(retrieval, dict):
+            raise RuntimeError(f"invalid context-batch result: {response!r}")
+        return ravel_result_from_value(
+            retrieval,
+            float(response.get("queryMs") or 0),
+            self.profile,
+            round_trip_ms=round_trip_ms,
+        )
+
+    def metadata(self) -> dict:
+        return {
+            "session": self.session_id,
+            "startupMs": self.startup_ms,
+            "graphLoadMs": float(self.ready.get("graphLoadMs") or 0),
+            "indexBuildMs": float(self.ready.get("indexBuildMs") or 0),
+            "graphNodes": int(self.ready.get("graphNodes") or 0),
+            "graphEdges": int(self.ready.get("graphEdges") or 0),
+        }
+
+    def close(self) -> None:
+        process = getattr(self, "process", None)
+        if process is not None and process.poll() is None:
+            if process.stdin is not None:
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        if process is not None:
+            for stream in (process.stdin, process.stdout):
+                if stream is not None and not stream.closed:
+                    stream.close()
+        stderr = getattr(self, "stderr", None)
+        if stderr is not None:
+            stderr.close()
+
+
+class RavelBatchPool:
+    """A bounded pool; each session handles one request at a time."""
+
+    def __init__(
+        self,
+        binary: str,
+        graph: Path,
+        budget: int,
+        profile: str,
+        sessions: int,
+        timeout_seconds: float,
+    ) -> None:
+        self.sessions: list[RavelBatchSession] = []
+        self.available: queue.Queue[RavelBatchSession] = queue.Queue()
+        try:
+            for session_id in range(1, sessions + 1):
+                session = RavelBatchSession(
+                    binary, graph, budget, profile, timeout_seconds, session_id
+                )
+                self.sessions.append(session)
+                self.available.put(session)
+        except Exception:
+            self.close()
+            raise
+
+    def query(self, question: str) -> dict:
+        waiting = time.perf_counter()
+        session = self.available.get()
+        queue_wait_ms = (time.perf_counter() - waiting) * 1000
+        try:
+            result = session.query(question)
+            result["queueWaitMs"] = queue_wait_ms
+            return result
+        finally:
+            self.available.put(session)
+
+    def metadata(self) -> dict:
+        values = [session.metadata() for session in self.sessions]
+        return {
+            "executionAdapterVersion": RAVEL_EXECUTION_ADAPTER_VERSION,
+            "mode": "context-batch-jsonl",
+            "latencySemantics": {
+                "queryMs": "server retrieval on a warm reusable index",
+                "roundTripMs": "JSONL write through response read; excludes pool wait",
+                "queueWaitMs": "wait for an available Ravel session",
+                "comparableToGraphifyQueryMs": False,
+            },
+            "sessions": values,
+        }
+
+    def close(self) -> None:
+        for session in self.sessions:
+            session.close()
 
 
 def graphify_result(binary: str, graph: Path, question: str, budget: int) -> dict:
