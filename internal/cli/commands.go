@@ -137,6 +137,8 @@ func ExecuteIO(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		return runQuery(args[1:], stdout)
 	case "context":
 		return runContext(args[1:], stdout)
+	case "context-batch":
+		return runContextBatch(ctx, args[1:], stdin, stdout)
 	case "affected":
 		return runAffected(args[1:], stdout)
 	case "explain":
@@ -1794,47 +1796,53 @@ func commandHelpRequested(args []string) bool {
 
 func commandUsage(w io.Writer, command string) error {
 	lines := map[string]string{
-		"version":      "ravel version",
-		"self-update":  "ravel self-update [--version latest] [--platforms codex,claude] [--project]",
-		"update-check": "ravel update-check [--json] [--repo 12vault/ravel]",
-		"init":         "ravel init",
-		"install":      "ravel install [--platform <name>] [--project]",
-		"uninstall":    "ravel uninstall [--platform <name>] [--project]",
-		"hook":         "ravel hook <install|uninstall|status> [root]",
-		"ingest":       "ravel ingest [--out <dir>] <fragment.json>",
-		"community":    "ravel community [--json|--template] [--granularity coarse|balanced|fine] | ravel community describe <file>",
-		"dashboard":    "ravel dashboard [--out <dir>] [--communities=false] [--community-granularity <preset>] [--community-hub-degree-threshold <n>]",
-		"doctor":       "ravel doctor",
-		"tools":        "ravel tools",
-		"extract":      "ravel extract [--json] <audited-doc-or-pdf>...",
-		"plan":         "ravel plan [--json] <route> [paths...]",
-		"audit":        "ravel audit [--config <path>] [--out <dir>] [root]",
-		"scan":         "ravel scan [--config <path>] [--out <dir>] [root]",
-		"build":        "ravel build [--config <path>] [--out <dir>] [root]",
-		"update":       "ravel update [--config <path>] [--out <dir>] [root]",
-		"watch":        "ravel watch [--interval 2s] [root]",
-		"share":        "ravel share [--from <dir>] [--out ravel-graph]",
-		"merge":        "ravel merge [--out <dir>] <alias=graph-directory>...",
-		"global":       "ravel global <add|remove|list|path|build|query|context> [options]",
-		"prs":          "ravel prs [--out <dir>] [--repo owner/name] [--base branch] [--conflicts] [--json] [number]",
-		"report":       "ravel report [--out <dir>]",
-		"query":        "ravel query [--out <dir>] [--limit 25] [--json] <text>",
-		"affected":     "ravel affected [--out <dir>] [--json] [--max-depth 2] [--branch-fanout 0] [--relations <kinds>] <file-or-symbol>",
-		"explain":      "ravel explain [--out <dir>] [--json] <file-or-symbol>",
-		"path":         "ravel path [--out <dir>] [--json] <from> <to>",
-		"mcp":          "ravel mcp [--out <graphdir>] [--transport stdio|http] [--address 127.0.0.1:8080] [--path /mcp] [--api-key-env RAVEL_MCP_API_KEY]",
-		"tech":         "ravel tech [--out <dir>] [--json]",
-		"understand":   "ravel understand [--out <dir>] [--json]",
-		"learn":        "ravel learn [--out <dir>] [--json]",
-		"docs":         "ravel docs [--out <dir>] [--json]",
-		"pdf":          "ravel pdf [--out <dir>] [--json]",
-		"schema":       "ravel schema [--out <dir>] [--json]",
-		"diff":         "ravel diff [--out <dir>] [--json] [changed-path]...",
+		"version":       "ravel version",
+		"self-update":   "ravel self-update [--version latest] [--platforms codex,claude] [--project]",
+		"update-check":  "ravel update-check [--json] [--repo 12vault/ravel]",
+		"init":          "ravel init",
+		"install":       "ravel install [--platform <name>] [--project]",
+		"uninstall":     "ravel uninstall [--platform <name>] [--project]",
+		"hook":          "ravel hook <install|uninstall|status> [root]",
+		"ingest":        "ravel ingest [--out <dir>] <fragment.json>",
+		"community":     "ravel community [--json|--template] [--granularity coarse|balanced|fine] | ravel community describe <file>",
+		"dashboard":     "ravel dashboard [--out <dir>] [--communities=false] [--community-granularity <preset>] [--community-hub-degree-threshold <n>]",
+		"doctor":        "ravel doctor",
+		"tools":         "ravel tools",
+		"extract":       "ravel extract [--json] <audited-doc-or-pdf>...",
+		"plan":          "ravel plan [--json] <route> [paths...]",
+		"audit":         "ravel audit [--config <path>] [--out <dir>] [root]",
+		"scan":          "ravel scan [--config <path>] [--out <dir>] [root]",
+		"build":         "ravel build [--config <path>] [--out <dir>] [root]",
+		"update":        "ravel update [--config <path>] [--out <dir>] [root]",
+		"watch":         "ravel watch [--interval 2s] [root]",
+		"share":         "ravel share [--from <dir>] [--out ravel-graph]",
+		"merge":         "ravel merge [--out <dir>] <alias=graph-directory>...",
+		"global":        "ravel global <add|remove|list|path|build|query|context> [options]",
+		"prs":           "ravel prs [--out <dir>] [--repo owner/name] [--base branch] [--conflicts] [--json] [number]",
+		"report":        "ravel report [--out <dir>]",
+		"query":         "ravel query [--out <dir>] [--limit 25] [--json] <text>",
+		"context-batch": "ravel context-batch [options]",
+		"affected":      "ravel affected [--out <dir>] [--json] [--max-depth 2] [--branch-fanout 0] [--relations <kinds>] <file-or-symbol>",
+		"explain":       "ravel explain [--out <dir>] [--json] <file-or-symbol>",
+		"path":          "ravel path [--out <dir>] [--json] <from> <to>",
+		"mcp":           "ravel mcp [--out <graphdir>] [--transport stdio|http] [--address 127.0.0.1:8080] [--path /mcp] [--api-key-env RAVEL_MCP_API_KEY]",
+		"tech":          "ravel tech [--out <dir>] [--json]",
+		"understand":    "ravel understand [--out <dir>] [--json]",
+		"learn":         "ravel learn [--out <dir>] [--json]",
+		"docs":          "ravel docs [--out <dir>] [--json]",
+		"pdf":           "ravel pdf [--out <dir>] [--json]",
+		"schema":        "ravel schema [--out <dir>] [--json]",
+		"diff":          "ravel diff [--out <dir>] [--json] [changed-path]...",
 	}
 	switch command {
 	case "context":
 		fmt.Fprintln(w, "Usage: ravel context [options] <question>")
 		fmt.Fprintln(w, "Options: --config --out --json --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --branch-fanout --hub-degree-threshold --token-budget --community-boost --candidate-shortlist")
+		return nil
+	case "context-batch":
+		fmt.Fprintln(w, "Usage: ravel context-batch [options]")
+		fmt.Fprintln(w, "Reads JSONL {\"id\":\"...\",\"question\":\"...\"} requests from stdin and writes JSONL responses.")
+		fmt.Fprintln(w, "Options: --config --out --traversal --direction --relations --infer-relations --seed-limit --max-depth --max-nodes --branch-fanout --hub-degree-threshold --token-budget --community-boost --candidate-shortlist")
 		return nil
 	case "benchmark":
 		fmt.Fprintln(w, "Usage: ravel benchmark --dataset <cases.jsonl> [options]")
@@ -1881,6 +1889,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel report")
 	fmt.Fprintln(w, "  ravel query [--json] <text>")
 	fmt.Fprintln(w, "  ravel context [--json] [--token-budget 2000] [--max-depth 2] [--branch-fanout 0] <question>")
+	fmt.Fprintln(w, "  ravel context-batch [--out <dir>] [--token-budget 2000]")
 	fmt.Fprintln(w, "  ravel affected [--json] [--max-depth 2] [--branch-fanout 0] [--relations calls,references] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel explain [--json] <file-or-symbol>")
 	fmt.Fprintln(w, "  ravel path [--json] <from> <to>")
