@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+
 import json
 from pathlib import Path
 import tempfile
@@ -8,10 +10,13 @@ from unittest import mock
 
 import polyglot_compare
 import run_codesearchnet_go
+import run_c_family
 import run_contextbench
 import run_crosscodeeval_typescript
 import run_ghostty_swift
 import run_real_fim_scale
+import run_ripgrep_rust
+import run_t3code_typescript
 
 
 class PolyglotCompareTests(unittest.TestCase):
@@ -249,6 +254,165 @@ class GhosttySwiftTests(unittest.TestCase):
         self.assertEqual(coverage["coverage"], 0.5)
         self.assertEqual(coverage["byKind"]["struct"]["coverage"], 1.0)
         self.assertEqual(coverage["byKind"]["func"]["coverage"], 0.0)
+
+
+class RipgrepRustTests(unittest.TestCase):
+    def test_derives_documented_rust_function_through_attribute(self) -> None:
+        source = """/// `build_matcher` builds a matcher for the requested expression and configuration.
+#[inline]
+pub(crate) fn build_matcher() {}
+"""
+        cases = run_ripgrep_rust.cases_from_source(Path("crates/searcher/src/lib.rs"), source, "revision")
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["goldKind"], "fn")
+        self.assertEqual(cases[0]["goldSymbol"], "build_matcher")
+        self.assertEqual(cases[0]["goldLine"], 3)
+        query = run_ripgrep_rust.query_text(cases[0]["documentation"], cases[0]["goldSymbol"])
+        self.assertNotIn("build_matcher", query)
+        self.assertIn("[redacted symbol]", query)
+
+    def test_derives_const_function_and_mutable_static(self) -> None:
+        const_fn = run_ripgrep_rust.declaration_after(
+            ["/// docs", "pub const fn capacity() -> usize { 1 }"], 1
+        )
+        mutable_static = run_ripgrep_rust.declaration_after(
+            ["/// docs", "pub static mut BUFFER: usize = 0;"], 1
+        )
+        self.assertEqual(const_fn, (2, "fn", "capacity"))
+        self.assertEqual(mutable_static, (2, "static", "BUFFER"))
+
+    def test_rejects_documented_field_as_declaration(self) -> None:
+        source = """pub struct Config {
+    /// Controls whether hidden files should be searched by default.
+    pub hidden: bool,
+}
+"""
+        self.assertEqual(
+            run_ripgrep_rust.cases_from_source(Path("src/config.rs"), source, "revision"),
+            [],
+        )
+
+    def test_strips_rustdoc_without_changing_line_numbers(self) -> None:
+        source = "/// First line.\n/// Second line.\npub fn build() {}\n"
+        stripped = run_ghostty_swift.strip_documentation(source)
+        self.assertEqual(stripped.count("\n"), source.count("\n"))
+        self.assertNotIn("First line", stripped)
+        self.assertEqual(stripped.splitlines()[2], "pub fn build() {}")
+
+
+class CFamilyTests(unittest.TestCase):
+    def test_extracts_libgit2_multiline_prototype_and_redacts_name(self) -> None:
+        source = """/**
+ * Open a repository and inspect its working tree state safely.
+ */
+GIT_EXTERN(int) git_repository_open(
+    git_repository **out,
+    const char *path);
+"""
+        cases = run_c_family.cases_from_source(Path("include/git2/repository.h"), source, "revision", "c")
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["goldSymbol"], "git_repository_open")
+        self.assertEqual(cases[0]["goldLine"], 4)
+        query = run_c_family.query_text(cases[0]["documentation"], cases[0]["goldSymbol"], "c")
+        self.assertNotIn("git_repository_open", query)
+
+    def test_extracts_cpp_documented_method_and_type(self) -> None:
+        method = """/// Returns the number of stored values in this container.
+size_type size() const noexcept { return count_; }
+"""
+        kind = """/** A container that stores parsed values and preserves their types. */
+class basic_json {
+};
+"""
+        method_cases = run_c_family.cases_from_source(Path("include/json.hpp"), method, "revision", "cpp")
+        type_cases = run_c_family.cases_from_source(Path("include/json.hpp"), kind, "revision", "cpp")
+        self.assertEqual(method_cases[0]["goldSymbol"], "size")
+        self.assertEqual(type_cases[0]["goldKind"], "class")
+        self.assertEqual(type_cases[0]["goldSymbol"], "basic_json")
+
+    def test_strips_block_and_line_docs_without_changing_line_count(self) -> None:
+        source = "/** first\n * second\n */\n/// third\nint value;\n"
+        stripped = run_c_family.strip_documentation(source)
+        self.assertEqual(stripped.count("\n"), source.count("\n"))
+        self.assertNotIn("first", stripped)
+        self.assertNotIn("third", stripped)
+        self.assertEqual(stripped.splitlines()[-1], "int value;")
+
+    def test_resume_accepts_ravel_directory_and_graphify_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            ravel_graph = workspace / "ravel-graph"
+            graphify_graph = workspace / "graphify-graph.json"
+            ravel_graph.mkdir()
+            (ravel_graph / "graph.json").write_text("{}")
+            graphify_graph.write_text("{}")
+            build = {
+                "queryGraphs": {
+                    "ravel": str(ravel_graph),
+                    "graphify": str(graphify_graph),
+                }
+            }
+            (workspace / "build.json").write_text(json.dumps(build))
+            loaded, graphs = run_c_family.build_corpora_and_graphs(
+                argparse.Namespace(), workspace, workspace, [], []
+            )
+        self.assertEqual(loaded, build)
+        self.assertEqual(graphs["ravel"], ravel_graph)
+
+
+class T3CodeTypeScriptTests(unittest.TestCase):
+    def test_extracts_documented_exported_function_and_redacts_name(self) -> None:
+        source = """/** Resolves the active workspace and returns its persisted settings safely. */
+export async function resolveWorkspace() {
+  return undefined;
+}
+"""
+        cases = run_t3code_typescript.cases_from_source(
+            Path("apps/web/src/workspace.ts"), source, "revision"
+        )
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["goldKind"], "function")
+        self.assertEqual(cases[0]["goldSymbol"], "resolveWorkspace")
+        self.assertEqual(cases[0]["goldLine"], 2)
+        query = run_t3code_typescript.query_text(
+            cases[0]["documentation"], cases[0]["goldSymbol"]
+        )
+        self.assertNotIn("resolveWorkspace", query)
+
+    def test_extracts_documented_react_arrow_and_class_method(self) -> None:
+        arrow = """/** Renders the compact thread status and its pending action count. */
+export const ThreadStatus = () => null;
+"""
+        method = """/** Closes the preview and releases its retained browser resources. */
+public async closePreview() {}
+"""
+        arrow_cases = run_t3code_typescript.cases_from_source(
+            Path("apps/web/src/ThreadStatus.tsx"), arrow, "revision"
+        )
+        method_cases = run_t3code_typescript.cases_from_source(
+            Path("apps/desktop/src/Preview.ts"), method, "revision"
+        )
+        self.assertEqual(arrow_cases[0]["goldSymbol"], "ThreadStatus")
+        self.assertEqual(arrow_cases[0]["goldKind"], "const")
+        self.assertEqual(method_cases[0]["goldSymbol"], "closePreview")
+        self.assertEqual(method_cases[0]["goldKind"], "method")
+
+    def test_excludes_reference_directive_and_strips_jsdoc_without_line_shift(self) -> None:
+        source = """/// <reference types=\"node\" />
+/** First descriptive line for the stored value.
+ * Second line explains how consumers read it safely.
+ */
+export const value = 1;
+"""
+        cases = run_t3code_typescript.cases_from_source(
+            Path("apps/web/src/value.ts"), source, "revision"
+        )
+        self.assertEqual(len(cases), 1)
+        stripped = run_c_family.strip_documentation(source)
+        self.assertEqual(stripped.count("\n"), source.count("\n"))
+        self.assertNotIn("First line", stripped)
+        self.assertIn("<reference", stripped)
+        self.assertEqual(stripped.splitlines()[4], "export const value = 1;")
 
 if __name__ == "__main__":
     unittest.main()
