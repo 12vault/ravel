@@ -25,7 +25,7 @@ import (
 const InternalWorkerCommand = "__tree-analyzer-worker"
 
 const (
-	processWorkerProtocolVersion = 1
+	processWorkerProtocolVersion = 2
 	// Match Graphify's cutoff: below this, process startup costs more than the
 	// small amount of parsing it can parallelize.
 	minProcessWorkerFiles = 20
@@ -74,6 +74,7 @@ type processDefinition struct {
 	StartLine int
 	EndLine   int
 	Column    int
+	Partial   bool
 }
 
 type processReference struct {
@@ -265,7 +266,7 @@ func (a *Analyzer) analyzeWithProcessWorkers(ctx context.Context, files []scan.F
 				}
 				response, err := worker.parse(processWorkerRequest{
 					Index: index, Language: a.language, File: files[index],
-					TimeoutMicros: uint64(parseTimeoutMicros) * uint64(workers),
+					TimeoutMicros: processWorkerTimeoutMicros(workers),
 				})
 				if err != nil {
 					select {
@@ -396,6 +397,7 @@ func parsedFileToProcessParsed(file parsedFile) processParsedFile {
 			ID: item.id, Name: item.name, Qualified: item.qualified, Kind: item.kind,
 			Path: item.path, Language: item.language, StartByte: item.startByte,
 			EndByte: item.endByte, StartLine: item.startLine, EndLine: item.endLine, Column: item.column,
+			Partial: item.partial,
 		}
 	}
 	for i, item := range file.references {
@@ -419,6 +421,7 @@ func processParsedToParsedFile(wire processParsedFile) parsedFile {
 			id: item.ID, name: item.Name, qualified: item.Qualified, kind: item.Kind,
 			path: item.Path, language: item.Language, startByte: item.StartByte,
 			endByte: item.EndByte, startLine: item.StartLine, endLine: item.EndLine, column: item.Column,
+			partial: item.Partial,
 		}
 	}
 	for i, item := range wire.References {
@@ -428,4 +431,12 @@ func processParsedToParsedFile(wire processParsedFile) parsedFile {
 		}
 	}
 	return file
+}
+
+// Process workers are capped at GOMAXPROCS and each worker is single-threaded,
+// so they do not need the in-process goroutine timeout multiplier. A fixed
+// bound also prevents one pathological file from holding a worker for tens of
+// seconds when its partial tree already contains useful declarations.
+func processWorkerTimeoutMicros(_ int) uint64 {
+	return parseTimeoutMicros
 }

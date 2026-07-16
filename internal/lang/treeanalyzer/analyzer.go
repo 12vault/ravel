@@ -97,6 +97,7 @@ type definition struct {
 	startLine int
 	endLine   int
 	column    int
+	partial   bool
 }
 
 type reference struct {
@@ -299,13 +300,31 @@ func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry, ti
 	}
 	stop()
 	if err != nil {
-		if tree != nil {
-			tree.Release()
-		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
+			if tree != nil {
+				tree.Release()
+			}
 			return pf, nil, ctxErr
 		}
-		return pf, []graph.Diagnostic{{Path: file.Path, Level: "warning", Message: fmt.Sprintf("Tree-sitter parse stopped: %v", err)}}, nil
+		diagnostic := graph.Diagnostic{Path: file.Path, Level: "warning", Message: fmt.Sprintf("Tree-sitter parse stopped: %v", err)}
+		if tree == nil || tree.RootNode() == nil {
+			if tree != nil {
+				tree.Release()
+			}
+			return pf, []graph.Diagnostic{diagnostic}, nil
+		}
+		// A timeout can still return a syntax tree containing declarations that
+		// were fully reduced before parsing stopped. Keep only those direct
+		// declaration facts; calls, imports, and heritage require a complete tree.
+		definitions := extractSupplementalDefinitions(tree, file.Path, entry.Name, data)
+		tree.Release()
+		for index := range definitions {
+			definitions[index].partial = true
+		}
+		definitions = append(definitions, extractChunkedDeclarations(ctx, entry, file.Path, data)...)
+		pf.definitions = dedupeDefinitions(definitions)
+		diagnostic.Message = fmt.Sprintf("Tree-sitter parse stopped; recovered %d declaration(s) from the partial syntax tree: %v", len(pf.definitions), err)
+		return pf, []graph.Diagnostic{diagnostic}, nil
 	}
 	if tree == nil || tree.RootNode() == nil {
 		if tree != nil {
@@ -344,6 +363,7 @@ func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry, ti
 	for _, span := range gotreesitter.ExtractDefinitionSpans(tree) {
 		pf.definitions = append(pf.definitions, definitionFromSpan(file.Path, entry.Name, span, data))
 	}
+	pf.definitions = append(pf.definitions, extractSupplementalDefinitions(tree, file.Path, entry.Name, data)...)
 	for _, call := range gotreesitter.ExtractCalls(tree) {
 		pf.references = append(pf.references, referenceFromCall(file.Path, entry.Name, call, data))
 	}
@@ -522,6 +542,10 @@ func emitDefinitions(files []parsedFile, result *lang.AnalysisResult) {
 			}
 			meta := extractedMeta(def.path, def.startLine, def.language)
 			meta["tree_sitter"] = "true"
+			if def.partial {
+				meta["parse_complete"] = "false"
+				meta["partial"] = "true"
+			}
 			packagePath := filepath.ToSlash(filepath.Dir(def.path))
 			if packagePath == "." {
 				packagePath = ""
@@ -809,9 +833,11 @@ func dedupeDefinitions(defs []definition) []definition {
 		if def.name == "" {
 			continue
 		}
-		key := fmt.Sprintf("%d\x00%d\x00%s", def.startByte, def.endByte, normalizeName(def.name))
+		key := fmt.Sprintf("%d\x00%s", def.startByte, normalizeName(def.name))
 		if existing, ok := seen[key]; ok {
-			if definitionRank(def.kind) > definitionRank(existing.kind) {
+			if (!def.partial && existing.partial) ||
+				(def.partial == existing.partial && definitionRank(def.kind) > definitionRank(existing.kind)) ||
+				(def.partial == existing.partial && definitionRank(def.kind) == definitionRank(existing.kind) && def.endByte > existing.endByte) {
 				seen[key] = def
 			}
 			continue

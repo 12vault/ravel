@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/lang"
 	"github.com/12vault/ravel/internal/scan"
 )
 
@@ -181,6 +182,33 @@ func TestSmallTreeSitterInputsStaySerial(t *testing.T) {
 	want := analysisWorkerCount(minProcessWorkerFiles)
 	if got := isolatedWorkerCount(minProcessWorkerFiles); got != want {
 		t.Fatalf("large Tree-sitter process worker count = %d, want %d", got, want)
+	}
+}
+
+func TestProcessWorkerTimeoutDoesNotScaleWithWorkerCount(t *testing.T) {
+	for _, workers := range []int{1, 2, 8, 64} {
+		if got := processWorkerTimeoutMicros(workers); got != parseTimeoutMicros {
+			t.Fatalf("process timeout with %d workers = %d, want %d", workers, got, parseTimeoutMicros)
+		}
+	}
+}
+
+func TestPartialDefinitionsSurviveWorkerRoundTripAndAreMarked(t *testing.T) {
+	original := parsedFile{
+		file: scan.File{Path: "App.swift"}, language: "swift",
+		definitions: []definition{{
+			id: "swift-run", name: "run", kind: graph.NodeFunction,
+			path: "App.swift", language: "swift", startLine: 7, endLine: 9, partial: true,
+		}},
+	}
+	roundTrip := processParsedToParsedFile(parsedFileToProcessParsed(original))
+	if len(roundTrip.definitions) != 1 || !roundTrip.definitions[0].partial {
+		t.Fatalf("partial definition lost in worker round trip: %#v", roundTrip.definitions)
+	}
+	result := &lang.AnalysisResult{}
+	emitDefinitions([]parsedFile{roundTrip}, result)
+	if len(result.Nodes) != 1 || result.Nodes[0].Meta["partial"] != "true" || result.Nodes[0].Meta["parse_complete"] != "false" {
+		t.Fatalf("partial definition lacks incomplete-parse metadata: %#v", result.Nodes)
 	}
 }
 
@@ -440,6 +468,127 @@ func TestPackagedGrammarSetSupportsAdvertisedLanguages(t *testing.T) {
 	}
 }
 
+func TestAdvertisedLanguagesExtractNamedDeclarations(t *testing.T) {
+	tests := []struct {
+		language string
+		path     string
+		source   string
+		want     string
+	}{
+		{language: "javascript", path: "app.js", source: "function run() {}\n", want: "run"},
+		{language: "typescript", path: "app.ts", source: "function run(): void {}\n", want: "run"},
+		{language: "typescript", path: "app.tsx", source: "function Run() { return <div />; }\n", want: "Run"},
+		{language: "swift", path: "App.swift", source: "func run() {}\n", want: "run"},
+		{language: "python", path: "app.py", source: "def run():\n    pass\n", want: "run"},
+		{language: "java", path: "App.java", source: "class App { void run() {} }\n", want: "run"},
+		{language: "kotlin", path: "App.kt", source: "fun run() {}\n", want: "run"},
+		{language: "scala", path: "App.scala", source: "def run(): Int = 1\n", want: "run"},
+		{language: "rust", path: "main.rs", source: "fn run() {}\n", want: "run"},
+		{language: "ruby", path: "app.rb", source: "def run\nend\n", want: "run"},
+		{language: "php", path: "app.php", source: "<?php function run() {}\n", want: "run"},
+		{language: "c", path: "main.c", source: "void run(void) {}\n", want: "run"},
+		{language: "cpp", path: "main.cpp", source: "void run() {}\n", want: "run"},
+		{language: "csharp", path: "App.cs", source: "class App { void Run() {} }\n", want: "Run"},
+		{language: "fsharp", path: "App.fs", source: "let run () = ()\n", want: "run"},
+		{language: "dart", path: "app.dart", source: "void run() {}\n", want: "run"},
+		{language: "elixir", path: "app.ex", source: "defmodule App do\n  def run, do: :ok\nend\n", want: "run"},
+		{language: "erlang", path: "app.erl", source: "-module(app).\nrun() -> ok.\n", want: "run"},
+		{language: "clojure", path: "app.clj", source: "(defn run [] nil)\n", want: "run"},
+		{language: "lua", path: "app.lua", source: "function run() end\n", want: "run"},
+		{language: "r", path: "app.r", source: "run <- function() {}\n", want: "run"},
+		{language: "objective-c", path: "App.m", source: "void run(void) {}\n", want: "run"},
+		{language: "perl", path: "app.pl", source: "sub run {}\n", want: "run"},
+		{language: "groovy", path: "App.groovy", source: "def run() {}\n", want: "run"},
+		{language: "solidity", path: "App.sol", source: "contract App { function run() public {} }\n", want: "run"},
+		{language: "shell", path: "app.sh", source: "run() { :; }\n", want: "run"},
+		{language: "powershell", path: "app.ps1", source: "function Run {}\n", want: "Run"},
+		{language: "terraform", path: "main.tf", source: "resource \"thing\" \"run\" {}\n", want: "run"},
+		{language: "protobuf", path: "api.proto", source: "syntax = \"proto3\"; message Run {}\n", want: "Run"},
+		{language: "graphql", path: "schema.graphql", source: "type Run { value: String }\n", want: "Run"},
+	}
+	for _, test := range tests {
+		t.Run(test.language+"/"+test.path, func(t *testing.T) {
+			result := analyzeSources(t, test.language, map[string]string{test.path: test.source})
+			if nodeNamed(result.Nodes, test.want) == nil {
+				t.Fatalf("missing %q declaration: nodes=%#v diagnostics=%#v", test.want, result.Nodes, result.Diagnostics)
+			}
+			if got := countNamedSymbols(result.Nodes, test.want); got != 1 {
+				t.Fatalf("%q declaration count = %d, want 1: nodes=%#v", test.want, got, result.Nodes)
+			}
+		})
+	}
+}
+
+func TestSwiftExtractsFunctionsMethodsAndProtocolRequirements(t *testing.T) {
+	result := analyzeSources(t, "swift", map[string]string{
+		"App.swift": "func topLevel() {}\n\nstruct App {\n    func run() {}\n}\n\nprotocol Worker {\n    func work()\n}\n",
+	})
+	topLevel := nodeNamed(result.Nodes, "topLevel")
+	run := nodeNamed(result.Nodes, "run")
+	work := nodeNamed(result.Nodes, "work")
+	if topLevel == nil || run == nil || work == nil {
+		t.Fatalf("missing Swift declarations: nodes=%#v diagnostics=%#v", result.Nodes, result.Diagnostics)
+	}
+	if topLevel.Kind != graph.NodeFunction || run.Kind != graph.NodeMethod || work.Kind != graph.NodeMethod {
+		t.Fatalf("unexpected Swift kinds: topLevel=%q run=%q work=%q", topLevel.Kind, run.Kind, work.Kind)
+	}
+	if topLevel.StartLine != 1 || run.StartLine != 4 || work.StartLine != 8 {
+		t.Fatalf("unexpected Swift declaration lines: topLevel=%d run=%d work=%d", topLevel.StartLine, run.StartLine, work.StartLine)
+	}
+}
+
+func TestChunkedSwiftDeclarationsPreserveOriginalLinesAndDeduplicateOverlap(t *testing.T) {
+	var source strings.Builder
+	wanted := map[string]int{}
+	for line := 1; line <= 620; line++ {
+		name := ""
+		switch line {
+		case 1:
+			name = "first"
+		case 240:
+			name = "overlap"
+		case 620:
+			name = "last"
+		}
+		if name != "" {
+			fmt.Fprintf(&source, "func %s() {}\n", name)
+			wanted[name] = line
+		} else {
+			fmt.Fprintf(&source, "let value%d = %d\n", line, line)
+		}
+	}
+	entry := entryForFile("swift", "App.swift")
+	if entry == nil {
+		t.Fatal("missing Swift grammar")
+	}
+	definitions := dedupeDefinitions(extractChunkedDeclarations(
+		context.Background(), *entry, "App.swift", []byte(source.String()),
+	))
+	counts := map[string]int{}
+	for _, definition := range definitions {
+		if line, ok := wanted[definition.name]; ok {
+			counts[definition.name]++
+			if definition.startLine != line || !definition.partial {
+				t.Fatalf("chunked %s = line %d partial=%v, want line %d partial", definition.name, definition.startLine, definition.partial, line)
+			}
+		}
+	}
+	for name := range wanted {
+		if counts[name] != 1 {
+			t.Fatalf("chunked %s count = %d, want 1; definitions=%#v", name, counts[name], definitions)
+		}
+	}
+}
+
+func TestDedupeDefinitionsPrefersCompleteFactOverPartialOverlap(t *testing.T) {
+	partial := definition{name: "run", kind: graph.NodeFunction, startByte: 10, endByte: 90, partial: true}
+	complete := definition{name: "run", kind: graph.NodeFunction, startByte: 10, endByte: 80}
+	got := dedupeDefinitions([]definition{partial, complete})
+	if len(got) != 1 || got[0].partial || got[0].endByte != complete.endByte {
+		t.Fatalf("deduped definitions = %#v, want complete fact", got)
+	}
+}
+
 func TestSymbolIDsSurviveUnrelatedLineMovement(t *testing.T) {
 	before := analyzeSources(t, "python", map[string]string{"app.py": "def stable():\n    pass\n"})
 	after := analyzeSources(t, "python", map[string]string{"app.py": "# unrelated heading\n\n\ndef stable():\n    pass\n"})
@@ -499,6 +648,16 @@ func nodeNamedAtPath(nodes []graph.Node, name, path string) *graph.Node {
 		}
 	}
 	return nil
+}
+
+func countNamedSymbols(nodes []graph.Node, name string) int {
+	count := 0
+	for _, node := range nodes {
+		if node.Name == name && graph.SymbolKind(node.Kind) && node.Meta["resolved"] != "false" {
+			count++
+		}
+	}
+	return count
 }
 
 func nodeByID(nodes []graph.Node, id string) *graph.Node {
