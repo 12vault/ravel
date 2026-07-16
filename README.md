@@ -357,7 +357,7 @@ git add ravel-graph
 
 The bundle contains `graph.json`, `report.md`, `graph.html`, and a safety manifest. Review inferred content before committing it.
 
-The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, pure-Go Tree-sitter polyglot parser, Markdown parser, and SQL parser add deterministic facts; SQL facts include tables, views, columns, indexes, declared foreign keys, and conservative `FROM`/`JOIN` references. Tree-sitter parses are bounded to two seconds per file, recoverable syntax errors are reported as diagnostics, and stopped partial parses are never emitted as complete facts. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:
+The graph models repository containment, code symbols, documents, schema entities, technical architecture, and business domains. The Go parser, pure-Go Tree-sitter polyglot parser, Markdown parser, and SQL parser add deterministic facts; SQL facts include tables, views, columns, indexes, declared foreign keys, and conservative `FROM`/`JOIN` references. Tree-sitter parses are bounded to two seconds per file and recoverable syntax errors are reported as diagnostics. When a parse stops, Ravel keeps only declaration nodes already present in the partial syntax tree, marks them with `partial: true` and `parse_complete: false`, and discards partial calls, imports, and heritage; stopped parses are never presented as complete. Agent-produced facts for any language or corpus enter through validated, provenance-tagged graph fragments:
 
 ```sh
 ravel ingest fragment.json
@@ -409,7 +409,7 @@ Configuration is strict: unknown settings, invalid values, and options that are 
 
 ### Supported languages
 
-Packaged binaries embed a curated, self-contained grammar set for JavaScript/TypeScript/TSX, Swift, Python, Java, Kotlin, Scala, Rust, Ruby, PHP, C/C++, C#, F#, Dart, Elixir, Erlang, Clojure, Lua, R, Objective-C, Perl, Groovy, Solidity, shell, PowerShell, HCL, Protocol Buffers, and GraphQL. Source builds without release tags embed gotreesitter's complete registry. Grammar loading is lazy in both cases; Ravel only emits semantics when a grammar provides a compilable structural tags query.
+Packaged binaries embed a curated, self-contained grammar set for JavaScript/TypeScript/TSX, Swift, Python, Java, Kotlin, Scala, Rust, Ruby, PHP, C/C++, C#, F#, Dart, Elixir, Erlang, Clojure, Lua, R, Objective-C, Perl, Groovy, Solidity, shell, PowerShell, HCL, Protocol Buffers, and GraphQL. Source builds without release tags embed gotreesitter's complete registry. Grammar loading is lazy in both cases. Named declarations use structural tags plus grammar-specific syntax-node shapes, so every advertised language produces symbol nodes even when its identifier or declaration node names differ from the common conventions.
 
 ### Retrieval defaults
 
@@ -541,7 +541,9 @@ The distinction is intentional: a skill does not need a language allowlist, but 
 
 Run the local build/query performance suite with `./benchmarks/run.sh`. The checked-in self-repository relationship suite uses `--gate benchmarks/self-quality-gate.json` to reject stale evidence IDs and fail on metric regressions. A second CI suite runs 54 evidence-tagged questions across pinned chi, Express, and Click revisions; validate it offline with `python3 benchmarks/run_external_quality.py --check`. [`benchmarks/datasets.json`](benchmarks/datasets.json) defines the repository-question contract. Version 3 reports node recall/precision, evidence recall/precision, reciprocal rank, p50/p95 latency, compact context tokens, node and evidence recall per 1,000 tokens, truncation rate, index-build time, logical graph and dataset hashes/revisions, adapter version, Ravel version, Go version, platform, and optional quality-gate results. An optional strict `--answers` ledger adds externally adjudicated accuracy, rubric key-fact coverage, total agent tokens, total spend, and provenance without retaining raw answers; see the [benchmark guide](benchmarks/README.md). Ravel does not claim native LOCOMO/LongMemEval corpus adapters and never invokes a model or judge. Every published score must retain the raw result file and configuration.
 
-### T3 Code Ravel vs Graphify snapshot
+The language-comparison suite uses pinned upstream repositories—T3 Code (TypeScript), Ghostty (Swift), ripgrep (Rust), libgit2 (C), and nlohmann/json (C++)—with source filters, revisions, manifests, and full results documented in the [official-repository benchmark guide](benchmarks/README.md). These are retrieval-compatibility measurements, not upstream project metrics.
+
+### Historical ten-question T3 Code payload snapshot
 
 Measured on 2026-07-12 on an Apple M1 Pro (`darwin/arm64`) with Ravel v0.2.5 and Graphify 0.9.12 against [`t3tools/t3code`](https://github.com/t3tools/t3code) commit `c1ec1915`:
 

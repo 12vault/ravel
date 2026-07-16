@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "date": "2026-07-16",
+  "benchmark": "ripgrep Rust documented-declaration retrieval compatibility",
+  "officialMetric": false,
+  "claimsAnswerCorrectness": false,
+  "environment": {
+    "os": "Darwin",
+    "arch": "arm64",
+    "hardware": "Apple M1 Pro",
+    "tokenBudget": 2000,
+    "workers": 2,
+    "ravelProfile": "broad",
+    "ravelProfileArgs": ["--seed-limit", "20", "--max-depth", "3", "--max-nodes", "10000", "--branch-fanout", "10000", "--candidate-shortlist"]
+  },
+  "source": {
+    "repository": "https://github.com/BurntSushi/ripgrep",
+    "release": "15.0.0",
+    "revision": "3a612f88b805e14aef45bfa43e25a54abc6297fc",
+    "rustFiles": 100,
+    "rustLines": 52287,
+    "rustSourceSha256": "a845734a3b3e79d8ce10de895ebf612ee64567dd90de07d02f9026881200eac8"
+  },
+  "tools": {
+    "ravel": {
+      "versionReportedByBinary": "v0.2.5",
+      "workingTreeBuild": true,
+      "executableSha256": "7bb7202fb220dd17d0d395ff19a7301a245d566a99083d833902cb64e7ccf581"
+    },
+    "graphify": {
+      "version": "0.9.12",
+      "executableSha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
+    }
+  },
+  "methodology": {
+    "adapterVersion": "ripgrep-rust-doc-declaration-v1",
+    "commonAdapterVersion": "ravel-graphify-polyglot-v1",
+    "queryMode": "rust-rustdoc-symbol-redacted-v1",
+    "cases": 1174,
+    "retrievalGold": "exact documented Rust declaration path, symbol, and line",
+    "corpus": "all 100 tracked .rs files, shared by both tools",
+    "leakageControl": "all /// rustdoc blanked with line numbers preserved; exact symbols redacted; fenced rustdoc code omitted from queries",
+    "caseKinds": {"const": 6, "enum": 52, "fn": 959, "static": 3, "struct": 141, "trait": 7, "type": 6}
+  },
+  "results": {
+    "successfulCases": 1174,
+    "failedCases": 0,
+    "ravel": {
+      "buildMs": 883.6903750197962,
+      "graphNodes": 9929,
+      "graphEdges": 11700,
+      "declarationCoverage": 0.9872231686541738,
+      "coveredDeclarations": 1159,
+      "recall": 0.21805792163543442,
+      "hits": 256,
+      "mrr": 0.09055766745034477,
+      "meanQueryMs": 497.62189061727196,
+      "queryP50Ms": 483.8726669549942,
+      "queryP95Ms": 579.6500419965014,
+      "queryP99Ms": 650.7210000418127,
+      "queryMaxMs": 1242.8132920758799,
+      "meanEstimatedTokens": 1896.552810902896,
+      "meanReturned": 27.396933560477002,
+      "truncationRate": 0.0
+    },
+    "graphify": {
+      "buildMs": 3046.5635410510004,
+      "extractMs": 1718.1163750356063,
+      "clusterMs": 1328.447166015394,
+      "graphNodes": 3856,
+      "graphEdges": 9161,
+      "declarationCoverage": 0.9327086882453152,
+      "coveredDeclarations": 1095,
+      "recall": 0.13202725724020442,
+      "hits": 155,
+      "mrr": 0.0038297189934344343,
+      "meanQueryMs": 343.6081756906484,
+      "queryP50Ms": 338.18975009489805,
+      "queryP95Ms": 383.2207079976797,
+      "queryP99Ms": 425.05116597749293,
+      "queryMaxMs": 656.231417087838,
+      "meanEstimatedTokens": 2049.7385008517886,
+      "meanReturned": 59.79557069846678,
+      "truncationRate": 0.8466780238500852
+    },
+    "pairwise": {"bothHit": 55, "ravelOnlyHit": 201, "graphifyOnlyHit": 100, "bothMiss": 818, "ravelQueryWins": 0},
+    "retrievalByKind": {
+      "const": {"cases": 6, "ravelHits": 0, "graphifyHits": 0, "ravelMrr": 0.0, "graphifyMrr": 0.0},
+      "enum": {"cases": 52, "ravelHits": 16, "graphifyHits": 3, "ravelMrr": 0.17055860805860806, "graphifyMrr": 0.0024712058263613094},
+      "fn": {"cases": 959, "ravelHits": 221, "graphifyHits": 99, "ravelMrr": 0.09442381757070525, "graphifyMrr": 0.00298952320734758},
+      "static": {"cases": 3, "ravelHits": 0, "graphifyHits": 0, "ravelMrr": 0.0, "graphifyMrr": 0.0},
+      "struct": {"cases": 141, "ravelHits": 19, "graphifyHits": 52, "ravelMrr": 0.048888034874828706, "graphifyMrr": 0.010538501823560037},
+      "trait": {"cases": 7, "ravelHits": 0, "graphifyHits": 1, "ravelMrr": 0.0, "graphifyMrr": 0.0021008403361344537},
+      "type": {"cases": 6, "ravelHits": 0, "graphifyHits": 0, "ravelMrr": 0.0, "graphifyMrr": 0.0}
+    },
+    "declarationCoverageByKind": {
+      "ravel": {"const": 0, "enum": 52, "fn": 959, "static": 0, "struct": 141, "trait": 7, "type": 0},
+      "graphify": {"const": 0, "enum": 52, "fn": 895, "static": 0, "struct": 141, "trait": 7, "type": 0}
+    }
+  },
+  "derivedComparisons": {
+    "recallPointAdvantageRavel": 0.08603066439523,
+    "mrrRatioRavelOverGraphify": 23.646,
+    "buildSpeedRatioRavelOverGraphify": 3.44755,
+    "querySpeedRatioGraphifyOverRavel": 1.44822,
+    "payloadReductionRavel": 0.0747343,
+    "declarationCoveragePointAdvantageRavel": 0.0545144804088586,
+    "recallConditionalOnExtractedDeclaration": {"ravel": 0.22088006902502158, "graphify": 0.1415525114155251}
+  },
+  "artifactSha256": {
+    "manifest": "62665cf61c03493cd84d71af1eebb021ee8c9675da878ce80c233546e690b46b",
+    "casesJsonl": "46d6435cf112b855874c84c5e6fbc073864017a1296030698dbb8faa24e7fbd9",
+    "resultsJsonl": "bbe545df6c96e3e56234b2a3ecfbf881855647d09247480197a6224ba3ca97dd",
+    "runConfig": "8df15f0c635a4ce18eb123800fc69118908fba7681ad848489fa8b80c24cc98e",
+    "summary": "82b4661aa7daa7ecf065118110498fff81ec90ae24bec34a78d22aa425c9c895",
+    "ravelGraph": "d2e1e2823c6bf0b1e45e0a20bd52c4d07ea579f02a7ab717cc8b21c444d3188f",
+    "graphifyGraph": "ae1ac5187bb852bcc5ec9f8e9569997cbc6aa0ec454824be2789d597ad966ef6"
+  },
+  "limitations": [
+    "Rustdoc/declaration pairs are proxy retrieval gold; no model answers were generated or judged.",
+    "The tools retain their native graph schemas and extraction behavior, so graph coverage is intentionally not equalized.",
+    "The Ravel executable is a working-tree build that still reports v0.2.5; it is not the published v0.2.5 release binary.",
+    "Both tools missed all 15 eligible const, static, and type-alias declarations at graph-coverage time.",
+    "Graphify retrieved more documented structs and the only retrieved documented trait; Ravel retrieved more functions and enums.",
+    "Graphify's AST worker required process-synchronization access unavailable in the restricted sandbox; the valid run rejected empty graphs and ran with that access.",
+    "Graphify marked 84.67% of query outputs truncated at the 2,000-token budget."
+  ]
+}

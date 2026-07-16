@@ -2,6 +2,22 @@
 
 See [`RESULTS.md`](RESULTS.md) for the running human-readable Ravel vs Graphify results log.
 
+## Real repositories used by the language suite
+
+These comparisons run against first-party source from pinned, public project repositories. The repository owners do not endorse the benchmark; “official repository” means the project's own upstream repository, not an official project metric.
+
+| Language | Real upstream repository | Pinned revision | Source files | Eligible exact-gold cases |
+| --- | --- | --- | ---: | ---: |
+| TypeScript/TSX | [`pingdotgg/t3code`](https://github.com/pingdotgg/t3code) | `2a33a18716854b8d07378008cf3101ad999209ae` | 1,952 first-party files | 487 |
+| Swift | [`ghostty-org/ghostty`](https://github.com/ghostty-org/ghostty) | `73534c4680a809398b396c94ac7f12fcccb7963d` | 188 files under `macos/` | 455 |
+| Rust | [`BurntSushi/ripgrep`](https://github.com/BurntSushi/ripgrep) | `3a612f88b805e14aef45bfa43e25a54abc6297fc` (`15.0.0`) | 100 | 1,174 |
+| C | [`libgit2/libgit2`](https://github.com/libgit2/libgit2) | `1affb8b19346c4f90e163a9a0364959ff1410f64` (`v1.9.3`) | 473 | 1,167 |
+| C++ | [`nlohmann/json`](https://github.com/nlohmann/json) | `55f93686c01528224f448c19128836e7df245f72` (`v3.12.0`) | 46 | 242 |
+
+The TypeScript row excludes T3 Code's checked-in `.repos/` fixture/vendor tree and includes only tracked `.ts`, `.tsx`, `.mts`, and `.cts` files under `apps/`, `infra/`, `oxlint-plugin-t3code/`, `packages/`, and `scripts/`. The other rows likewise document their source-root filters below. Every manifest records the full revision, selected-file count, line count, and a SHA-256 fingerprint of the selected source bytes.
+
+Dataset adapters are a separate category. CrossCodeEval, CodeSearchNet, RepoBench, and Real-FIM materialize published candidate snippets or incomplete files; they are not presented as full upstream-repository runs. ContextBench does use real pinned repositories, but its 104 Go issue cases span multiple upstream projects rather than one common project corpus.
+
 Run the repeatable local suite with:
 
 ```sh
@@ -116,6 +132,25 @@ The append-only `results.jsonl` is the raw resumable record. `summary.json` reco
 
 ### TypeScript and Go comparisons
 
+`run_t3code_typescript.py` runs the real-repository TypeScript comparison on the pinned T3 Code revision in the table above. It derives all 487 eligible questions from JSDoc attached to named declarations, removes JSDoc from both tool corpora without moving source lines, redacts the exact declaration symbol from each query, and scores the exact path, symbol, and declaration line. The tools receive separate byte-identical corpora, build twice in reversed order, and alternate query order by stable case key. This is a retrieval compatibility benchmark, not an official T3 Code metric or an LLM answer-quality test.
+
+```sh
+git clone https://github.com/pingdotgg/t3code.git /tmp/t3code
+git -C /tmp/t3code checkout 2a33a18716854b8d07378008cf3101ad999209ae
+python3 benchmarks/run_t3code_typescript.py prepare \
+  --repository /tmp/t3code --output /tmp/t3code-typescript-manifest
+python3 benchmarks/run_t3code_typescript.py check \
+  --manifest /tmp/t3code-typescript-manifest/manifest.json
+python3 benchmarks/run_t3code_typescript.py run \
+  --manifest /tmp/t3code-typescript-manifest/manifest.json \
+  --repository /tmp/t3code --workspace /tmp/t3code-typescript-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --workers 2
+```
+
+Use a fresh workspace and omit `--limit` for all 487 cases. The manifest explicitly excludes `.repos/`; adding those checked-in third-party fixtures would turn the result into a mixed-corpus benchmark and inflate the apparent T3 Code source count.
+
+The completed 487-case run is recorded in [`results/t3code-typescript-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-17.json`](results/t3code-typescript-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-17.json), with its exact executable/settings fingerprint in the adjacent `.run-config.json`. Graphify's multi-file AST worker may require process permissions unavailable in a restricted sandbox; run the command in an environment that permits its local synchronization primitives and keep that limitation separate from benchmark scores.
+
 `run_crosscodeeval_typescript.py` adapts the 3,356-case CrossCodeEval TypeScript release. Because CrossCodeEval does not publish its original repositories or explicit gold retrieval spans, this is deliberately labeled a compatibility benchmark rather than the official model-completion metric. The adapter joins all six published retrieval files by `task_id`, materializes the deduplicated candidate chunks as the same miniature repository for both tools, and derives scorable gold APIs from the hidden line's referenced imports or cross-file definitions. The current official release yields 3,122 scorable cases; source, payload, manifest, and result hashes make that derivation reproducible.
 
 ```sh
@@ -184,7 +219,49 @@ python3 benchmarks/run_ghostty_swift.py run \
 
 Use a fresh workspace and remove `--limit 20` for every eligible case. Unlike the snippet-based Go benchmark, smoke and full runs use the same complete Swift corpus. The manifest fingerprints the exact Ghostty commit and all tracked Swift source bytes; the runner rejects source drift, changed executables or settings, missing graphs, and empty graphs.
 
-The 2026-07-16 run's full metrics, per-kind retrieval, declaration coverage, executable and artifact hashes, and limitations are recorded in [`results/swift-ghostty-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-16.json`](results/swift-ghostty-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-16.json).
+The post-extractor-upgrade run's full metrics, per-kind retrieval, declaration coverage, executable and artifact hashes, and limitations are recorded in [`results/swift-ghostty-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-16.json`](results/swift-ghostty-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-16.json). The original published-v0.2.5 baseline remains in [`results/swift-ghostty-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-16.json`](results/swift-ghostty-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-16.json).
+
+`run_ripgrep_rust.py` applies the same documentation-to-declaration design to a pinned ripgrep checkout. It uses every eligible documented Rust function, struct, enum, trait, constant, static, and type alias. Both tools receive all tracked `.rs` files with `///` rustdoc blanked without changing line numbers. Exact symbols are redacted and fenced rustdoc examples are omitted from queries; scoring requires the exact declaration path, symbol, and source line.
+
+```sh
+git clone --depth 1 --branch 15.0.0 https://github.com/BurntSushi/ripgrep.git /tmp/ripgrep
+python3 benchmarks/run_ripgrep_rust.py prepare \
+  --repository /tmp/ripgrep --output /tmp/ripgrep-rust-manifest
+python3 benchmarks/run_ripgrep_rust.py check \
+  --manifest /tmp/ripgrep-rust-manifest/manifest.json
+python3 benchmarks/run_ripgrep_rust.py run \
+  --manifest /tmp/ripgrep-rust-manifest/manifest.json \
+  --repository /tmp/ripgrep --workspace /tmp/ripgrep-rust-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --limit 20
+```
+
+Use a fresh workspace and remove `--limit 20` for all 1,174 cases. Smoke and full runs build the same complete Rust corpus. The adapter fingerprints the exact commit and every tracked Rust source byte, rejects changed executables or settings on resume, and rejects empty graphs. The 2026-07-16 full result is recorded in [`results/rust-ripgrep-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-16.json`](results/rust-ripgrep-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-16.json).
+
+`run_c_family.py` benchmarks C on pinned libgit2 sources and C++ on pinned nlohmann/json headers. It derives exact documentation-attached declarations, blanks Doxygen comments without changing line numbers, redacts the gold symbol, and reports both exact path/symbol/line retrieval and a secondary top-20 same-symbol-anywhere metric. The secondary metric matters for C because public documentation commonly sits on a header prototype while graph tools may retain only the implementation definition.
+
+```sh
+git clone --depth 1 --branch v1.9.3 https://github.com/libgit2/libgit2.git /tmp/libgit2
+python3 benchmarks/run_c_family.py prepare --language c \
+  --repository /tmp/libgit2 --output /tmp/libgit2-c-manifest
+python3 benchmarks/run_c_family.py check \
+  --manifest /tmp/libgit2-c-manifest/manifest.json
+python3 benchmarks/run_c_family.py run \
+  --manifest /tmp/libgit2-c-manifest/manifest.json \
+  --repository /tmp/libgit2 --workspace /tmp/libgit2-c-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --limit 20
+
+git clone --depth 1 --branch v3.12.0 https://github.com/nlohmann/json.git /tmp/nlohmann-json
+python3 benchmarks/run_c_family.py prepare --language cpp \
+  --repository /tmp/nlohmann-json --output /tmp/nlohmann-json-cpp-manifest
+python3 benchmarks/run_c_family.py check \
+  --manifest /tmp/nlohmann-json-cpp-manifest/manifest.json
+python3 benchmarks/run_c_family.py run \
+  --manifest /tmp/nlohmann-json-cpp-manifest/manifest.json \
+  --repository /tmp/nlohmann-json --workspace /tmp/nlohmann-json-cpp-ravel-vs-graphify \
+  --ravel /path/to/ravel --graphify graphify --limit 20
+```
+
+Use fresh workspaces and remove `--limit 20` for all 1,167 C cases and 242 C++ cases. Each run creates separate byte-identical corpora for the tools, verifies that neither corpus changed, rejects source paths outside the assigned corpus, reverses build order across two trials, and alternates query order by stable case key. Full results are recorded in [`results/c-cpp-libgit2-nlohmann-ravel-working-tree-vs-graphify-0.9.12-2026-07-16.json`](results/c-cpp-libgit2-nlohmann-ravel-working-tree-vs-graphify-0.9.12-2026-07-16.json).
 
 `run_real_fim_scale.py` adds a large stability and tail-latency pass over all 5,769 TypeScript and Go cases in the official Real-FIM-Eval Add/Edit archives (3,182 TypeScript and 2,587 Go). Real-FIM-Eval does not provide gold retrieval spans, so this adapter must not be used to claim answer or retrieval correctness. It materializes the same pre-change file for both tools, fingerprints but never exposes the hidden canonical solution, and reports errors, non-empty output, target-file-return rate, payload, truncation, and build/query p50/p95/p99/max.
 
@@ -224,9 +301,9 @@ python3 benchmarks/compare_graphify.py \
 
 The adapter reports normalized expected symbol-name recall because Ravel and Graphify use incompatible node and edge ID schemes. It does not compare evidence recall, model answers, or judge scores and must not be presented as a universal quality ranking. Keep the raw graphs, tool versions, dataset, and output with any published result.
 
-## Recorded T3 Code comparison
+## Historical ten-question T3 Code payload snapshot
 
-The current 2026-07-12 snapshot used an Apple M1 Pro (`darwin/arm64`), Ravel v0.2.5, Graphify 0.9.12, and `t3tools/t3code` commit `c1ec1915fc16f3dc1ec5d47d9a97f6210a574526`.
+This older 2026-07-12 snapshot used an Apple M1 Pro (`darwin/arm64`), Ravel v0.2.5, Graphify 0.9.12, and the repository then recorded as `t3tools/t3code` at commit `c1ec1915fc16f3dc1ec5d47d9a97f6210a574526`. It is retained for payload/build history; the 487-case pinned `pingdotgg/t3code` suite above is the answer-quality retrieval comparison.
 
 | Measurement | Ravel | Graphify |
 | --- | ---: | ---: |

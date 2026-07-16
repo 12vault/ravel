@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "date": "2026-07-16",
+  "benchmark": "Ghostty Swift documented-declaration retrieval compatibility after multi-language declaration extraction",
+  "officialMetric": false,
+  "claimsAnswerCorrectness": false,
+  "environment": {
+    "os": "Darwin",
+    "arch": "arm64",
+    "hardware": "Apple M1 Pro",
+    "tokenBudget": 2000,
+    "workers": 2,
+    "ravelProfile": "broad",
+    "ravelProfileArgs": [
+      "--seed-limit",
+      "20",
+      "--max-depth",
+      "3",
+      "--max-nodes",
+      "10000",
+      "--branch-fanout",
+      "10000",
+      "--candidate-shortlist"
+    ]
+  },
+  "source": {
+    "repository": "https://github.com/ghostty-org/ghostty",
+    "revision": "73534c4680a809398b396c94ac7f12fcccb7963d",
+    "swiftRoot": "macos",
+    "swiftFiles": 188,
+    "swiftLines": 36025,
+    "swiftSourceSha256": "63e94582fa8657469384db07a6f2a83d592725ba287c9458e7c85443e5c0477d"
+  },
+  "tools": {
+    "ravel": {
+      "versionReportedByBinary": "v0.2.5",
+      "workingTreeBuild": true,
+      "description": "working-tree build with structural named-declaration extraction and bounded syntax-backed timeout recovery",
+      "executableSha256": "7bb7202fb220dd17d0d395ff19a7301a245d566a99083d833902cb64e7ccf581"
+    },
+    "graphify": {
+      "version": "0.9.12",
+      "executableSha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
+    }
+  },
+  "methodology": {
+    "adapterVersion": "ghostty-swift-doc-declaration-v1",
+    "queryMode": "swift-documentation-symbol-redacted-v1",
+    "cases": 455,
+    "retrievalGold": "exact documented Swift declaration path, symbol, and line",
+    "corpus": "all tracked .swift files under macos, shared by both tools",
+    "leakageControl": "all /// documentation blanked from the corpus with line numbers preserved; exact gold symbols redacted from queries",
+    "caseKinds": {
+      "actor": 1,
+      "class": 52,
+      "enum": 26,
+      "func": 299,
+      "protocol": 9,
+      "struct": 68
+    }
+  },
+  "results": {
+    "successfulCases": 455,
+    "failedCases": 0,
+    "ravel": {
+      "buildMs": 62022.87270897068,
+      "graphNodes": 2003,
+      "graphEdges": 2224,
+      "declarationCoverage": 0.8307692307692308,
+      "coveredDeclarations": 378,
+      "recall": 0.36043956043956044,
+      "hits": 164,
+      "mrr": 0.18914100059256994,
+      "meanQueryMs": 134.271,
+      "queryP95Ms": 152.698,
+      "queryP99Ms": 174.797,
+      "queryMaxMs": 225.693,
+      "meanEstimatedTokens": 1903.552,
+      "meanReturned": 23.963,
+      "truncationRate": 0.0,
+      "diagnostics": 89,
+      "stoppedParses": 38,
+      "partialDeclarationNodes": 912
+    },
+    "graphify": {
+      "buildMs": 3282.724,
+      "graphNodes": 3542,
+      "graphEdges": 7020,
+      "declarationCoverage": 0.8197802197802198,
+      "coveredDeclarations": 373,
+      "recall": 0.08791208791208792,
+      "hits": 40,
+      "mrr": 0.0032828164,
+      "meanQueryMs": 353.697,
+      "queryP99Ms": 408.993,
+      "meanEstimatedTokens": 2066.36,
+      "truncationRate": 0.898901
+    },
+    "pairwise": {
+      "bothHit": 14,
+      "ravelOnlyHit": 150,
+      "graphifyOnlyHit": 26,
+      "bothMiss": 265,
+      "ravelQueryWins": 455
+    },
+    "retrievalByKind": {
+      "actor": {
+        "cases": 1,
+        "ravelHits": 0,
+        "graphifyHits": 0,
+        "ravelMrr": 0.0,
+        "graphifyMrr": 0.0
+      },
+      "class": {
+        "cases": 52,
+        "ravelHits": 7,
+        "graphifyHits": 10,
+        "ravelMrr": 0.0529577,
+        "graphifyMrr": 0.00767008
+      },
+      "enum": {
+        "cases": 26,
+        "ravelHits": 13,
+        "graphifyHits": 0,
+        "ravelMrr": 0.3378205,
+        "graphifyMrr": 0.0
+      },
+      "func": {
+        "cases": 299,
+        "ravelHits": 116,
+        "graphifyHits": 27,
+        "ravelMrr": 0.20408194,
+        "graphifyMrr": 0.00328209
+      },
+      "protocol": {
+        "cases": 9,
+        "ravelHits": 6,
+        "graphifyHits": 1,
+        "ravelMrr": 0.30216049,
+        "graphifyMrr": 0.00176367
+      },
+      "struct": {
+        "cases": 68,
+        "ravelHits": 22,
+        "graphifyHits": 2,
+        "ravelMrr": 0.15855991,
+        "graphifyMrr": 0.00143557
+      }
+    },
+    "declarationCoverageByKind": {
+      "ravel": {
+        "actor": 1,
+        "class": 42,
+        "enum": 26,
+        "func": 241,
+        "protocol": 9,
+        "struct": 59
+      },
+      "graphify": {
+        "actor": 1,
+        "class": 38,
+        "enum": 25,
+        "func": 237,
+        "protocol": 9,
+        "struct": 63
+      }
+    }
+  },
+  "derivedComparisons": {
+    "recallPointAdvantageRavel": 0.2725274725274725,
+    "mrrRatioRavelOverGraphify": 57.6155,
+    "querySpeedRatioRavelOverGraphify": 2.6342,
+    "payloadReductionRavel": 0.0787901,
+    "buildSpeedRatioGraphifyOverRavel": 18.8937,
+    "declarationCoveragePointAdvantageRavel": 0.01098901098901095,
+    "recallConditionalOnExtractedDeclaration": {
+      "ravel": 0.43386243386243384,
+      "graphify": 0.10723860589812334
+    },
+    "ravelChangeFromReleaseBaseline": {
+      "declarationCoveragePointChange": 0.6197802197802198,
+      "coveredDeclarationChange": 282,
+      "functionCoverageChange": 241,
+      "recallPointChange": 0.26593406593406595,
+      "mrrChange": 0.1175558224856527,
+      "graphNodeChange": 1512,
+      "buildTimeReduction": 0.299583,
+      "queryTimeRatioNewOverBaseline": 3.42729
+    }
+  },
+  "artifactSha256": {
+    "manifest": "e93cb77b984647bc8f2fd678fce6e9b919e88bd951e847f8649d0705d37dddef",
+    "casesJsonl": "7a92bf259b20fe96af7a444a4942e972264d07a9fd53a0d16bb0605975a87b45",
+    "resultsJsonl": "2cbabc637046dbaf9ce6085400bb9eec469466e2da2da89ea16e2750ba91c065",
+    "runConfig": "f9fca872636f948a8ddb82a6669f8b08e8a6856dc10d33916ea0fd89260d4299",
+    "summary": "ea4ce5a6286cb1d2f16e6037e6854282ad0faf0995acfc65abc1363ceeed3653",
+    "ravelGraph": "bcf1e6f53caccef2152460d07f4ad039848829767552e5e726eccfd3ec1d5097",
+    "graphifyGraph": "5d43b8b017da08b0c752092cc2637d204e5770f2a1a804489a6f4f28eeb041e5"
+  },
+  "limitations": [
+    "Documentation/declaration pairs are proxy retrieval gold; no model answers were generated or judged.",
+    "The tools retain their native graph schemas and extraction behavior, so graph coverage is intentionally not equalized.",
+    "The Ravel executable is a working-tree build that still reports v0.2.5; it is not the published v0.2.5 release binary.",
+    "Ravel recovered 912 declaration nodes from syntax-backed partial parses after 38 files hit the parse deadline; those nodes are marked partial=true and parse_complete=false.",
+    "Calls, imports, and heritage from incomplete parses are discarded rather than presented as complete facts.",
+    "Graphify still built the corpus 18.9 times faster.",
+    "Graphify marked 89.89% of query outputs truncated at the 2,000-token budget."
+  ]
+}

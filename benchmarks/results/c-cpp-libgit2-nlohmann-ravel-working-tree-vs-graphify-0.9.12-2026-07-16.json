@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "date": "2026-07-16",
+  "benchmark": "C and C++ documented-declaration retrieval compatibility",
+  "officialMetric": false,
+  "claimsAnswerCorrectness": false,
+  "environment": {
+    "os": "Darwin",
+    "arch": "arm64",
+    "hardware": "Apple M1 Pro",
+    "tokenBudget": 2000,
+    "workers": 2,
+    "ravelProfile": "broad"
+  },
+  "tools": {
+    "ravel": {
+      "versionReportedByBinary": "v0.2.5",
+      "workingTreeBuild": true,
+      "executableSha256": "7bb7202fb220dd17d0d395ff19a7301a245d566a99083d833902cb64e7ccf581"
+    },
+    "graphify": {
+      "version": "0.9.12",
+      "executableSha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
+    }
+  },
+  "methodology": {
+    "adapterVersion": "c-family-doc-declaration-v1",
+    "commonAdapterVersion": "ravel-graphify-polyglot-v1",
+    "cases": 1409,
+    "primaryGold": "exact documentation-attached declaration path, symbol, and line",
+    "secondaryMetric": "same normalized symbol within the first 20 stored query items, regardless of path",
+    "leakageControl": "documentation blanked with line numbers preserved; exact symbols redacted; fenced examples omitted",
+    "isolation": {
+      "separateToolCorpora": true,
+      "corporaByteIdentical": true,
+      "corporaUnchangedAfterBuild": true,
+      "graphOutputsOutsideCorpora": true,
+      "graphSourcePathsValidated": true,
+      "buildOrder": "two rounds, Ravel-first then Graphify-first",
+      "buildStatistic": "mean of the two reversed-order trials",
+      "queryOrder": "deterministically alternated by case selection key"
+    }
+  },
+  "sources": {
+    "c": {
+      "repository": "https://github.com/libgit2/libgit2",
+      "release": "v1.9.3",
+      "revision": "1affb8b19346c4f90e163a9a0364959ff1410f64",
+      "files": 473,
+      "lines": 166234,
+      "cases": 1167,
+      "sourceSha256": "5d839f864b0ae12f1b6823b0700ce1c1da368be4241d4290b0f21d404ccfc51f"
+    },
+    "cpp": {
+      "repository": "https://github.com/nlohmann/json",
+      "release": "v3.12.0",
+      "revision": "55f93686c01528224f448c19128836e7df245f72",
+      "files": 46,
+      "lines": 25368,
+      "cases": 242,
+      "sourceSha256": "73d3f3fb989e6483d8e4d34b7268f09311856b8d1bd0b8ad835edad0f0f48970"
+    }
+  },
+  "results": {
+    "c": {
+      "successfulCases": 1167,
+      "failedCases": 0,
+      "queryOrder": {"ravelFirst": 605, "graphifyFirst": 562},
+      "ravel": {
+        "buildMs": 4928.865729016252,
+        "buildTrialsMs": [4974.598124972545, 4883.133333059959],
+        "graphNodes": 20435,
+        "graphEdges": 34013,
+        "exactDeclarationCoverage": {"covered": 64, "cases": 1167, "coverage": 0.054841473864610114},
+        "symbolAnywhereGraphCoverage": {"covered": 1109, "cases": 1167, "coverage": 0.950299914310197},
+        "exactRetrieval": {"hits": 13, "cases": 1167, "recall": 0.011139674378748929, "mrr": 0.0035513662763020093},
+        "top20SymbolOnly": {"hits": 316, "cases": 1167, "recall": 0.2707797772065124, "mrr": 0.08432633350229878},
+        "meanQueryMs": 1167.4926509707009,
+        "queryP99Ms": 2090.0012500351295,
+        "meanEstimatedTokens": 1907.5698371893745,
+        "meanReturned": 31.185946872322194,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "buildMs": 7632.497437472921,
+        "buildTrialsMs": [7711.204917053692, 7553.78995789215],
+        "graphNodes": 6230,
+        "graphEdges": 24177,
+        "exactDeclarationCoverage": {"covered": 35, "cases": 1167, "coverage": 0.029991431019708654},
+        "symbolAnywhereGraphCoverage": {"covered": 1149, "cases": 1167, "coverage": 0.9845758354755784},
+        "exactRetrieval": {"hits": 4, "cases": 1167, "recall": 0.003427592116538132, "mrr": 0.0001264287274495538},
+        "top20SymbolOnly": {"hits": 268, "cases": 1167, "recall": 0.22964867180805484, "mrr": 0.12757727587090795},
+        "meanQueryMs": 535.62949008367,
+        "queryP99Ms": 1170.7717499230057,
+        "meanEstimatedTokens": 2041.2502142245073,
+        "meanReturned": 63.910882604970006,
+        "truncationRate": 0.8757497857754927
+      },
+      "pairwiseExact": {"bothHit": 0, "ravelOnlyHit": 13, "graphifyOnlyHit": 4, "bothMiss": 1150}
+    },
+    "cpp": {
+      "successfulCases": 242,
+      "failedCases": 0,
+      "queryOrder": {"ravelFirst": 121, "graphifyFirst": 121},
+      "caseKinds": {"class": 12, "enum": 3, "function": 225, "struct": 2},
+      "ravel": {
+        "buildMs": 860.861812485382,
+        "buildTrialsMs": [848.9690829301253, 872.7545420406386],
+        "graphNodes": 1989,
+        "graphEdges": 2466,
+        "exactDeclarationCoverage": {"covered": 106, "cases": 242, "coverage": 0.4380165289256198},
+        "symbolAnywhereGraphCoverage": {"covered": 182, "cases": 242, "coverage": 0.7520661157024794},
+        "exactRetrieval": {"hits": 24, "cases": 242, "recall": 0.09917355371900827, "mrr": 0.03042576370010793},
+        "top20SymbolOnly": {"hits": 66, "cases": 242, "recall": 0.2727272727272727, "mrr": 0.0866935168332195},
+        "meanQueryMs": 112.92137651923613,
+        "queryP99Ms": 124.27662499248981,
+        "meanEstimatedTokens": 1903.2479338842975,
+        "meanReturned": 29.66115702479339,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "buildMs": 1145.5840834532864,
+        "buildTrialsMs": [1171.495166956447, 1119.6729999501258],
+        "graphNodes": 446,
+        "graphEdges": 911,
+        "exactDeclarationCoverage": {"covered": 63, "cases": 242, "coverage": 0.2603305785123967},
+        "symbolAnywhereGraphCoverage": {"covered": 220, "cases": 242, "coverage": 0.9090909090909091},
+        "exactRetrieval": {"hits": 20, "cases": 242, "recall": 0.08264462809917356, "mrr": 0.005349234047100016},
+        "top20SymbolOnly": {"hits": 114, "cases": 242, "recall": 0.47107438016528924, "mrr": 0.07770765455180668},
+        "meanQueryMs": 161.81763843200284,
+        "queryP99Ms": 191.05716701596975,
+        "meanEstimatedTokens": 1978.685950413223,
+        "meanReturned": 48.103305785123965,
+        "truncationRate": 0.7975206611570248
+      },
+      "pairwiseExact": {"bothHit": 6, "ravelOnlyHit": 18, "graphifyOnlyHit": 14, "bothMiss": 204},
+      "retrievalByKind": {
+        "class": {"cases": 12, "ravelHits": 0, "graphifyHits": 0},
+        "enum": {"cases": 3, "ravelHits": 0, "graphifyHits": 0},
+        "function": {"cases": 225, "ravelHits": 24, "graphifyHits": 20},
+        "struct": {"cases": 2, "ravelHits": 0, "graphifyHits": 0}
+      }
+    },
+    "combined": {
+      "cases": 1409,
+      "exactRetrieval": {
+        "ravel": {"hits": 37, "recall": 0.026259758694109297, "mrr": 0.008167125095720769},
+        "graphify": {"hits": 24, "recall": 0.017033356990773598, "mrr": 0.001023461294770641}
+      },
+      "exactDeclarationCoverage": {
+        "ravel": {"covered": 170, "coverage": 0.12065294535131299},
+        "graphify": {"covered": 98, "coverage": 0.06955287437899148}
+      },
+      "symbolAnywhereGraphCoverage": {
+        "ravel": {"covered": 1291, "coverage": 0.9162526614620298},
+        "graphify": {"covered": 1369, "coverage": 0.971611071682044}
+      },
+      "top20SymbolOnly": {
+        "ravel": {"hits": 382, "recall": 0.2711142654364798, "mrr": 0.0847329},
+        "graphify": {"hits": 382, "recall": 0.2711142654364798, "mrr": 0.119012}
+      },
+      "buildMsSum": {"ravel": 5789.727541501634, "graphify": 8778.081520926207},
+      "weightedMeanQueryMs": {"ravel": 986.3668536554031, "graphify": 471.4261770249734},
+      "weightedMeanEstimatedTokens": {"ravel": 1906.8275372604685, "graphify": 2030.5046132008517},
+      "weightedTruncationRate": {"ravel": 0.0, "graphify": 0.8623136976579134}
+    }
+  },
+  "artifactSha256": {
+    "cManifest": "d8b6912ed12feb44261751379d9ecd3500c7b2ba4185e2a6dcf71ed1a3ac50d8",
+    "cCasesJsonl": "a6fee1630c9c03e17fe70c63b04e84d726b04fb02c7e68c0e9dfa87ee69b0337",
+    "cResultsJsonl": "5f6cf282c228038bf28830964d91c41d139535faf7565fd0900e5eaf3343e092",
+    "cSummary": "3ff7cbdf7d337922e51edeec6ee0f222fb6a67e12abf8390b806faa88d4df0ed",
+    "cRunConfig": "d60e47c0f25f8c7ec8d9c32933e3fc2c49fb9e74759d8571bc4675fea5cbc1a2",
+    "cRavelGraph": "99d000051db5f8c34d7c94f8519ef656863bc507476ba40ee4d219be9c56482a",
+    "cGraphifyGraph": "c9955ea57e4bfa85e571fc73901ad5770160a7d358693ae3fb434eefc6f4850f",
+    "cppManifest": "0c30c23c2e24094991f614e69e307a9c015ee9fd603312be9a120df2e12fa76d",
+    "cppCasesJsonl": "70dfd939bf03046150a8ea8b76f4b2f949fde35da784e705c4b4a62fc3044d6b",
+    "cppResultsJsonl": "6ddf4094adb3d8b1b1eeb689f2402e8b57ebae1fbdc7776ce834dbbdd5e008ce",
+    "cppSummary": "d6d0b26c77dd1c1bc22dfe22915a6ad51b9c0f0b1e95a337bb2b3a83cc1a9093",
+    "cppRunConfig": "4a65263c5985d78f43e1ec2736ed71b29c7b97ca88b3fb5a97ed2b2c8fa7cd48",
+    "cppRavelGraph": "a3ab0cc2ce17abda116bcb910e1a9b785a7082511bd5ee3fd50e67db940b48ec",
+    "cppGraphifyGraph": "1378baa0257c2a84827e98903dffed111a8f7bceb95b76d2e96ba20283f3d366"
+  },
+  "limitations": [
+    "Documentation/declaration pairs are proxy retrieval gold; no model answers were generated or judged.",
+    "The primary C metric requires the documented header prototype itself. Retrieving a same-named implementation in a .c file is an exact miss, so symbol-anywhere coverage and top-20 retrieval are reported separately.",
+    "C gold derivation is limited to documentation-attached git_* function prototypes; C++ gold derivation keeps documentation-attached named types and callable declarations that the independent adapter can identify reliably.",
+    "The two reversed build trials balance order but do not purge operating-system file caches.",
+    "The tools retain their native graph schemas and extraction behavior.",
+    "The Ravel executable is a working-tree build that still reports v0.2.5, not the published release binary."
+  ]
+}
