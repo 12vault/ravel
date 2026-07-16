@@ -21,19 +21,22 @@ const (
 // grammars; unknown shapes are skipped instead of guessed.
 var supplementalDeclarationKinds = map[string]map[string]graph.NodeKind{
 	"javascript": {
-		"class_declaration": graph.NodeClass, "function_declaration": graph.NodeFunction,
+		"class_declaration": graph.NodeClass, "class": graph.NodeClass,
+		"function_declaration":           graph.NodeFunction,
 		"generator_function_declaration": graph.NodeFunction, "method_definition": graph.NodeMethod,
 	},
 	"typescript": {
-		"class_declaration": graph.NodeClass, "abstract_class_declaration": graph.NodeClass,
-		"interface_declaration": graph.NodeInterface, "enum_declaration": graph.NodeType,
+		"class_declaration": graph.NodeClass, "class": graph.NodeClass,
+		"abstract_class_declaration": graph.NodeClass,
+		"interface_declaration":      graph.NodeInterface, "enum_declaration": graph.NodeType,
 		"type_alias_declaration": graph.NodeType, "function_declaration": graph.NodeFunction,
 		"generator_function_declaration": graph.NodeFunction, "method_definition": graph.NodeMethod,
 		"method_signature": graph.NodeMethod,
 	},
 	"tsx": {
-		"class_declaration": graph.NodeClass, "abstract_class_declaration": graph.NodeClass,
-		"interface_declaration": graph.NodeInterface, "enum_declaration": graph.NodeType,
+		"class_declaration": graph.NodeClass, "class": graph.NodeClass,
+		"abstract_class_declaration": graph.NodeClass,
+		"interface_declaration":      graph.NodeInterface, "enum_declaration": graph.NodeType,
 		"type_alias_declaration": graph.NodeType, "function_declaration": graph.NodeFunction,
 		"generator_function_declaration": graph.NodeFunction, "method_definition": graph.NodeMethod,
 		"method_signature": graph.NodeMethod,
@@ -153,6 +156,7 @@ func extractSupplementalDefinitions(tree *gotreesitter.Tree, path, language stri
 				name: cleanName(name), kind: kind, path: path, language: language,
 				startByte: node.StartByte(), endByte: node.EndByte(),
 				startLine: line, endLine: endLine, column: column,
+				partial: node.Type(grammar) == "ERROR",
 			})
 		}
 		for index := 0; index < node.NamedChildCount(); index++ {
@@ -232,6 +236,12 @@ func extractChunkedDeclarations(ctx context.Context, entry grammars.LangEntry, p
 
 func supplementalDeclaration(node *gotreesitter.Node, grammar *gotreesitter.Language, language string, source []byte) (graph.NodeKind, *gotreesitter.Node, string) {
 	nodeType := node.Type(grammar)
+	if (language == "javascript" || language == "typescript" || language == "tsx") && nodeType == "variable_declarator" {
+		return javascriptVariableDeclaration(node, grammar, source)
+	}
+	if (language == "typescript" || language == "tsx") && nodeType == "ERROR" {
+		return typescriptRecoveredDeclaration(node, grammar, source)
+	}
 	if kind := supplementalDeclarationKinds[language][nodeType]; kind != "" {
 		nameNode := declarationNameNode(node, grammar, language, nodeType)
 		if nameNode == nil {
@@ -265,6 +275,85 @@ func supplementalDeclaration(node *gotreesitter.Node, grammar *gotreesitter.Lang
 		return hclDeclaration(node, grammar, source)
 	}
 	return "", nil, ""
+}
+
+// Some valid TypeScript forms such as
+// `class Service extends Context.Service<Service, Shape>()("service") {}`
+// are recovered as an ERROR node by the embedded grammar. Keep a declaration
+// only when the recovered node still contains a direct identifier preceded by
+// a declaration keyword. Marking ERROR-backed definitions partial keeps their
+// provenance honest.
+func typescriptRecoveredDeclaration(node *gotreesitter.Node, grammar *gotreesitter.Language, source []byte) (graph.NodeKind, *gotreesitter.Node, string) {
+	for index := 0; index < node.NamedChildCount(); index++ {
+		child := node.NamedChild(index)
+		if child == nil || (child.Type(grammar) != "identifier" && child.Type(grammar) != "type_identifier") {
+			continue
+		}
+		start, end := int(node.StartByte()), int(child.StartByte())
+		if start < 0 || end < start || end > len(source) {
+			return "", nil, ""
+		}
+		prefix := strings.Fields(string(source[start:end]))
+		if len(prefix) == 0 {
+			return "", nil, ""
+		}
+		kind := graph.NodeKind("")
+		switch prefix[len(prefix)-1] {
+		case "class":
+			kind = graph.NodeClass
+		case "function":
+			kind = graph.NodeFunction
+		case "const", "let", "var":
+			kind = graph.NodeVariable
+			if hasDescendantType(node, grammar, "arrow_function") || hasDescendantType(node, grammar, "function_expression") {
+				kind = graph.NodeFunction
+			}
+		default:
+			return "", nil, ""
+		}
+		return kind, child, child.Text(source)
+	}
+	return "", nil, ""
+}
+
+// javascriptVariableDeclaration keeps named module-level bindings while
+// avoiding the much larger set of function-local temporaries. Arrow and
+// function expressions are callable declarations; other bindings are
+// variables. Every emitted fact is backed by a variable_declarator node.
+func javascriptVariableDeclaration(node *gotreesitter.Node, grammar *gotreesitter.Language, source []byte) (graph.NodeKind, *gotreesitter.Node, string) {
+	nameNode := node.ChildByFieldName("name", grammar)
+	if nameNode == nil || nameNode.Type(grammar) != "identifier" || !javascriptModuleBinding(node, grammar) {
+		return "", nil, ""
+	}
+	kind := graph.NodeVariable
+	if value := node.ChildByFieldName("value", grammar); value != nil {
+		switch value.Type(grammar) {
+		case "arrow_function", "function_expression", "generator_function":
+			kind = graph.NodeFunction
+		}
+	}
+	return kind, nameNode, nameNode.Text(source)
+}
+
+func javascriptModuleBinding(node *gotreesitter.Node, grammar *gotreesitter.Language) bool {
+	parent := node.Parent()
+	if parent == nil {
+		return false
+	}
+	switch parent.Type(grammar) {
+	case "lexical_declaration", "variable_declaration":
+	default:
+		return false
+	}
+	return javascriptModuleNode(parent, grammar)
+}
+
+func javascriptModuleNode(node *gotreesitter.Node, grammar *gotreesitter.Language) bool {
+	parent := node.Parent()
+	if parent != nil && parent.Type(grammar) == "export_statement" {
+		parent = parent.Parent()
+	}
+	return parent != nil && parent.Type(grammar) == "program"
 }
 
 func declarationNameNode(node *gotreesitter.Node, grammar *gotreesitter.Language, language, nodeType string) *gotreesitter.Node {

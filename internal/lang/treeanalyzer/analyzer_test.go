@@ -433,6 +433,41 @@ func TestImportedScopeResolvesDuplicateCrossFileSymbols(t *testing.T) {
 	}
 }
 
+func TestTypeScriptExtractsModuleBindingsAndComplexHeritageClasses(t *testing.T) {
+	source := `
+export const makeService = () => ({ ready: true });
+export const serviceName: string = "api";
+let retryCount = 0;
+export class Service extends Context.Service<Service, Shape>()("service") {}
+function run() {
+  const localOnly = 1;
+  return localOnly;
+}
+`
+	result := analyzeSources(t, "typescript", map[string]string{
+		"src/services.ts": source,
+	})
+	wants := map[string]graph.NodeKind{
+		"makeService": graph.NodeFunction,
+		"serviceName": graph.NodeVariable,
+		"retryCount":  graph.NodeVariable,
+		"Service":     graph.NodeClass,
+	}
+	for name, kind := range wants {
+		node := nodeNamedAtPath(result.Nodes, name, "src/services.ts")
+		if node == nil || node.Kind != kind {
+			t.Fatalf("%s declaration = %#v, want kind %s; nodes=%#v diagnostics=%#v", name, node, kind, result.Nodes, result.Diagnostics)
+		}
+	}
+	service := nodeNamedAtPath(result.Nodes, "Service", "src/services.ts")
+	if service.Meta["partial"] != "true" || service.Meta["parse_complete"] != "false" {
+		t.Fatalf("recovered class lacks partial provenance: %#v", service)
+	}
+	if nodeNamedAtPath(result.Nodes, "localOnly", "src/services.ts") != nil {
+		t.Fatalf("function-local binding leaked into declaration graph: %#v", result.Nodes)
+	}
+}
+
 func TestSupportsRespectsSpecializedAnalyzerBoundaries(t *testing.T) {
 	for _, language := range []string{"go", "markdown", "sql"} {
 		if Supports(language, []scan.File{{Path: "sample." + language}}) {
