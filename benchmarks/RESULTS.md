@@ -2,24 +2,61 @@
 
 This file is the human-readable record of Ravel vs Graphify runs. Raw, machine-readable results live in [`results/`](results/).
 
-## 2026-07-17: TypeScript on T3 Code
+## 2026-07-17: TypeScript on T3 Code, persistent Ravel rerun
 
-Environment: Apple M1 Pro, macOS arm64, Ravel v0.2.5, Graphify 0.9.12, 2,000-token budget, Ravel broad retrieval profile. The shared corpus is the pinned upstream [`pingdotgg/t3code`](https://github.com/pingdotgg/t3code) revision `2a33a18716854b8d07378008cf3101ad999209ae`: 1,952 tracked first-party `.ts`, `.tsx`, `.mts`, and `.cts` files (513,548 lines) under `apps/`, `infra/`, `oxlint-plugin-t3code/`, `packages/`, and `scripts/`. T3 Code's checked-in `.repos/` fixture/vendor tree was excluded. JSDoc was blanked from both corpora without moving source lines, declaration symbols were redacted from 487 documentation-derived queries, and both tools received byte-identical source bytes.
+Environment: Apple M1 Pro, macOS arm64, 2,000-token budget, Ravel broad retrieval profile, two query workers. The shared corpus is pinned upstream [`pingdotgg/t3code`](https://github.com/pingdotgg/t3code) revision `2a33a18716854b8d07378008cf3101ad999209ae`: 1,952 first-party TypeScript files, 513,548 lines, and 487 documentation-derived exact-declaration questions. Both tools received byte-identical documentation-stripped source.
 
-| Measurement | Ravel | Graphify | Winner |
-| --- | ---: | ---: | --- |
-| Exact declaration retrieval | 50/487 (10.27%) | 20/487 (4.11%) | Ravel |
-| MRR | 0.0406 | 0.0010 | Ravel |
-| Declaration graph coverage | 334/487 (68.58%) | 451/487 (92.61%) | Graphify |
-| Top-20 same-symbol retrieval | 84/487 (17.25%) | 100/487 (20.53%) | Graphify |
-| Mean balanced build | 53.34 s | 32.70 s | Graphify |
-| Mean query | 11,652 ms | 1,975 ms | Graphify |
-| Mean payload | 1,892 tokens | 2,158 tokens | Ravel |
-| Truncated output | 0.00% | 90.76% | Ravel |
+Ravel used the new fixed-snapshot `context-batch` JSONL command. Each of the two workers loaded the graph and built its reusable index once, then served warm queries. Normal one-shot `ravel context` behavior is unchanged. The benchmark records Ravel startup separately; Graphify still launches one process per query, so the latency columns below are useful operational measurements but not an apples-to-apples tool-speed contest.
 
-Ravel wins the exact documentation-to-declaration retrieval metric (50 hits versus 20), MRR, payload size, and truncation. Graphify extracts more of the documented declarations (451 versus 334), finds more same-symbol results within its first 20 items, builds 1.63× faster, and queries 5.90× faster. The pairwise result was Ravel-only on 47 cases, Graphify-only on 17, both hit on 3, and both missed on 420. The extreme Ravel query tail (p95 22.67 s, p99 88.32 s, max 260.12 s) is a material performance issue on this large corpus even though its output is smaller and never truncated.
+| Measurement | Ravel persistent | Graphify process |
+| --- | ---: | ---: |
+| Exact declaration retrieval | 50/487 (10.27%) | 20/487 (4.11%) |
+| MRR | 0.0406 | 0.0010 |
+| Declaration graph coverage | 334/487 (68.58%) | 451/487 (92.61%) |
+| Top-20 same-symbol retrieval | 84/487 (17.25%) | 100/487 (20.53%) |
+| Mean balanced build | 15.67 s | 32.87 s |
+| Mean query | 1.730 s warm | 1.565 s process |
+| Query p50 | 1.613 s | 1.556 s |
+| Query p95 | 2.765 s | 1.839 s |
+| Query p99 | 3.762 s | 2.014 s |
+| Query maximum | 6.122 s | 2.601 s |
+| Mean payload | 1,892 tokens | 2,158 tokens |
+| Truncated output | 0.00% | 90.76% |
 
-This is a retrieval-compatibility benchmark, not an official T3 Code metric and not an LLM answer-quality test; no model generated or judged answers. Full metrics, source and executable hashes, build-order trials, and run settings are in [`results/t3code-typescript-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-17.json`](results/t3code-typescript-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-17.json) and [`results/t3code-typescript-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-17.run-config.json`](results/t3code-typescript-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-17.run-config.json).
+Ravel session startup was 6.05 s and 6.00 s. Per session, graph loading took about 1.41 s and index construction took 4.56–4.61 s. Compared with the first one-shot baseline below, warm Ravel latency fell 79.9% at p50, 87.8% at p95, 95.7% at p99, and 97.6% at maximum. The old 80–303 second paired stalls disappeared; the corrected maximum was 6.12 seconds across all 487 cases.
+
+The reusable path initially exposed an existing tie-order bug: compound-name IDF weights were summed by iterating a Go map, so duplicate call-site nodes could switch source lines between identical queries. The fix stores a sorted name-term order. A repeated-query regression test and focused checks of all five unstable real cases now match one-shot `ravel context` exactly. Aggregate Ravel quality and payload match the original baseline: 50 exact hits, MRR 0.0406, and 1,892 mean tokens.
+
+Pairwise quality was Ravel-only on 47 cases, Graphify-only on 17, both hit on 3, and both missed on 420. Graphify still has better declaration coverage and top-20 same-symbol recall. Ravel has more exact documentation-site hits, much higher MRR, smaller payloads, and no output truncation.
+
+This is a retrieval-compatibility benchmark, not an official T3 Code metric or an LLM answer-quality test. Full summary, raw results, execution/startup metadata, build trials, run config, and provenance are adjacent to [`the persistent-run artifact`](results/t3code-typescript-ravel-context-batch-working-tree-vs-graphify-0.9.12-2026-07-17.json).
+
+## 2026-07-17: TypeScript on T3 Code, original one-shot diagnostics
+
+Environment: Apple M1 Pro, macOS arm64, Graphify 0.9.12, 2,000-token budget, Ravel broad retrieval profile, two query workers. Ravel was the same dirty working-tree binary in both runs: revision `200fed605b3100a93f8dfa0d949ddfe3923db28e`, executable SHA-256 `7bb7202f…`, and module version `v0.2.6-0.20260716114846-200fed605b31+dirty`; its CLI still printed `v0.2.5`, so these artifacts are deliberately not labeled as the published v0.2.5 release.
+
+The shared corpus is pinned upstream [`pingdotgg/t3code`](https://github.com/pingdotgg/t3code) revision `2a33a18716854b8d07378008cf3101ad999209ae`: 1,952 tracked first-party `.ts`, `.tsx`, `.mts`, and `.cts` files (513,548 lines) under `apps/`, `infra/`, `oxlint-plugin-t3code/`, `packages/`, and `scripts/`. T3 Code's checked-in `.repos/` fixture/vendor tree was excluded. JSDoc was blanked without moving source lines, exact declaration symbols were redacted from 487 documentation-derived queries, and both tools received byte-identical source bytes.
+
+| Measurement | Ravel run 1 | Ravel run 2 | Graphify run 1 | Graphify run 2 |
+| --- | ---: | ---: | ---: | ---: |
+| Exact declaration retrieval | 50 (10.27%) | 50 (10.27%) | 20 (4.11%) | 18 (3.70%) |
+| MRR | 0.0406 | 0.0406 | 0.0010 | 0.0010 |
+| Declaration graph coverage | 334 (68.58%) | 334 (68.58%) | 451 (92.61%) | 451 (92.61%) |
+| Top-20 same-symbol retrieval | 84 (17.25%) | 84 (17.25%) | 100 (20.53%) | 100 (20.53%) |
+| Build trials | 90.30 / 16.37 s | 21.12 / 26.08 s | 33.62 / 31.78 s | 36.00 / 36.04 s |
+| Mean query | 11.65 s | 11.05 s | 1.98 s | 2.07 s |
+| Query p50 | 8.04 s | 8.02 s | 1.70 s | 1.77 s |
+| Query p95 | 22.67 s | 18.66 s | 3.13 s | 2.83 s |
+| Query p99 | 88.32 s | 84.18 s | 6.74 s | 11.53 s |
+| Query maximum | 260.12 s | 302.90 s | 12.65 s | 20.89 s |
+| Mean payload | 1,892 tokens | 1,892 tokens | 2,158 tokens | 2,163 tokens |
+| Truncated output | 0.00% | 0.00% | 90.76% | 91.79% |
+
+Ravel's retrieval metrics, graph coverage, payload, and truncation were identical across both runs. Graphify's declaration coverage and top-20 same-symbol retrieval were stable, but its exact-line result changed from 20 to 18 hits. The build trials are cache-sensitive: Ravel's run-1 trials differed by 73.94 seconds, while its run-2 trials were within 4.96 seconds, so the simple mean should not be treated as a stable cold-build number.
+
+The poor one-shot Ravel query tail reproduced. Run 2 again clustered extreme stalls across both concurrent workers: two unrelated queries took 301–303 seconds together. Latency had no meaningful relationship to explored nodes, returned nodes, tokens, declaration kind, hit/miss status, or tool order. The persistent rerun above confirmed repeated fresh-process graph loading and index construction were the main cause.
+
+This is a retrieval-compatibility benchmark, not an official T3 Code metric or an LLM answer-quality test. The repository now preserves each run's summary, run config, raw results, build metadata, the shared manifest/cases, and [`provenance`](results/t3code-typescript-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-17-provenance.json). See [`run 1`](results/t3code-typescript-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-17-run1.json) and [`run 2`](results/t3code-typescript-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-17-run2.json).
 
 ## 2026-07-16: C on libgit2 and C++ on nlohmann/json
 

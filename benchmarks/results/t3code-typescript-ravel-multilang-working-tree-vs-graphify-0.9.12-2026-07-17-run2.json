@@ -1,0 +1,219 @@
+{
+  "adapterVersion": "t3code-typescript-doc-declaration-v1",
+  "benchmark": "T3 Code TypeScript documented-declaration retrieval compatibility",
+  "buildTrials": {
+    "graphify": [
+      {
+        "extractMs": 28577.206957968883,
+        "ms": 36002.621833002195,
+        "order": 2,
+        "round": 1
+      },
+      {
+        "extractMs": 28870.978750055656,
+        "ms": 36035.617000074126,
+        "order": 1,
+        "round": 2
+      }
+    ],
+    "ravel": [
+      {
+        "extractMs": 0.0,
+        "ms": 21116.79570900742,
+        "order": 1,
+        "round": 1
+      },
+      {
+        "extractMs": 0.0,
+        "ms": 26078.352249925956,
+        "order": 2,
+        "round": 2
+      }
+    ]
+  },
+  "cases": 487,
+  "claimsAnswerCorrectness": false,
+  "corporaByteIdentical": true,
+  "corporaUnchangedAfterBuild": true,
+  "failedCases": 0,
+  "graphify": {
+    "buildMs": 36019.11941653816,
+    "declarationCoverage": {
+      "byKind": {
+        "class": {
+          "cases": 50,
+          "coverage": 1.0,
+          "covered": 50
+        },
+        "const": {
+          "cases": 134,
+          "coverage": 0.7388059701492538,
+          "covered": 99
+        },
+        "function": {
+          "cases": 241,
+          "coverage": 1.0,
+          "covered": 241
+        },
+        "interface": {
+          "cases": 51,
+          "coverage": 1.0,
+          "covered": 51
+        },
+        "let": {
+          "cases": 1,
+          "coverage": 0.0,
+          "covered": 0
+        },
+        "type": {
+          "cases": 10,
+          "coverage": 1.0,
+          "covered": 10
+        }
+      },
+      "cases": 487,
+      "coverage": 0.9260780287474333,
+      "covered": 451
+    },
+    "graphEdges": 35998,
+    "graphNodes": 18455,
+    "meanEstimatedTokens": 2162.811088295688,
+    "meanQueryMs": 2071.7544387263442,
+    "meanReturned": 55.64476386036961,
+    "mrr": 0.0009538220541751631,
+    "queryMaxMs": 20891.236374969594,
+    "queryP50Ms": 1771.759666968137,
+    "queryP95Ms": 2830.335750011727,
+    "queryP99Ms": 11534.438582952134,
+    "recall": 0.03696098562628337,
+    "top20SymbolOnly": {
+      "hits": 100,
+      "limit": 20,
+      "mrr": 0.13804323670853444,
+      "recall": 0.2053388090349076
+    },
+    "truncationRate": 0.917864476386037
+  },
+  "graphifyExecutable": {
+    "path": "/Users/12ya/.local/share/uv/tools/graphifyy/bin/graphify",
+    "sha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
+  },
+  "graphifyVersion": "graphify 0.9.12",
+  "language": "typescript",
+  "manifestSha256": "bcfd709c5bcf631cec1a15b198cfa2418fad382d889915d9efdc393d20217765",
+  "officialMetric": false,
+  "pairwise": {
+    "bothHit": 2,
+    "bothMiss": 421,
+    "graphifyOnlyHit": 16,
+    "ravelOnlyHit": 48,
+    "ravelQueryWins": 0
+  },
+  "platform": {
+    "arch": "arm64",
+    "os": "Darwin"
+  },
+  "queryMode": "typescript-jsdoc-symbol-redacted-v1",
+  "queryOrder": {
+    "graphifyFirst": 253,
+    "ravelFirst": 234
+  },
+  "ravel": {
+    "buildMs": 23597.573979466688,
+    "declarationCoverage": {
+      "byKind": {
+        "class": {
+          "cases": 50,
+          "coverage": 0.66,
+          "covered": 33
+        },
+        "const": {
+          "cases": 134,
+          "coverage": 0.0,
+          "covered": 0
+        },
+        "function": {
+          "cases": 241,
+          "coverage": 0.995850622406639,
+          "covered": 240
+        },
+        "interface": {
+          "cases": 51,
+          "coverage": 1.0,
+          "covered": 51
+        },
+        "let": {
+          "cases": 1,
+          "coverage": 0.0,
+          "covered": 0
+        },
+        "type": {
+          "cases": 10,
+          "coverage": 1.0,
+          "covered": 10
+        }
+      },
+      "cases": 487,
+      "coverage": 0.6858316221765913,
+      "covered": 334
+    },
+    "graphEdges": 148724,
+    "graphNodes": 122193,
+    "meanEstimatedTokens": 1891.9034907597536,
+    "meanQueryMs": 11050.049477862816,
+    "meanReturned": 23.51334702258727,
+    "mrr": 0.04055512945025657,
+    "queryMaxMs": 302898.7462500809,
+    "queryP50Ms": 8015.5343329533935,
+    "queryP95Ms": 18655.22120904643,
+    "queryP99Ms": 84181.97383393999,
+    "recall": 0.1026694045174538,
+    "top20SymbolOnly": {
+      "hits": 84,
+      "limit": 20,
+      "mrr": 0.08451502635185511,
+      "recall": 0.17248459958932238
+    },
+    "truncationRate": 0.0
+  },
+  "ravelExecutable": {
+    "path": "/private/tmp/ravel-t3-rerun-2026-07-17",
+    "sha256": "7bb7202fb220dd17d0d395ff19a7301a245d566a99083d833902cb64e7ccf581"
+  },
+  "ravelProfile": "broad",
+  "ravelProfileArgs": [
+    "--seed-limit",
+    "20",
+    "--max-depth",
+    "3",
+    "--max-nodes",
+    "10000",
+    "--branch-fanout",
+    "10000",
+    "--candidate-shortlist"
+  ],
+  "ravelVersion": "ravel v0.2.5",
+  "resultsSha256": "15179e73a87d13ea4c47747fef58dfdffb75558e4d2dead63dd1feeb1abf9812",
+  "runConfigSha256": "89b018f621472e99fa3a27a88245d9a97537b297b2d0b57c11ed096ddeb0e82d",
+  "sharedCorpusFiles": 1952,
+  "source": {
+    "excludedTrackedRoot": ".repos",
+    "files": 1952,
+    "includedRoots": [
+      "apps",
+      "infra",
+      "oxlint-plugin-t3code",
+      "packages",
+      "scripts"
+    ],
+    "lines": 513548,
+    "name": "T3 Code",
+    "revision": "2a33a18716854b8d07378008cf3101ad999209ae",
+    "sourceSha256": "78e23307e3eb668373ee6a4fa28ab46f61769d30031f5de8b046223e8d7a1317",
+    "url": "https://github.com/pingdotgg/t3code"
+  },
+  "successfulCases": 487,
+  "tokenBudget": 2000,
+  "version": 1,
+  "workers": 2
+}

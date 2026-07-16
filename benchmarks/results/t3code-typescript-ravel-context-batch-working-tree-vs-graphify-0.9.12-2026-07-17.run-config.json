@@ -1,0 +1,37 @@
+{
+  "adapterVersion": "t3code-typescript-doc-declaration-v1",
+  "buildOrder": "balanced-two-round",
+  "cases": 487,
+  "graphifyExecutable": {
+    "path": "/Users/12ya/.local/share/uv/tools/graphifyy/bin/graphify",
+    "sha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
+  },
+  "keepItems": 20,
+  "manifestSha256": "bcfd709c5bcf631cec1a15b198cfa2418fad382d889915d9efdc393d20217765",
+  "queryMode": "typescript-jsdoc-symbol-redacted-v1",
+  "queryOrder": "alternating-by-selection-key",
+  "ravelExecutable": {
+    "path": "/private/tmp/ravel-context-batch-fixed",
+    "sha256": "dfd59dbb55c8ad5c8dceae78903f7fb210de7b55a14d32b0becb35fd572e5c07"
+  },
+  "ravelExecutionAdapterVersion": "ravel-context-batch-v1",
+  "ravelProfile": "broad",
+  "ravelProfileArgs": [
+    "--seed-limit",
+    "20",
+    "--max-depth",
+    "3",
+    "--max-nodes",
+    "10000",
+    "--branch-fanout",
+    "10000",
+    "--candidate-shortlist"
+  ],
+  "ravelQueryMode": "batch",
+  "ravelQueryTimeoutSeconds": 360,
+  "selectionSha256": "885f08fde46f95671b04916711e55eb5c29e4e8b5af456f7ceae0c37dbeedfd4",
+  "sourceRevision": "2a33a18716854b8d07378008cf3101ad999209ae",
+  "sourceSha256": "78e23307e3eb668373ee6a4fa28ab46f61769d30031f5de8b046223e8d7a1317",
+  "tokenBudget": 2000,
+  "workers": 2
+}

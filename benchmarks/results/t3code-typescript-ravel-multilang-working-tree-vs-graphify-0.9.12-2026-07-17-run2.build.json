@@ -1,0 +1,121 @@
+{
+  "buildTrials": {
+    "graphify": [
+      {
+        "extractMs": 28577.206957968883,
+        "ms": 36002.621833002195,
+        "order": 2,
+        "round": 1
+      },
+      {
+        "extractMs": 28870.978750055656,
+        "ms": 36035.617000074126,
+        "order": 1,
+        "round": 2
+      }
+    ],
+    "ravel": [
+      {
+        "extractMs": 0.0,
+        "ms": 21116.79570900742,
+        "order": 1,
+        "round": 1
+      },
+      {
+        "extractMs": 0.0,
+        "ms": 26078.352249925956,
+        "order": 2,
+        "round": 2
+      }
+    ]
+  },
+  "corporaByteIdentical": true,
+  "corporaUnchangedAfterBuild": true,
+  "corpusFiles": 1952,
+  "corpusSha256": "f24ab8d6d78569dfc114cf33ca4296650893599a394ed9266cbb21581f8a9e36",
+  "graphifyBuildMs": 36019.11941653816,
+  "graphifyDeclarationCoverage": {
+    "byKind": {
+      "class": {
+        "cases": 50,
+        "coverage": 1.0,
+        "covered": 50
+      },
+      "const": {
+        "cases": 134,
+        "coverage": 0.7388059701492538,
+        "covered": 99
+      },
+      "function": {
+        "cases": 241,
+        "coverage": 1.0,
+        "covered": 241
+      },
+      "interface": {
+        "cases": 51,
+        "coverage": 1.0,
+        "covered": 51
+      },
+      "let": {
+        "cases": 1,
+        "coverage": 0.0,
+        "covered": 0
+      },
+      "type": {
+        "cases": 10,
+        "coverage": 1.0,
+        "covered": 10
+      }
+    },
+    "cases": 487,
+    "coverage": 0.9260780287474333,
+    "covered": 451
+  },
+  "graphifyGraphEdges": 35998,
+  "graphifyGraphNodes": 18455,
+  "queryGraphs": {
+    "graphify": "/private/tmp/t3code-typescript-rerun-2a33a187-20260717/graphify-graph-2/graphify-out/graph.json",
+    "ravel": "/private/tmp/t3code-typescript-rerun-2a33a187-20260717/ravel-graph-2"
+  },
+  "ravelBuildMs": 23597.573979466688,
+  "ravelDeclarationCoverage": {
+    "byKind": {
+      "class": {
+        "cases": 50,
+        "coverage": 0.66,
+        "covered": 33
+      },
+      "const": {
+        "cases": 134,
+        "coverage": 0.0,
+        "covered": 0
+      },
+      "function": {
+        "cases": 241,
+        "coverage": 0.995850622406639,
+        "covered": 240
+      },
+      "interface": {
+        "cases": 51,
+        "coverage": 1.0,
+        "covered": 51
+      },
+      "let": {
+        "cases": 1,
+        "coverage": 0.0,
+        "covered": 0
+      },
+      "type": {
+        "cases": 10,
+        "coverage": 1.0,
+        "covered": 10
+      }
+    },
+    "cases": 487,
+    "coverage": 0.6858316221765913,
+    "covered": 334
+  },
+  "ravelGraphEdges": 148724,
+  "ravelGraphNodes": 122193,
+  "version": 1
+}

@@ -1,0 +1,30 @@
+{
+  "adapterVersion": "t3code-typescript-doc-declaration-v1",
+  "benchmark": "T3 Code TypeScript documented-declaration retrieval compatibility",
+  "cases": 487,
+  "casesSha256": "10bc04b7cabeb2b926256b6149995b1d88911672e3a6b9ce0d8394b9a151f4dd",
+  "claimsAnswerCorrectness": false,
+  "commonAdapterVersion": "ravel-graphify-polyglot-v1",
+  "eligibleCases": 487,
+  "language": "typescript",
+  "officialMetric": false,
+  "queryMode": "typescript-jsdoc-symbol-redacted-v1",
+  "retrievalGold": "exact documented TypeScript declaration path, symbol, and line",
+  "source": {
+    "excludedTrackedRoot": ".repos",
+    "files": 1952,
+    "includedRoots": [
+      "apps",
+      "infra",
+      "oxlint-plugin-t3code",
+      "packages",
+      "scripts"
+    ],
+    "lines": 513548,
+    "name": "T3 Code",
+    "revision": "2a33a18716854b8d07378008cf3101ad999209ae",
+    "sourceSha256": "78e23307e3eb668373ee6a4fa28ab46f61769d30031f5de8b046223e8d7a1317",
+    "url": "https://github.com/pingdotgg/t3code"
+  },
+  "version": 1
+}

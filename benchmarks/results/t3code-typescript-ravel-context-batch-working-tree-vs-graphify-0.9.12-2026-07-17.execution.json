@@ -1,0 +1,28 @@
+{
+  "executionAdapterVersion": "ravel-context-batch-v1",
+  "latencySemantics": {
+    "comparableToGraphifyQueryMs": false,
+    "queryMs": "server retrieval on a warm reusable index",
+    "queueWaitMs": "wait for an available Ravel session",
+    "roundTripMs": "JSONL write through response read; excludes pool wait"
+  },
+  "mode": "context-batch-jsonl",
+  "sessions": [
+    {
+      "graphEdges": 148724,
+      "graphLoadMs": 1408.77575,
+      "graphNodes": 122193,
+      "indexBuildMs": 4614.630958,
+      "session": 1,
+      "startupMs": 6048.498457996175
+    },
+    {
+      "graphEdges": 148724,
+      "graphLoadMs": 1429.1775,
+      "graphNodes": 122193,
+      "indexBuildMs": 4558.224375,
+      "session": 2,
+      "startupMs": 5998.401207965799
+    }
+  ]
+}

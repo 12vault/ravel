@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "runs": [
+    "t3code-typescript-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-17-run1.json",
+    "t3code-typescript-ravel-multilang-working-tree-vs-graphify-0.9.12-2026-07-17-run2.json"
+  ],
+  "ravel": {
+    "cliVersion": "ravel v0.2.5",
+    "executableSha256": "7bb7202fb220dd17d0d395ff19a7301a245d566a99083d833902cb64e7ccf581",
+    "goVersion": "go1.26.5",
+    "moduleVersion": "v0.2.6-0.20260716114846-200fed605b31+dirty",
+    "vcsRevision": "200fed605b3100a93f8dfa0d949ddfe3923db28e",
+    "vcsModified": true,
+    "workingTreeDiffSha256AtBuild": "b953bba3975395eab769e4c51d4a01bf02004aaa986cab222e18b686f0f4e251"
+  },
+  "graphify": {
+    "version": "graphify 0.9.12",
+    "launcherSha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
+  },
+  "harness": {
+    "adapterVersion": "t3code-typescript-doc-declaration-v1",
+    "commonAdapterVersion": "ravel-graphify-polyglot-v1",
+    "runT3CodeSha256": "b5ddd9aa3eb3e03136d3eecb9636678205c773d237f9d0531e2b676630c5d780",
+    "runCFamilySha256": "870a3787a34d5fc917349bfdc357a2b2c593ff7aedf3797266db2fd014ce4b0d",
+    "polyglotCompareSha256": "f586a4642844231770be4af7229729b46a33050e20745606a1fe769a10665151"
+  },
+  "corpus": {
+    "repository": "https://github.com/pingdotgg/t3code",
+    "revision": "2a33a18716854b8d07378008cf3101ad999209ae",
+    "sourceSha256": "78e23307e3eb668373ee6a4fa28ab46f61769d30031f5de8b046223e8d7a1317",
+    "manifestSha256": "bcfd709c5bcf631cec1a15b198cfa2418fad382d889915d9efdc393d20217765",
+    "casesSha256": "10bc04b7cabeb2b926256b6149995b1d88911672e3a6b9ce0d8394b9a151f4dd",
+    "cases": 487
+  },
+  "platform": {
+    "machine": "Apple M1 Pro",
+    "os": "Darwin",
+    "arch": "arm64"
+  }
+}
