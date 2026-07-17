@@ -152,6 +152,7 @@ def ravel_result_from_value(
         "deduplicatedNodes": int(stats.get("deduplicatedNodes") or 0),
         "unselectedNodes": int(stats.get("unselectedNodes") or 0),
         "explanationEdgesOmitted": int(stats.get("explanationEdgesOmitted") or 0),
+        "affinityRescues": list(stats.get("affinityRescues") or []),
         "traceNodes": list(stats.get("traceNodes") or []),
         "items": items,
     }

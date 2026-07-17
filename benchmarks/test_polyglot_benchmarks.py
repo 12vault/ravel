@@ -42,6 +42,11 @@ class PolyglotCompareTests(unittest.TestCase):
                     "edges": [],
                     "stats": {
                         "estimatedTokens": 42, "exploredNodes": 2,
+                        "affinityRescues": [{
+                            "id": "function://rescued", "originalRank": 200,
+                            "rerankedRank": 13, "affinity": 0.5,
+                            "affinityMargin": 0.25,
+                        }],
                         "traceNodes": [{
                             "id": node_id, "indexed": True, "returnedRank": 1,
                         } for node_id in request.get("traceNodeIds", [])],
@@ -71,6 +76,7 @@ class PolyglotCompareTests(unittest.TestCase):
         self.assertEqual(result["estimatedTokens"], 42)
         self.assertEqual(result["items"][0]["name"], "Checkout")
         self.assertEqual(result["traceNodes"][0]["id"], "function://checkout")
+        self.assertEqual(result["affinityRescues"][0]["originalRank"], 200)
         self.assertGreaterEqual(result["roundTripMs"], 0)
         self.assertEqual(metadata["graphLoadMs"], 12.5)
         self.assertEqual(metadata["indexBuildMs"], 3.25)
