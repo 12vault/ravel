@@ -547,14 +547,16 @@ The language-comparison suite uses pinned upstream repositories—T3 Code (TypeS
 
 Measured on 2026-07-12 on an Apple M1 Pro (`darwin/arm64`) with Ravel v0.2.5 and Graphify 0.9.12 against [`t3tools/t3code`](https://github.com/t3tools/t3code) commit `c1ec1915`:
 
-| T3 Code measurement | Ravel | Graphify | Scope |
-| --- | ---: | ---: | --- |
-| Graph build | 166.54 s | 90.52 s | Cold local extraction; Ravel scanned 5,630 accepted code/document files and graphified 5,065, while Graphify scanned 5,448 code files with `--code-only` |
-| Resulting graph | 296,334 nodes / 366,815 edges | 49,517 nodes / 104,160 clustered edges | Tool-native schemas and extractors; coverage is not equivalent |
-| Tool-native reclustering | 13.23 s | 19.71 s | Each tool clustered its own resulting graph; Graphify used NetworkX Louvain |
-| Compact context, 10 questions | 6,821 estimated tokens | 9,009 estimated tokens | Same checked-in questions and 800-token setting; ceiling of three UTF-8 bytes per estimated token |
+**Bottom line:** there is no overall winner in this snapshot. Graphify built its graph faster. Ravel reclustered faster and returned a smaller context payload. Graph size is not a quality score, and this run did not test answer correctness.
 
-On these ten T3 Code questions, Ravel returned 24.3% fewer estimated context tokens. This measures retrieval payload size, not model input billing, answer quality, or factual accuracy. Ravel skipped 565 accepted files that produced no graph content. Graphify skipped non-code inputs, 805 source files that produced no nodes, and 11 SQL files because its optional SQL parser was not installed. The build and tool-native clustering rows therefore describe observed end-to-end behavior, not equal-graph algorithm microbenchmarks. The [question set](benchmarks/t3code-context-questions.json), [comparison script](benchmarks/compare_context_payloads.py), and [raw results](benchmarks/results/t3code-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-12.json) are checked in for reproduction.
+| T3 Code measurement | Ravel | Graphify | Winner | Why |
+| --- | ---: | ---: | --- | --- |
+| Cold graph build | 166.54 s | 90.52 s | **Graphify** | 76.02 s faster (45.6% less time), but the tools scanned different input scopes |
+| Resulting graph | 296,334 nodes / 366,815 edges | 49,517 nodes / 104,160 clustered edges | **No winner** | Tool-native schemas and extractors produced non-equivalent coverage; more nodes or edges does not prove better retrieval |
+| Tool-native reclustering | 13.23 s | 19.71 s | **Ravel** | 6.48 s faster (32.9% less time) on each tool's own graph |
+| Compact context, 10 questions | 6,821 estimated tokens | 9,009 estimated tokens | **Ravel** | 2,188 fewer estimated tokens (24.3% smaller) under the same questions and 800-token setting |
+
+The payload result means Ravel returned less text for these ten questions. It does not show whether that text produced better answers. It also does not measure model input billing, answer quality, or factual accuracy. Ravel scanned 5,630 accepted code/document files, graphified 5,065, and skipped 565 that produced no graph content. Graphify scanned 5,448 code files with `--code-only`; it skipped non-code inputs, 805 source files that produced no nodes, and 11 SQL files because its optional SQL parser was not installed. The build and tool-native clustering rows therefore describe observed end-to-end behavior, not equal-graph algorithm microbenchmarks. The [question set](benchmarks/t3code-context-questions.json), [comparison script](benchmarks/compare_context_payloads.py), and [raw results](benchmarks/results/t3code-ravel-v0.2.5-vs-graphify-0.9.12-2026-07-12.json) are checked in for reproduction.
 
 ## Development
 

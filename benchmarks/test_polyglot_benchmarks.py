@@ -40,7 +40,12 @@ class PolyglotCompareTests(unittest.TestCase):
                         "startLine": 10, "endLine": 12,
                     }],
                     "edges": [],
-                    "stats": {"estimatedTokens": 42, "exploredNodes": 2},
+                    "stats": {
+                        "estimatedTokens": 42, "exploredNodes": 2,
+                        "traceNodes": [{
+                            "id": node_id, "indexed": True, "returnedRank": 1,
+                        } for node_id in request.get("traceNodeIds", [])],
+                    },
                 }
                 print(json.dumps({
                     "type": "result", "id": request["id"],
@@ -58,13 +63,14 @@ class PolyglotCompareTests(unittest.TestCase):
                 str(script), graph, 2000, "broad", 5, 1
             )
             try:
-                result = session.query("find checkout")
+                result = session.query("find checkout", ["function://checkout"])
                 metadata = session.metadata()
             finally:
                 session.close()
         self.assertEqual(result["queryMs"], 0.75)
         self.assertEqual(result["estimatedTokens"], 42)
         self.assertEqual(result["items"][0]["name"], "Checkout")
+        self.assertEqual(result["traceNodes"][0]["id"], "function://checkout")
         self.assertGreaterEqual(result["roundTripMs"], 0)
         self.assertEqual(metadata["graphLoadMs"], 12.5)
         self.assertEqual(metadata["indexBuildMs"], 3.25)
@@ -360,6 +366,20 @@ pub(crate) fn build_matcher() {}
 
 
 class CFamilyTests(unittest.TestCase):
+    def test_retrieval_funnel_classifies_trace_stages(self) -> None:
+        funnel = run_c_family.retrieval_funnel(["gold"], [{
+            "id": "gold", "indexed": True, "lexicalRank": 12,
+            "walkRank": 8, "candidateRank": 8, "droppedReason": "token_budget",
+        }])
+        self.assertTrue(funnel["indexed"])
+        self.assertTrue(funnel["ranked"])
+        self.assertTrue(funnel["candidate"])
+        self.assertFalse(funnel["returned"])
+        self.assertEqual(funnel["droppedReasons"], ["token_budget"])
+        self.assertEqual(
+            run_c_family.retrieval_funnel([], [])["droppedReasons"], ["not_indexed"]
+        )
+
     def test_extracts_libgit2_multiline_prototype_and_redacts_name(self) -> None:
         source = """/**
  * Open a repository and inspect its working tree state safely.
@@ -420,6 +440,20 @@ class basic_json {
 
 
 class T3CodeTypeScriptTests(unittest.TestCase):
+    def test_maps_exact_gold_declaration_to_ravel_node_id(self) -> None:
+        case = {
+            "id": "case", "goldPath": "apps/web/src/value.ts",
+            "goldSymbol": "buildValue", "goldLine": 7,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            graph = Path(temporary)
+            (graph / "graph.json").write_text(json.dumps({"nodes": [{
+                "id": "tree://buildValue", "name": "buildValue",
+                "path": case["goldPath"], "startLine": 7, "endLine": 9,
+            }]}))
+            mapped = run_t3code_typescript.ravel_gold_node_ids(graph, [case])
+        self.assertEqual(mapped, {"case": ["tree://buildValue"]})
+
     def test_extracts_documented_exported_function_and_redacts_name(self) -> None:
         source = """/** Resolves the active workspace and returns its persisted settings safely. */
 export async function resolveWorkspace() {

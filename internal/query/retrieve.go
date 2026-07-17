@@ -37,9 +37,12 @@ const (
 	minimumTokenBudget       = 128
 	maximumTokenBudget       = 100_000
 	maximumBranchFanout      = 10_000
+	maximumTraceNodes        = 20
 	maximumLexicalCandidates = 128
 	maximumExplanationEdges  = 8
 	candidateBudgetPercent   = 92
+	shortlistLexicalPrefix   = 12
+	shortlistGraphReserve    = 8
 	// Affected bootstrap seeds include the target plus bounded source/container
 	// and symbol nodes. This prevents very large files or packages from turning
 	// reverse-impact lookup into an unbounded traversal origin set.
@@ -62,6 +65,7 @@ type RetrieveOptions struct {
 	TokenBudget              int              `json:"tokenBudget"`
 	CommunityBoost           bool             `json:"communityBoost,omitempty"`
 	CandidateShortlist       bool             `json:"candidateShortlist,omitempty"`
+	TraceNodeIDs             []string         `json:"traceNodeIds,omitempty"`
 }
 
 type Retrieval struct {
@@ -129,6 +133,23 @@ type RetrievalStats struct {
 	Truncated               bool             `json:"truncated"`
 	TruncatedReason         []string         `json:"truncatedReason,omitempty"`
 	CommunityBoost          bool             `json:"communityBoost,omitempty"`
+	TraceNodes              []RetrievalTrace `json:"traceNodes,omitempty"`
+}
+
+// RetrievalTrace records how one requested node moved through retrieval. It is
+// diagnostic only: traced nodes never affect ranking, traversal, or packing.
+type RetrievalTrace struct {
+	ID            string `json:"id"`
+	Indexed       bool   `json:"indexed"`
+	LexicalRank   int    `json:"lexicalRank,omitempty"`
+	Seeded        bool   `json:"seeded,omitempty"`
+	Traversed     bool   `json:"traversed,omitempty"`
+	Depth         int    `json:"depth,omitempty"`
+	WalkRank      int    `json:"walkRank,omitempty"`
+	CandidateRank int    `json:"candidateRank,omitempty"`
+	ReturnedRank  int    `json:"returnedRank,omitempty"`
+	Deduplicated  bool   `json:"deduplicated,omitempty"`
+	DroppedReason string `json:"droppedReason,omitempty"`
 }
 
 type normalizedRetrieveOptions struct {
@@ -149,6 +170,7 @@ type traversalResult struct {
 	branchesPruned    int
 	exploredLimit     bool
 	lexicalCandidates int
+	lexicalOnly       map[string]bool
 }
 
 // Retrieve is the graph-level compatibility wrapper around Index.Retrieve.
@@ -227,6 +249,8 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 	terms := retrievalTerms(question, normalized.Relations)
 	ranked := idx.rankWithAnchors(strings.Join(terms, " "), question)
 	if len(ranked) == 0 && len(forcedSeedIDs) == 0 {
+		traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, nil, nil, traversalResult{})
+		finalizeRetrievalTraces(traces, 0)
 		return Retrieval{
 			Version: 1,
 			Query:   safeTextBytes(question, 256),
@@ -234,6 +258,7 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 				Traversal: normalized.Traversal, Direction: normalized.Direction,
 				Depth: normalized.MaxDepth, TokenBudget: normalized.TokenBudget,
 				RelationFilters: normalized.Relations, RelationFilterFrom: normalized.filterFrom,
+				TraceNodes: traces,
 			},
 		}, nil
 	}
@@ -260,13 +285,42 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 
 	adjacency := idx.newQueryAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, normalized)
+	traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, ranked, seedSet, walk)
 	walk = idx.promoteLexicalCandidates(walk, ranked, normalized.CandidateShortlist)
 	for seedID, edge := range seedEvidence {
 		if seedSet[seedID] {
 			walk.via[seedID] = cloneEdge(edge)
 		}
 	}
-	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, adjacency.degree, walk), nil
+	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, adjacency.degree, walk, traces), nil
+}
+
+func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet map[string]bool, walk traversalResult) []RetrievalTrace {
+	if len(ids) == 0 {
+		return nil
+	}
+	traces := make([]RetrievalTrace, 0, len(ids))
+	positions := make(map[string]int, len(ids))
+	for _, id := range ids {
+		if _, duplicate := positions[id]; duplicate {
+			continue
+		}
+		positions[id] = len(traces)
+		_, indexed := idx.byID[id]
+		trace := RetrievalTrace{ID: id, Indexed: indexed, Seeded: seedSet[id]}
+		if depth, traversed := walk.distance[id]; traversed {
+			trace.Traversed = true
+			trace.Depth = depth
+		}
+		traces = append(traces, trace)
+	}
+	for rank, candidate := range ranked {
+		id := idx.docs[candidate.index].node.ID
+		if position, ok := positions[id]; ok {
+			traces[position].LexicalRank = rank + 1
+		}
+	}
+	return traces
 }
 
 // promoteLexicalCandidates exposes ranked matches without turning every match
@@ -292,6 +346,12 @@ func (idx *Index) promoteLexicalCandidates(walk traversalResult, ranked []ranked
 		order = append(order, id)
 		if _, traversed := walk.distance[id]; !traversed {
 			walk.distance[id] = 0
+			if shortlist {
+				if walk.lexicalOnly == nil {
+					walk.lexicalOnly = map[string]bool{}
+				}
+				walk.lexicalOnly[id] = true
+			}
 		}
 		walk.lexicalCandidates++
 	}
@@ -522,6 +582,22 @@ func (idx *Index) normalizeRetrieveOptions(question string, options RetrieveOpti
 	if options.TokenBudget < minimumTokenBudget || options.TokenBudget > maximumTokenBudget {
 		return normalizedRetrieveOptions{}, fmt.Errorf("token budget must be between %d and %d", minimumTokenBudget, maximumTokenBudget)
 	}
+	if len(options.TraceNodeIDs) > maximumTraceNodes {
+		return normalizedRetrieveOptions{}, fmt.Errorf("trace node IDs must contain at most %d values", maximumTraceNodes)
+	}
+	seenTraceIDs := make(map[string]bool, len(options.TraceNodeIDs))
+	traceNodeIDs := make([]string, 0, len(options.TraceNodeIDs))
+	for _, id := range options.TraceNodeIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return normalizedRetrieveOptions{}, errors.New("trace node IDs must not contain empty values")
+		}
+		if !seenTraceIDs[id] {
+			seenTraceIDs[id] = true
+			traceNodeIDs = append(traceNodeIDs, id)
+		}
+	}
+	options.TraceNodeIDs = traceNodeIDs
 
 	result := normalizedRetrieveOptions{RetrieveOptions: options, relationSet: map[graph.EdgeKind]bool{}}
 	if options.Direction == DirectionBoth {
@@ -1108,7 +1184,7 @@ func hubThreshold(degree []int, configured int) int {
 	return 50
 }
 
-func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOptions, seedIDs []string, seedSet map[string]bool, scores map[string]int, degree []int, walk traversalResult) Retrieval {
+func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOptions, seedIDs []string, seedSet map[string]bool, scores map[string]int, degree []int, walk traversalResult, traces []RetrievalTrace) Retrieval {
 	stats := RetrievalStats{
 		Traversal: options.Traversal, Direction: options.Direction, DirectionPreference: options.directionPreference, Depth: options.MaxDepth,
 		SeedIDs: append([]string(nil), seedIDs...), RelationFilters: append([]graph.EdgeKind(nil), options.Relations...),
@@ -1116,9 +1192,11 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		CommunityBoost: options.CommunityBoost,
 		HubThreshold:   walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed,
 		BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order), LexicalCandidates: walk.lexicalCandidates,
+		TraceNodes: traces,
 	}
 	result := Retrieval{Version: 1, Query: safeTextBytes(question, 256), Stats: stats}
 	if len(walk.order) == 0 {
+		finalizeRetrievalTraces(result.Stats.TraceNodes, 0)
 		return result
 	}
 	headerTokens := lineTokens(retrievalHeader(question, stats))
@@ -1135,13 +1213,21 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 	// symbols over container nodes when two candidates describe the same name
 	// and source path.
 	unique := make([]ContextNode, 0, len(walk.order))
+	uniqueOwners := make([]string, 0, len(walk.order))
 	identityIndex := map[string]int{}
-	for _, nodeID := range walk.order {
+	traceIndex := make(map[string]int, len(result.Stats.TraceNodes))
+	for position := range result.Stats.TraceNodes {
+		traceIndex[result.Stats.TraceNodes[position].ID] = position
+	}
+	for walkPosition, nodeID := range walk.order {
 		docIndex, ok := idx.byID[nodeID]
 		if !ok {
 			continue
 		}
 		node := contextNode(idx.docs[docIndex].node, scores[nodeID], walk.distance[nodeID], degree[docIndex], seedSet[nodeID])
+		if position, traced := traceIndex[nodeID]; traced {
+			result.Stats.TraceNodes[position].WalkRank = walkPosition + 1
+		}
 		if edge, hasVia := walk.via[nodeID]; hasVia {
 			node.ViaEdgeID = stableEdgeID(edge)
 		}
@@ -1149,16 +1235,33 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		if position, duplicate := identityIndex[identity]; duplicate {
 			result.Stats.DeduplicatedNodes++
 			if betterContextCandidate(node, unique[position]) {
+				if traced, ok := traceIndex[uniqueOwners[position]]; ok {
+					result.Stats.TraceNodes[traced].Deduplicated = true
+				}
 				unique[position] = node
+				uniqueOwners[position] = nodeID
+			} else if traced, ok := traceIndex[nodeID]; ok {
+				result.Stats.TraceNodes[traced].Deduplicated = true
 			}
 			continue
 		}
 		identityIndex[identity] = len(unique)
 		unique = append(unique, node)
+		uniqueOwners = append(uniqueOwners, nodeID)
+	}
+	if options.CandidateShortlist {
+		unique, uniqueOwners = prioritizeGraphCandidates(
+			unique, uniqueOwners, walk.lexicalOnly, shortlistLexicalPrefix, shortlistGraphReserve,
+		)
 	}
 
 	maxCandidates := min(len(unique), options.MaxNodes)
 	candidates := unique[:maxCandidates]
+	for candidatePosition, nodeID := range uniqueOwners {
+		if position, traced := traceIndex[nodeID]; traced {
+			result.Stats.TraceNodes[position].CandidateRank = candidatePosition + 1
+		}
+	}
 	if len(unique) > options.MaxNodes {
 		result.Stats.Truncated = true
 		result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "max_nodes")
@@ -1187,6 +1290,9 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 			return false
 		}
 		result.Nodes = append(result.Nodes, node)
+		if position, traced := traceIndex[node.ID]; traced {
+			result.Stats.TraceNodes[position].ReturnedRank = len(result.Nodes)
+		}
 		included[node.ID] = true
 		budgetUsed += cost
 		result.Stats.CandidateTokens += cost
@@ -1292,7 +1398,58 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 	if result.Stats.Truncated {
 		result.Stats.EstimatedTokens += lineTokens(truncationLine(result.Stats))
 	}
+	finalizeRetrievalTraces(result.Stats.TraceNodes, maxCandidates)
 	return result
+}
+
+func prioritizeGraphCandidates(nodes []ContextNode, owners []string, lexicalOnly map[string]bool, prefix, reserve int) ([]ContextNode, []string) {
+	if len(nodes) <= prefix || reserve <= 0 {
+		return nodes, owners
+	}
+	selected := make([]bool, len(nodes))
+	orderedNodes := make([]ContextNode, 0, len(nodes))
+	orderedOwners := make([]string, 0, len(owners))
+	add := func(position int) {
+		selected[position] = true
+		orderedNodes = append(orderedNodes, nodes[position])
+		orderedOwners = append(orderedOwners, owners[position])
+	}
+	for position := 0; position < min(prefix, len(nodes)); position++ {
+		add(position)
+	}
+	for position := prefix; position < len(nodes) && reserve > 0; position++ {
+		if !lexicalOnly[owners[position]] {
+			add(position)
+			reserve--
+		}
+	}
+	for position := range nodes {
+		if !selected[position] {
+			add(position)
+		}
+	}
+	return orderedNodes, orderedOwners
+}
+
+func finalizeRetrievalTraces(traces []RetrievalTrace, maxCandidates int) {
+	for position := range traces {
+		trace := &traces[position]
+		switch {
+		case trace.ReturnedRank > 0:
+		case !trace.Indexed:
+			trace.DroppedReason = "not_indexed"
+		case trace.WalkRank == 0:
+			trace.DroppedReason = "not_reached"
+		case trace.Deduplicated:
+			trace.DroppedReason = "deduplicated"
+		case trace.CandidateRank > maxCandidates:
+			trace.DroppedReason = "max_nodes"
+		case trace.CandidateRank > 0:
+			trace.DroppedReason = "token_budget"
+		default:
+			trace.DroppedReason = "not_candidate"
+		}
+	}
 }
 
 func contextCandidateIdentity(node ContextNode) string {

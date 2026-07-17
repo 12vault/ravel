@@ -482,6 +482,7 @@ def run_case(
     case: dict,
     graphs: dict[str, Path],
     ravel_backend: RavelBatchPool | None = None,
+    ravel_trace_ids: list[str] | None = None,
 ) -> dict:
     question = query_text(case["documentation"], case["goldSymbol"], case["language"])
     first = "ravel" if int(case["selectionKey"][:8], 16) % 2 == 0 else "graphify"
@@ -496,7 +497,7 @@ def run_case(
         for tool in order:
             value = (
                 (
-                    ravel_backend.query(question)
+                    ravel_backend.query(question, ravel_trace_ids)
                     if ravel_backend is not None
                     else ravel_result(args.ravel, graphs[tool], question, args.token_budget, args.ravel_profile)
                 )
@@ -504,6 +505,8 @@ def run_case(
                 else graphify_result(args.graphify, graphs[tool], question, args.token_budget)
             )
             value.update(documented.score_declaration(value["items"], case))
+            if tool == "ravel" and ravel_trace_ids is not None:
+                value["funnel"] = retrieval_funnel(ravel_trace_ids, value.get("traceNodes", []))
             value["returned"] = len(value["items"])
             value["items"] = value["items"][: args.keep_items]
             values[tool] = value
@@ -511,6 +514,23 @@ def run_case(
     except Exception as error:
         result.update({"status": "error", "error": str(error)})
     return result
+
+
+def retrieval_funnel(trace_ids: list[str] | None, traces: list[dict]) -> dict:
+    trace_ids = trace_ids or []
+    return {
+        "available": not trace_ids or bool(traces),
+        "indexed": bool(trace_ids),
+        "ranked": any(int(trace.get("lexicalRank") or 0) > 0 for trace in traces),
+        "seeded": any(bool(trace.get("seeded")) for trace in traces),
+        "traversed": any(bool(trace.get("traversed")) for trace in traces),
+        "walked": any(int(trace.get("walkRank") or 0) > 0 for trace in traces),
+        "candidate": any(int(trace.get("candidateRank") or 0) > 0 for trace in traces),
+        "returned": any(int(trace.get("returnedRank") or 0) > 0 for trace in traces),
+        "droppedReasons": sorted({
+            str(trace.get("droppedReason")) for trace in traces if trace.get("droppedReason")
+        }) or (["trace_unavailable"] if trace_ids else ["not_indexed"]),
+    }
 
 
 def summarize(results_path: Path, build: dict, language: str, item_limit: int) -> dict:
@@ -537,6 +557,28 @@ def summarize(results_path: Path, build: dict, language: str, item_limit: int) -
             "limit": item_limit,
         }
 
+    def funnel_summary() -> dict:
+        stages = ("indexed", "ranked", "seeded", "traversed", "walked", "candidate", "returned")
+        funnels = [row["ravel"]["funnel"] for row in ok if "funnel" in row["ravel"]]
+        dropped = {}
+        for funnel in funnels:
+            for reason in funnel.get("droppedReasons", []):
+                dropped[reason] = dropped.get(reason, 0) + 1
+        return {
+            "cases": len(funnels),
+            "stages": {
+                stage: {
+                    "cases": sum(bool(funnel.get(stage)) for funnel in funnels),
+                    "rate": (
+                        sum(bool(funnel.get(stage)) for funnel in funnels) / len(funnels)
+                        if funnels else 0.0
+                    ),
+                }
+                for stage in stages
+            },
+            "droppedReasons": dict(sorted(dropped.items())),
+        }
+
     return {
         "version": 1, "adapterVersion": ADAPTER_VERSION, "language": language,
         "cases": len(rows), "successfulCases": len(ok), "failedCases": len(rows) - len(ok),
@@ -550,6 +592,7 @@ def summarize(results_path: Path, build: dict, language: str, item_limit: int) -
             "buildMs": build["ravelBuildMs"], "graphNodes": build["ravelGraphNodes"],
             "graphEdges": build["ravelGraphEdges"], "declarationCoverage": build["ravelDeclarationCoverage"],
             "top20SymbolOnly": symbol_only("ravel"),
+            "funnel": funnel_summary(),
             **documented.tool_summary([row["ravel"] for row in ok]),
         },
         "graphify": {

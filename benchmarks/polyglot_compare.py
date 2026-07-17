@@ -19,7 +19,7 @@ from typing import Iterable
 
 
 COMMON_ADAPTER_VERSION = "ravel-graphify-polyglot-v1"
-RAVEL_EXECUTION_ADAPTER_VERSION = "ravel-context-batch-v1"
+RAVEL_EXECUTION_ADAPTER_VERSION = "ravel-context-batch-v2"
 NORMALIZER = re.compile(r"[^a-z0-9]+")
 RAVEL_PROFILES = {
     "compact": (),
@@ -132,6 +132,7 @@ def ravel_result_from_value(
         if not isinstance(node, dict):
             continue
         items.append({
+            "id": str(node.get("id", "")),
             "name": str(node.get("name", "")),
             "path": str(node.get("path", "")),
             "startLine": int(node.get("startLine") or 0),
@@ -151,6 +152,7 @@ def ravel_result_from_value(
         "deduplicatedNodes": int(stats.get("deduplicatedNodes") or 0),
         "unselectedNodes": int(stats.get("unselectedNodes") or 0),
         "explanationEdgesOmitted": int(stats.get("explanationEdgesOmitted") or 0),
+        "traceNodes": list(stats.get("traceNodes") or []),
         "items": items,
     }
     if round_trip_ms is not None:
@@ -231,13 +233,16 @@ class RavelBatchSession:
             raise RuntimeError(f"invalid context-batch message: {value!r}")
         return value
 
-    def query(self, question: str) -> dict:
+    def query(self, question: str, trace_node_ids: list[str] | None = None) -> dict:
         if self.process.stdin is None:
             raise RuntimeError("context-batch stdin is unavailable")
         self.request_id += 1
         request_id = f"{self.session_id}-{self.request_id}"
         started = time.perf_counter()
-        self.process.stdin.write(json.dumps({"id": request_id, "question": question}) + "\n")
+        request = {"id": request_id, "question": question}
+        if trace_node_ids:
+            request["traceNodeIds"] = trace_node_ids
+        self.process.stdin.write(json.dumps(request) + "\n")
         self.process.stdin.flush()
         response = self._read_message()
         round_trip_ms = (time.perf_counter() - started) * 1000
@@ -318,12 +323,12 @@ class RavelBatchPool:
             self.close()
             raise
 
-    def query(self, question: str) -> dict:
+    def query(self, question: str, trace_node_ids: list[str] | None = None) -> dict:
         waiting = time.perf_counter()
         session = self.available.get()
         queue_wait_ms = (time.perf_counter() - waiting) * 1000
         try:
-            result = session.query(question)
+            result = session.query(question, trace_node_ids)
             result["queueWaitMs"] = queue_wait_ms
             return result
         finally:

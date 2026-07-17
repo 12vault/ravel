@@ -18,8 +18,9 @@ import (
 const contextBatchMaxRequestBytes = 1024 * 1024
 
 type contextBatchRequest struct {
-	ID       string `json:"id"`
-	Question string `json:"question"`
+	ID           string   `json:"id"`
+	Question     string   `json:"question"`
+	TraceNodeIDs []string `json:"traceNodeIds,omitempty"`
 }
 
 type contextBatchReady struct {
@@ -134,7 +135,9 @@ func runContextBatch(ctx context.Context, args []string, stdin io.Reader, stdout
 			continue
 		}
 		started := time.Now()
-		result, err := index.Retrieve(request.Question, options)
+		requestOptions := options
+		requestOptions.TraceNodeIDs = append([]string(nil), request.TraceNodeIDs...)
+		result, err := index.Retrieve(request.Question, requestOptions)
 		queryMS := durationMS(time.Since(started))
 		if err != nil {
 			if writeErr := encoder.Encode(contextBatchResponse{Type: "error", ID: request.ID, Error: err.Error(), QueryMS: queryMS, Line: line}); writeErr != nil {

@@ -300,6 +300,22 @@ def verify_source(manifest: dict, repository: Path) -> list[Path]:
     return files
 
 
+def ravel_gold_node_ids(graph: Path, cases: list[dict]) -> dict[str, list[str]]:
+    items = harness.documented.graph_items(graph / "graph.json", "ravel")
+    by_name: dict[str, list[dict]] = {}
+    for item in items:
+        by_name.setdefault(normalized(str(item.get("name", ""))), []).append(item)
+    result = {}
+    for case in cases:
+        matches = [
+            str(item.get("id", ""))
+            for item in by_name.get(normalized(case["goldSymbol"]), [])
+            if item.get("id") and harness.documented.score_declaration([item], case)["hit"]
+        ]
+        result[case["id"]] = matches
+    return result
+
+
 def execute(args: argparse.Namespace) -> None:
     manifest_path = args.manifest.resolve()
     check(argparse.Namespace(manifest=manifest_path))
@@ -346,6 +362,7 @@ def execute(args: argparse.Namespace) -> None:
             for row in (json.loads(line),) if row.get("status") == "ok"
         }
     pending = [case for case in cases if case["id"] not in completed]
+    gold_node_ids = ravel_gold_node_ids(graphs["ravel"], cases)
     print(f"Running {len(pending)} pending of {len(cases)} TypeScript cases", flush=True)
     failures = 0
     execution_path = workspace / "ravel-execution.json"
@@ -375,7 +392,13 @@ def execute(args: argparse.Namespace) -> None:
             raise SystemExit("completed batch workspace lacks ravel-execution.json")
         with results_path.open("a", encoding="utf-8") as output:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
-                futures = [pool.submit(harness.run_case, args, case, graphs, ravel_backend) for case in pending]
+                futures = [
+                    pool.submit(
+                        harness.run_case, args, case, graphs, ravel_backend,
+                        gold_node_ids.get(case["id"]),
+                    )
+                    for case in pending
+                ]
                 for finished, future in enumerate(concurrent.futures.as_completed(futures), 1):
                     result = future.result()
                     failures += result.get("status") != "ok"

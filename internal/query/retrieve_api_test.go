@@ -827,6 +827,61 @@ func TestReusableIndexKeepsCompoundNameTieOrderDeterministic(t *testing.T) {
 	}
 }
 
+func TestRetrieveTraceReportsNodeFunnelWithoutChangingResults(t *testing.T) {
+	g := graph.Graph{
+		Nodes: []graph.Node{
+			{ID: "root", Kind: graph.NodeFunction, Name: "CheckoutRoot"},
+			{ID: "target", Kind: graph.NodeFunction, Name: "ChargeCard", Path: "payments.go", StartLine: 20},
+		},
+		Edges: []graph.Edge{testQueryEdge(graph.EdgeCalls, "root", "target")},
+	}
+	options := RetrieveOptions{
+		Direction: DirectionOut, Relations: []graph.EdgeKind{graph.EdgeCalls},
+		SeedLimit: 1, MaxDepth: 1, MaxNodes: 10, HubDegreeThreshold: -1, TokenBudget: 1_000,
+	}
+	idx := NewIndex(g)
+	plain := mustRetrieve(t, idx, "CheckoutRoot", options)
+	options.TraceNodeIDs = []string{"target", "missing", "target"}
+	traced := mustRetrieve(t, idx, "CheckoutRoot", options)
+	if !reflect.DeepEqual(plain.Nodes, traced.Nodes) || !reflect.DeepEqual(plain.Edges, traced.Edges) {
+		t.Fatalf("trace changed retrieval\nplain:  %#v\ntraced: %#v", plain, traced)
+	}
+	if len(traced.Stats.TraceNodes) != 2 {
+		t.Fatalf("trace nodes = %#v, want deduplicated target and missing", traced.Stats.TraceNodes)
+	}
+	target := traced.Stats.TraceNodes[0]
+	if !target.Indexed || !target.Traversed || target.WalkRank == 0 || target.CandidateRank == 0 || target.ReturnedRank == 0 || target.DroppedReason != "" {
+		t.Fatalf("target trace = %#v", target)
+	}
+	missing := traced.Stats.TraceNodes[1]
+	if missing.Indexed || missing.DroppedReason != "not_indexed" {
+		t.Fatalf("missing trace = %#v", missing)
+	}
+}
+
+func TestPrioritizeGraphCandidatesReservesStructuralSlots(t *testing.T) {
+	nodes := make([]ContextNode, 7)
+	owners := make([]string, 7)
+	lexicalOnly := map[string]bool{}
+	for index := range nodes {
+		owners[index] = fmt.Sprintf("node-%d", index)
+		nodes[index] = ContextNode{ID: owners[index]}
+		lexicalOnly[owners[index]] = true
+	}
+	delete(lexicalOnly, "node-4")
+	delete(lexicalOnly, "node-6")
+	gotNodes, gotOwners := prioritizeGraphCandidates(nodes, owners, lexicalOnly, 2, 2)
+	wantOwners := []string{"node-0", "node-1", "node-4", "node-6", "node-2", "node-3", "node-5"}
+	if !reflect.DeepEqual(gotOwners, wantOwners) {
+		t.Fatalf("owners = %v, want %v", gotOwners, wantOwners)
+	}
+	for position, node := range gotNodes {
+		if node.ID != gotOwners[position] {
+			t.Fatalf("node/owner mismatch at %d: %#v != %q", position, node, gotOwners[position])
+		}
+	}
+}
+
 func traversalFixture() graph.Graph {
 	return graph.Graph{
 		Nodes: []graph.Node{

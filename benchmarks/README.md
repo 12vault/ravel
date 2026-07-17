@@ -313,15 +313,16 @@ The adapter reports normalized expected symbol-name recall because Ravel and Gra
 
 This older 2026-07-12 snapshot used an Apple M1 Pro (`darwin/arm64`), Ravel v0.2.5, Graphify 0.9.12, and the repository then recorded as `t3tools/t3code` at commit `c1ec1915fc16f3dc1ec5d47d9a97f6210a574526`. It is retained for payload/build history; the 487-case pinned `pingdotgg/t3code` suite above is the answer-quality retrieval comparison.
 
-| Measurement | Ravel | Graphify |
-| --- | ---: | ---: |
-| Cold graph build | 166.54 s | 90.52 s |
-| Resulting graph nodes | 296,334 | 49,517 |
-| Resulting graph edges | 366,815 | 104,160 clustered edges |
-| Tool-native reclustering | 13.23 s | 19.71 s |
-| Compact context, 10 questions, 800-token budget | 6,821 estimated tokens | 9,009 estimated tokens |
+**Bottom line:** there is no overall winner in this snapshot. Graphify built its graph faster. Ravel reclustered faster and returned a smaller context payload. Graph size is not a quality score, and this run did not test answer correctness.
 
-The comparison uses each tool's native graph schema and extractors, so graph coverage is not equivalent. Ravel scanned code and supported repository documents, graphified 5,065 files, and skipped 565 accepted files with no graph content. Graphify used `--code-only`, reported 805 source files with no nodes, and skipped 11 SQL files because its optional SQL parser was unavailable. Its reclustering used the installed NetworkX 3.6.1 Louvain fallback. Context size uses the same checked-in questions and `ceil(UTF-8 bytes / 3)` estimate; it does not measure answer correctness or model billing.
+| Measurement | Ravel | Graphify | Winner | Why |
+| --- | ---: | ---: | --- | --- |
+| Cold graph build | 166.54 s | 90.52 s | **Graphify** | 76.02 s faster (45.6% less time), but the tools scanned different input scopes |
+| Resulting graph | 296,334 nodes / 366,815 edges | 49,517 nodes / 104,160 clustered edges | **No winner** | Tool-native schemas and extractors produced non-equivalent coverage; more nodes or edges does not prove better retrieval |
+| Tool-native reclustering | 13.23 s | 19.71 s | **Ravel** | 6.48 s faster (32.9% less time) on each tool's own graph |
+| Compact context, 10 questions, 800-token budget | 6,821 estimated tokens | 9,009 estimated tokens | **Ravel** | 2,188 fewer estimated tokens (24.3% smaller) under the same questions and token setting |
+
+The payload result means Ravel returned less text for these ten questions. It does not show whether that text produced better answers. The comparison uses each tool's native graph schema and extractors, so graph coverage is not equivalent. Ravel scanned code and supported repository documents, graphified 5,065 files, and skipped 565 accepted files with no graph content. Graphify used `--code-only`, reported 805 source files with no nodes, and skipped 11 SQL files because its optional SQL parser was unavailable. Its reclustering used the installed NetworkX 3.6.1 Louvain fallback. Context size uses the same checked-in questions and `ceil(UTF-8 bytes / 3)` estimate; it does not measure answer correctness or model billing.
 
 Reproduce the context payload measurement after building both graphs:
 

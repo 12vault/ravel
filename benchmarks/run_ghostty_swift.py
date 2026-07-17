@@ -319,6 +319,7 @@ def graph_items(path: Path, tool: str) -> list[dict]:
     for node in value.get("nodes") or []:
         if tool == "ravel":
             items.append({
+                "id": str(node.get("id", "")),
                 "name": str(node.get("name", "")),
                 "path": str(node.get("path", "")),
                 "startLine": int(node.get("startLine") or 0),
