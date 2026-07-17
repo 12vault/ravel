@@ -961,12 +961,33 @@ func TestRerankAffinityCandidatesRescuesConnectedBelowCutoffCandidate(t *testing
 	}}
 	idx := NewIndex(g)
 	options := normalizedRetrieveOptions{RetrieveOptions: RetrieveOptions{Direction: DirectionBoth}}
-	got := idx.rerankAffinityCandidates(ranked, []string{nodes[0].ID}, idx.newQueryAdjacency(options, nil), 2, 2)
+	got, rescues := idx.rerankAffinityCandidates(ranked, []string{nodes[0].ID}, idx.newQueryAdjacency(options, nil), 2, 2)
 	if got[0].index != 0 || got[1].index != 1 || got[2].index != maximumLexicalCandidates {
 		t.Fatalf("leading reranked indexes = [%d %d %d], want [0 1 %d]", got[0].index, got[1].index, got[2].index, maximumLexicalCandidates)
 	}
 	if len(got) != len(ranked) {
 		t.Fatalf("reranked length = %d, want %d", len(got), len(ranked))
+	}
+	if len(rescues) != 1 || rescues[0].ID != nodes[maximumLexicalCandidates].ID || rescues[0].OriginalRank != maximumLexicalCandidates+1 || rescues[0].RerankedRank != 3 {
+		t.Fatalf("rescues = %#v", rescues)
+	}
+}
+
+func TestRerankAffinityCandidatesRejectsCandidatesOutsideConfidenceWindow(t *testing.T) {
+	nodes := make([]graph.Node, affinityRerankWindow+1)
+	ranked := make([]rankedNode, len(nodes))
+	for position := range nodes {
+		nodes[position] = graph.Node{ID: fmt.Sprintf("node-%03d", position), Kind: graph.NodeFunction, Name: fmt.Sprintf("Node%d", position)}
+		ranked[position] = rankedNode{index: position, score: float64(len(nodes) - position)}
+	}
+	g := graph.Graph{Nodes: nodes, Edges: []graph.Edge{
+		testQueryEdge(graph.EdgeCalls, nodes[0].ID, nodes[affinityRerankWindow].ID),
+	}}
+	idx := NewIndex(g)
+	options := normalizedRetrieveOptions{RetrieveOptions: RetrieveOptions{Direction: DirectionBoth}}
+	got, rescues := idx.rerankAffinityCandidates(ranked, []string{nodes[0].ID}, idx.newQueryAdjacency(options, nil), 2, 2)
+	if len(rescues) != 0 || got[affinityRerankWindow].index != affinityRerankWindow {
+		t.Fatalf("outside-window candidate was rescued: rescues=%#v rank=%d", rescues, got[affinityRerankWindow].index)
 	}
 }
 

@@ -44,10 +44,10 @@ const (
 	shortlistLexicalPrefix   = 12
 	shortlistGraphReserve    = 8
 	shortlistAffinityRescues = 2
-	affinityRerankWindow     = 1_024
+	affinityRerankWindow     = 800
 	affinityMaxDepth         = 3
-	affinityNeighborLimit    = 256
-	affinityFrontierLimit    = 4_096
+	affinityNeighborLimit    = 128
+	affinityFrontierLimit    = 2_048
 	traceReachabilityLimit   = 20_000
 	// Affected bootstrap seeds include the target plus bounded source/container
 	// and symbol nodes. This prevents very large files or packages from turning
@@ -139,26 +139,41 @@ type RetrievalStats struct {
 	Truncated               bool             `json:"truncated"`
 	TruncatedReason         []string         `json:"truncatedReason,omitempty"`
 	CommunityBoost          bool             `json:"communityBoost,omitempty"`
+	AffinityRescues         []AffinityRescue `json:"affinityRescues,omitempty"`
 	TraceNodes              []RetrievalTrace `json:"traceNodes,omitempty"`
+}
+
+// AffinityRescue describes one below-cutoff lexical candidate promoted by
+// bounded graph affinity. Margin is relative to the strongest rejected rescue.
+type AffinityRescue struct {
+	ID             string  `json:"id"`
+	OriginalRank   int     `json:"originalRank"`
+	RerankedRank   int     `json:"rerankedRank"`
+	Affinity       float64 `json:"affinity"`
+	AffinityMargin float64 `json:"affinityMargin"`
 }
 
 // RetrievalTrace records how one requested node moved through retrieval. It is
 // diagnostic only: traced nodes never affect ranking, traversal, or packing.
 type RetrievalTrace struct {
-	ID                 string `json:"id"`
-	Indexed            bool   `json:"indexed"`
-	LexicalRank        int    `json:"lexicalRank,omitempty"`
-	PromotionRank      int    `json:"promotionRank,omitempty"`
-	PromotionExclusion string `json:"promotionExclusion,omitempty"`
-	TraversalExclusion string `json:"traversalExclusion,omitempty"`
-	Seeded             bool   `json:"seeded,omitempty"`
-	Traversed          bool   `json:"traversed,omitempty"`
-	Depth              int    `json:"depth,omitempty"`
-	WalkRank           int    `json:"walkRank,omitempty"`
-	CandidateRank      int    `json:"candidateRank,omitempty"`
-	ReturnedRank       int    `json:"returnedRank,omitempty"`
-	Deduplicated       bool   `json:"deduplicated,omitempty"`
-	DroppedReason      string `json:"droppedReason,omitempty"`
+	ID                  string  `json:"id"`
+	Indexed             bool    `json:"indexed"`
+	LexicalRank         int     `json:"lexicalRank,omitempty"`
+	PromotionRank       int     `json:"promotionRank,omitempty"`
+	PromotionExclusion  string  `json:"promotionExclusion,omitempty"`
+	OriginalLexicalRank int     `json:"originalLexicalRank,omitempty"`
+	AffinityRescued     bool    `json:"affinityRescued,omitempty"`
+	AffinityScore       float64 `json:"affinityScore,omitempty"`
+	AffinityMargin      float64 `json:"affinityMargin,omitempty"`
+	TraversalExclusion  string  `json:"traversalExclusion,omitempty"`
+	Seeded              bool    `json:"seeded,omitempty"`
+	Traversed           bool    `json:"traversed,omitempty"`
+	Depth               int     `json:"depth,omitempty"`
+	WalkRank            int     `json:"walkRank,omitempty"`
+	CandidateRank       int     `json:"candidateRank,omitempty"`
+	ReturnedRank        int     `json:"returnedRank,omitempty"`
+	Deduplicated        bool    `json:"deduplicated,omitempty"`
+	DroppedReason       string  `json:"droppedReason,omitempty"`
 }
 
 type normalizedRetrieveOptions struct {
@@ -180,6 +195,7 @@ type traversalResult struct {
 	exploredLimit     bool
 	lexicalCandidates int
 	lexicalOnly       map[string]bool
+	affinityRescues   []AffinityRescue
 }
 
 // Retrieve is the graph-level compatibility wrapper around Index.Retrieve.
@@ -295,7 +311,7 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 	adjacency := idx.newQueryAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, normalized)
 	if normalized.CandidateShortlist {
-		ranked = idx.rerankAffinityCandidates(ranked, seedIDs, adjacency, shortlistLexicalPrefix, shortlistAffinityRescues)
+		ranked, walk.affinityRescues = idx.rerankAffinityCandidates(ranked, seedIDs, adjacency, shortlistLexicalPrefix, shortlistAffinityRescues)
 	}
 	traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, ranked, seedSet, walk, normalized.CandidateShortlist)
 	idx.diagnoseTraversalExclusions(traces, seedIDs, seedSet, scores, adjacency, normalized, walk)
@@ -311,9 +327,9 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 // rerankAffinityCandidates gives a small number of below-cutoff candidates a
 // shortlist position when bounded graph propagation connects them to lexical
 // seeds. The leading lexical prefix remains stable.
-func (idx *Index) rerankAffinityCandidates(ranked []rankedNode, seedIDs []string, adjacency *queryAdjacency, prefix, rescueLimit int) []rankedNode {
+func (idx *Index) rerankAffinityCandidates(ranked []rankedNode, seedIDs []string, adjacency *queryAdjacency, prefix, rescueLimit int) ([]rankedNode, []AffinityRescue) {
 	if rescueLimit <= 0 || len(ranked) <= maximumLexicalCandidates || prefix >= maximumLexicalCandidates {
-		return ranked
+		return ranked, nil
 	}
 	rankByID := make(map[string]int, len(ranked))
 	for position, candidate := range ranked {
@@ -373,14 +389,32 @@ func (idx *Index) rerankAffinityCandidates(ranked []rankedNode, seedIDs []string
 		return candidates[i].position < candidates[j].position
 	})
 	selected := map[int]bool{}
+	selectedCandidates := make([]rescueCandidate, 0, rescueLimit)
 	for _, candidate := range candidates {
 		if len(selected) >= rescueLimit {
 			break
 		}
 		selected[candidate.position] = true
+		selectedCandidates = append(selectedCandidates, candidate)
 	}
 	if len(selected) == 0 {
-		return ranked
+		return ranked, nil
+	}
+	boundaryAffinity := 0.0
+	if len(candidates) > len(selectedCandidates) {
+		boundaryAffinity = candidates[len(selectedCandidates)].affinity
+	}
+	rescues := make([]AffinityRescue, 0, len(selectedCandidates))
+	for rescueIndex, candidate := range selectedCandidates {
+		margin := 1.0
+		if candidate.affinity > 0 && boundaryAffinity > 0 {
+			margin = max(0, (candidate.affinity-boundaryAffinity)/candidate.affinity)
+		}
+		rescues = append(rescues, AffinityRescue{
+			ID:           idx.docs[ranked[candidate.position].index].node.ID,
+			OriginalRank: candidate.position + 1, RerankedRank: prefix + rescueIndex + 1,
+			Affinity: candidate.affinity, AffinityMargin: margin,
+		})
 	}
 	result := make([]rankedNode, 0, len(ranked))
 	result = append(result, ranked[:prefix]...)
@@ -395,7 +429,7 @@ func (idx *Index) rerankAffinityCandidates(ranked []rankedNode, seedIDs []string
 		}
 		result = append(result, candidate)
 	}
-	return result
+	return result, rescues
 }
 
 func strongestAffinity(values map[string]float64, limit int) map[string]float64 {
@@ -429,6 +463,10 @@ func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet 
 	}
 	traces := make([]RetrievalTrace, 0, len(ids))
 	positions := make(map[string]int, len(ids))
+	rescues := make(map[string]AffinityRescue, len(walk.affinityRescues))
+	for _, rescue := range walk.affinityRescues {
+		rescues[rescue.ID] = rescue
+	}
 	for _, id := range ids {
 		if _, duplicate := positions[id]; duplicate {
 			continue
@@ -436,6 +474,12 @@ func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet 
 		positions[id] = len(traces)
 		_, indexed := idx.byID[id]
 		trace := RetrievalTrace{ID: id, Indexed: indexed, Seeded: seedSet[id]}
+		if rescue, ok := rescues[id]; ok {
+			trace.OriginalLexicalRank = rescue.OriginalRank
+			trace.AffinityRescued = true
+			trace.AffinityScore = rescue.Affinity
+			trace.AffinityMargin = rescue.AffinityMargin
+		}
 		if depth, traversed := walk.distance[id]; traversed {
 			trace.Traversed = true
 			trace.Depth = depth
@@ -1452,8 +1496,9 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		Traversal: options.Traversal, Direction: options.Direction, DirectionPreference: options.directionPreference, Depth: options.MaxDepth,
 		SeedIDs: append([]string(nil), seedIDs...), RelationFilters: append([]graph.EdgeKind(nil), options.Relations...),
 		RelationFilterFrom: options.filterFrom, TokenBudget: options.TokenBudget,
-		CommunityBoost: options.CommunityBoost,
-		HubThreshold:   walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed,
+		CommunityBoost:  options.CommunityBoost,
+		AffinityRescues: append([]AffinityRescue(nil), walk.affinityRescues...),
+		HubThreshold:    walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed,
 		BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order), LexicalCandidates: walk.lexicalCandidates,
 		TraceNodes: traces,
 	}
