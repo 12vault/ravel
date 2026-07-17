@@ -143,6 +143,9 @@ func TestBuildAndUpdateExposeAndValidateJobs(t *testing.T) {
 			if !strings.Contains(stdout.String(), "--jobs <n>") {
 				t.Fatalf("%s help omits --jobs: %q", command, stdout.String())
 			}
+			if !strings.Contains(stdout.String(), "--force") {
+				t.Fatalf("%s help omits --force: %q", command, stdout.String())
+			}
 		})
 		t.Run(command+" invalid jobs", func(t *testing.T) {
 			var stdout, stderr bytes.Buffer

@@ -631,6 +631,7 @@ func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writ
 	maxFileSize := fs.Int64("max-file-size", 0, "max file size in bytes")
 	noCallGraph := fs.Bool("no-call-graph", false, "disable AST call extraction")
 	jobs := fs.Int("jobs", 0, "maximum concurrent analysis workers")
+	force := fs.Bool("force", false, "ignore build caches and rebuild from source")
 	if err := fs.Parse(flexibleFlags(args, "config", "out", "max-file-size", "jobs")); err != nil {
 		return err
 	}
@@ -653,7 +654,7 @@ func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writ
 	}
 	progress := newTraversalProgress(progressOutput)
 	defer progress.Close()
-	result, err := buildrunner.RunWithCache(ctx, root, cfg, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version})
+	result, err := buildrunner.RunWithCache(ctx, root, cfg, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version, Force: *force})
 	if err != nil {
 		return err
 	}
@@ -699,6 +700,7 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	maxFileSize := fs.Int64("max-file-size", 0, "max file size in bytes")
 	noCallGraph := fs.Bool("no-call-graph", false, "disable AST call extraction")
 	jobs := fs.Int("jobs", 0, "maximum concurrent analysis workers")
+	force := fs.Bool("force", false, "ignore build caches and rebuild from source")
 	if err := fs.Parse(flexibleFlags(args, "config", "out", "max-file-size", "jobs")); err != nil {
 		return err
 	}
@@ -737,7 +739,7 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	}
 	progress := newTraversalProgress(progressOutput)
 	defer progress.Close()
-	result, err := updater.RunWithCache(ctx, root, cfg, previous, previousScan, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version})
+	result, err := updater.RunWithCache(ctx, root, cfg, previous, previousScan, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version, Force: *force})
 	if err != nil {
 		return err
 	}
@@ -1843,8 +1845,8 @@ func commandUsage(w io.Writer, command string) error {
 		"plan":          "ravel plan [--json] <route> [paths...]",
 		"audit":         "ravel audit [--config <path>] [--out <dir>] [root]",
 		"scan":          "ravel scan [--config <path>] [--out <dir>] [root]",
-		"build":         "ravel build [--config <path>] [--out <dir>] [--jobs <n>] [root]",
-		"update":        "ravel update [--config <path>] [--out <dir>] [--jobs <n>] [root]",
+		"build":         "ravel build [--config <path>] [--out <dir>] [--jobs <n>] [--force] [root]",
+		"update":        "ravel update [--config <path>] [--out <dir>] [--jobs <n>] [--force] [root]",
 		"watch":         "ravel watch [--interval 2s] [root]",
 		"share":         "ravel share [--from <dir>] [--out ravel-graph]",
 		"merge":         "ravel merge [--out <dir>] <alias=graph-directory>...",

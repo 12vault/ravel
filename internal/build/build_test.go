@@ -264,6 +264,77 @@ func TestRunWithCacheRepairsCorruptEntriesAndInvalidatesVersions(t *testing.T) {
 	}
 }
 
+func TestRunWithCachePersistsStatIndexAndForceRehashesAndReanalyzes(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "README.md")
+	baseline := time.Unix(1_700_000_000, 123_456_789)
+	if err := os.WriteFile(sourcePath, []byte("# One\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(sourcePath, baseline, baseline); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Analysis.Go = false
+	cfg.Analysis.Polyglot = false
+	cfg.Analysis.Schemas = false
+	cache := CacheOptions{OutputDir: cfg.Output.Dir, Version: "test-v1"}
+	first, _ := runCachedBuild(t, root, cfg, cache)
+	statIndex := filepath.Join(root, cfg.Output.Dir, ".state", "cache", "stat-index-v1.json")
+	if info, err := os.Stat(statIndex); err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("stat index info = %#v, err = %v", info, err)
+	}
+
+	_, warmStages := runCachedBuild(t, root, cfg, cache)
+	if countStage(warmStages, "Cached markdown") != 1 {
+		t.Fatalf("warm stages = %v, want markdown cache hit", warmStages)
+	}
+
+	// Deliberately preserve both stat keys to exercise the explicit escape hatch
+	// for generated files or tools that restore timestamps.
+	if err := os.WriteFile(sourcePath, []byte("# Two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(sourcePath, baseline, baseline); err != nil {
+		t.Fatal(err)
+	}
+	forced := cache
+	forced.Force = true
+	second, forcedStages := runCachedBuild(t, root, cfg, forced)
+	if countStage(forcedStages, "Analyzing markdown") != 1 || countStage(forcedStages, "Cached markdown") != 0 {
+		t.Fatalf("forced stages = %v, want fresh markdown analysis", forcedStages)
+	}
+	if first.Scan.Files[0].Hash == second.Scan.Files[0].Hash {
+		t.Fatalf("forced build reused stale hash %q", second.Scan.Files[0].Hash)
+	}
+}
+
+func TestWriteCacheAtomicReplacesEntryAndCleansTemporaryFile(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "entry.json")
+	if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeCacheAtomic(path, []byte("new\n")); err != nil {
+		t.Fatalf("writeCacheAtomic() error = %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); got != "new\n" {
+		t.Fatalf("cache entry = %q, want %q", got, "new\n")
+	}
+	temporary, err := filepath.Glob(filepath.Join(directory, ".analysis-cache-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temporary) != 0 {
+		t.Fatalf("temporary cache files remain: %v", temporary)
+	}
+}
+
 func TestRunWithCacheInvalidatesGoAnalyzerSettings(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc helper() {}\nfunc main() { helper() }\n"), 0o644); err != nil {

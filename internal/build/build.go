@@ -39,11 +39,11 @@ func RunWithProgress(ctx context.Context, root string, cfg config.Config, progre
 }
 
 func RunWithCache(ctx context.Context, root string, cfg config.Config, progress func(Progress), cacheOptions CacheOptions) (Result, error) {
-	scanResult, err := scan.ScanWithProgress(root, cfg, func(path string, files int) {
+	scanResult, err := scan.ScanWithOptions(root, cfg, func(path string, files int) {
 		if progress != nil {
 			progress(Progress{Stage: "Scanning", Path: path, Completed: files})
 		}
-	})
+	}, scan.Options{HashCachePath: statHashCachePath(cacheOptions), ForceHashing: cacheOptions.Force})
 	if err != nil {
 		return Result{}, err
 	}
