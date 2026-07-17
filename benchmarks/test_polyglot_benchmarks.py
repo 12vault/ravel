@@ -21,6 +21,30 @@ import run_t3code_typescript
 
 
 class PolyglotCompareTests(unittest.TestCase):
+    def test_graph_path_validation_accepts_graphify_output_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            corpus = workspace / "graphify-corpus"
+            source = corpus / "src" / "app.ts"
+            source.parent.mkdir(parents=True)
+            source.write_text("export const app = true;\n")
+            graph = workspace / "graphify-graph" / "graphify-out" / "graph.json"
+            graph.parent.mkdir(parents=True)
+            graph.write_text(json.dumps({
+                "nodes": [{"source_file": "../graphify-corpus/src/app.ts"}],
+            }))
+
+            run_c_family.validate_graph_paths(
+                graph, "graphify", corpus, [Path("src/app.ts")]
+            )
+            graph.write_text(json.dumps({
+                "nodes": [{"source_file": "../../outside.ts"}],
+            }))
+            with self.assertRaisesRegex(RuntimeError, "outside its corpus"):
+                run_c_family.validate_graph_paths(
+                    graph, "graphify", corpus, [Path("src/app.ts")]
+                )
+
     def test_context_batch_session_parses_ready_and_structured_result(self) -> None:
         script_body = textwrap.dedent("""\
             #!/usr/bin/env python3

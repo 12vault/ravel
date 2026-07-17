@@ -1,0 +1,429 @@
+{
+  "version": 1,
+  "date": "2026-07-17",
+  "benchmark": "Ravel and Graphify full local benchmark sweep",
+  "environment": {
+    "os": "Darwin",
+    "arch": "arm64",
+    "machine": "Apple M1 Pro",
+    "queryWorkers": 2
+  },
+  "ravel": {
+    "commit": "eec9c3c7f1a738e35125feae606561ecab54ba7d",
+    "commitSubject": "perf(query): promote high-confidence same-file candidates",
+    "reportedVersion": "ravel v0.2.5",
+    "executableSha256": "6b817cf2086060323708392752763ecbd0e12a9eb479021423d04e502e3a46d2"
+  },
+  "graphify": {
+    "version": "graphify 0.9.17",
+    "executableSha256": "a82e26c7630ddf46e92bebec3a917e7f290ef406dfe932b6dd1fc7fdab401c4d"
+  },
+  "primaryPairedCases": 23525,
+  "successfulPrimaryPairedCases": 23525,
+  "failedPrimaryPairedCases": 0,
+  "tokenBudget": 2000,
+  "retrievalSuites": [
+    {
+      "id": "t3code-typescript",
+      "cases": 487,
+      "metric": "exact_documented_declaration_recall",
+      "ravel": {
+        "hits": 204,
+        "score": 0.4188911704312115,
+        "mrr": 0.1560792780967623,
+        "meanBuildMs": 15744.768479489721,
+        "meanQueryMs": 1417.338993741273,
+        "meanEstimatedTokens": 1922.8439425051336,
+        "truncationRate": 0.002053388090349076
+      },
+      "graphify": {
+        "hits": 20,
+        "score": 0.04106776180698152,
+        "mrr": 0.0009503073105888788,
+        "meanBuildMs": 37122.55385390017,
+        "meanQueryMs": 1328.8013706095153,
+        "meanEstimatedTokens": 2127.2443531827516,
+        "truncationRate": 0.8829568788501027
+      },
+      "pairwise": {
+        "bothHit": 15,
+        "ravelOnlyHit": 189,
+        "graphifyOnlyHit": 5,
+        "bothMiss": 278
+      },
+      "manifestSha256": "bcfd709c5bcf631cec1a15b198cfa2418fad382d889915d9efdc393d20217765",
+      "resultsSha256": "44db1f9b177521e984dc4dcbb1f01e0e328f5cd1536c5aaef13d112bb7ec322b",
+      "runConfigSha256": "5abb2cecea4a98715a15862332f6de1c398bb4f97474127e645a6c96fa1f71c7"
+    },
+    {
+      "id": "ghostty-swift",
+      "cases": 455,
+      "metric": "exact_documented_declaration_recall",
+      "ravel": {
+        "hits": 222,
+        "score": 0.4879120879120879,
+        "mrr": 0.2773245205016708,
+        "meanBuildMs": 45134.233959019184,
+        "meanQueryMs": 135.80176840014346,
+        "meanEstimatedTokens": 1925.3604395604395,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "hits": 48,
+        "score": 0.1054945054945055,
+        "mrr": 0.0036267795712936236,
+        "meanBuildMs": 3760.5460000922903,
+        "meanQueryMs": 323.2523982546159,
+        "meanEstimatedTokens": 2040.167032967033,
+        "truncationRate": 0.8681318681318682
+      },
+      "pairwise": {
+        "bothHit": 19,
+        "ravelOnlyHit": 203,
+        "graphifyOnlyHit": 29,
+        "bothMiss": 204
+      },
+      "manifestSha256": "e93cb77b984647bc8f2fd678fce6e9b919e88bd951e847f8649d0705d37dddef",
+      "resultsSha256": "49df5cbf39394aad0c045c92789903d354e27e3007bcd85bb8b847d64644d22e",
+      "runConfigSha256": "36d3f1fba83fd45ce7fcc4762fded7c1d5ba4f4497bb4f026d192c91c3222f22"
+    },
+    {
+      "id": "ripgrep-rust",
+      "cases": 1174,
+      "metric": "exact_documented_declaration_recall",
+      "ravel": {
+        "hits": 431,
+        "score": 0.36712095400340716,
+        "mrr": 0.16032819343110843,
+        "meanBuildMs": 852.7754580136389,
+        "meanQueryMs": 486.73117497221534,
+        "meanEstimatedTokens": 1924.8901192504259,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "hits": 175,
+        "score": 0.14906303236797275,
+        "mrr": 0.004007709966396434,
+        "meanBuildMs": 3426.0194579837844,
+        "meanQueryMs": 314.40886670060763,
+        "meanEstimatedTokens": 1995.0630323679727,
+        "truncationRate": 0.7836456558773425
+      },
+      "pairwise": {
+        "bothHit": 96,
+        "ravelOnlyHit": 335,
+        "graphifyOnlyHit": 79,
+        "bothMiss": 664
+      },
+      "manifestSha256": "62665cf61c03493cd84d71af1eebb021ee8c9675da878ce80c233546e690b46b",
+      "resultsSha256": "b6467fcd65b64816a3744c96d1e7f2bf4fadba84efa87a2a22f23ae46b4e9334",
+      "runConfigSha256": "8fd1281b3e9d345735c8c0c7645f18685894692390c943dbf08d82254545e1f2"
+    },
+    {
+      "id": "libgit2-c",
+      "cases": 1167,
+      "metric": "exact_documented_declaration_recall",
+      "ravel": {
+        "hits": 16,
+        "score": 0.013710368466152529,
+        "mrr": 0.004716890369167228,
+        "top20SymbolRecall": 0.41216795201371037,
+        "meanBuildMs": 4550.332895480096,
+        "meanQueryMs": 123.38900354498715,
+        "meanEstimatedTokens": 1926.3444730077122,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "hits": 4,
+        "score": 0.003427592116538132,
+        "mrr": 0.0001334453562388438,
+        "top20SymbolRecall": 0.24507283633247642,
+        "meanBuildMs": 8390.059896046296,
+        "meanQueryMs": 460.2115539513287,
+        "meanEstimatedTokens": 2026.2082262210797,
+        "truncationRate": 0.8723221936589546
+      },
+      "pairwise": {
+        "bothHit": 3,
+        "ravelOnlyHit": 13,
+        "graphifyOnlyHit": 1,
+        "bothMiss": 1150
+      },
+      "manifestSha256": "d8b6912ed12feb44261751379d9ecd3500c7b2ba4185e2a6dcf71ed1a3ac50d8",
+      "resultsSha256": "0c47cbe794b6e880dfa59a3bfbfaef38b80b831687165b96b8ab09fb5ce4fe8c",
+      "runConfigSha256": "7d4a5d7b2e56d80ca995a5bfcfd277f7a45603d4a0d643fbfc99787243e28a16"
+    },
+    {
+      "id": "nlohmann-json-cpp",
+      "cases": 242,
+      "metric": "exact_documented_declaration_recall",
+      "ravel": {
+        "hits": 36,
+        "score": 0.1487603305785124,
+        "mrr": 0.04151697221362783,
+        "top20SymbolRecall": 0.2396694214876033,
+        "meanBuildMs": 873.9250414655544,
+        "meanQueryMs": 5.52790926446281,
+        "meanEstimatedTokens": 1920.698347107438,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "hits": 22,
+        "score": 0.09090909090909091,
+        "mrr": 0.005398388416548767,
+        "top20SymbolRecall": 0.4793388429752066,
+        "meanBuildMs": 1271.29639609484,
+        "meanQueryMs": 153.40839375064454,
+        "meanEstimatedTokens": 1912.4173553719008,
+        "truncationRate": 0.7768595041322314
+      },
+      "pairwise": {
+        "bothHit": 7,
+        "ravelOnlyHit": 29,
+        "graphifyOnlyHit": 15,
+        "bothMiss": 191
+      },
+      "manifestSha256": "0c30c23c2e24094991f614e69e307a9c015ee9fd603312be9a120df2e12fa76d",
+      "resultsSha256": "87eba7830f70e68b94a6eae08d38c8d355fa0bc9d47e28e2fa428f89ee2a45ab",
+      "runConfigSha256": "56bdb58ae9c4c8454901c71fafa7ce4f5b21ce684940e3043d853d903fd05214"
+    },
+    {
+      "id": "codesearchnet-go",
+      "cases": 1005,
+      "metric": "gold_file_recall",
+      "ravel": {
+        "hits": 603,
+        "score": 0.6,
+        "mrr": 0.3043633303971896,
+        "meanBuildMs": 564.1331250080839,
+        "meanQueryMs": 376.06475438924963,
+        "meanEstimatedTokens": 1916.0069651741294,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "hits": 467,
+        "score": 0.4646766169154229,
+        "mrr": 0.022640526797958672,
+        "meanBuildMs": 2717.388540972024,
+        "meanQueryMs": 274.22401513858,
+        "meanEstimatedTokens": 1475.6676616915422,
+        "truncationRate": 0.23383084577114427
+      },
+      "pairwise": {
+        "bothHit": 417,
+        "ravelOnlyHit": 186,
+        "graphifyOnlyHit": 50,
+        "bothMiss": 352
+      },
+      "manifestSha256": "4680b76b49ea2d59abf3326cfab020592c5bfb84dc80dabbb0e7d2a184ef257e",
+      "resultsSha256": "d7ab69962edc827956309462e6fe7b8f96957bdf2ffb1289327dc20343c26e55",
+      "runConfigSha256": "3dbdd3d3d4199fa173741eb44d98f627cb2461c5f506bb76fc911fe1fe0da4b4"
+    },
+    {
+      "id": "contextbench-go",
+      "cases": 104,
+      "metric": "mean_gold_file_recall",
+      "ravel": {
+        "hitCases": 44,
+        "score": 0.2049783191146268,
+        "mrr": 0.17881967475843993,
+        "meanBuildMs": 4096.458212267652,
+        "meanQueryMs": 608.8171189991184,
+        "meanEstimatedTokens": 1924.75,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "hitCases": 0,
+        "score": 0.0,
+        "mrr": 0.0,
+        "meanBuildMs": 6125.330682333487,
+        "meanQueryMs": 349.86999553019325,
+        "meanEstimatedTokens": 2121.855769230769,
+        "truncationRate": 0.9134615384615384
+      },
+      "pairwise": {
+        "bothHit": 0,
+        "ravelOnlyHit": 44,
+        "graphifyOnlyHit": 0,
+        "bothMiss": 60
+      },
+      "graphifyPathLimitation": "Graphify 0.9.17 emitted basename-only Go source paths for this corpus; repository-relative gold paths cannot be disambiguated.",
+      "manifestSha256": "3e42f6effa5054cccc48adfb5fb7bc1aba3b19d15e8ae70e24d7c4e835583ec2",
+      "resultsSha256": "37144a441eba5b8de640c4d8e3568bd8b6b56ec35871fac5f4228b8489f079b7",
+      "runConfigSha256": "42039e46ebdd973e02665b4bc35c1e2dbb4467fa51d6ef8b8335814b4cb9805b"
+    },
+    {
+      "id": "crosscodeeval-typescript",
+      "cases": 3122,
+      "metric": "gold_identifier_or_path_recall",
+      "ravel": {
+        "hits": 3071,
+        "score": 0.9836643177450353,
+        "mrr": 0.689054958952745,
+        "meanBuildMs": 299.0950687858082,
+        "meanQueryMs": 18.49431546652853,
+        "meanEstimatedTokens": 1902.593209481102,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "hits": 3009,
+        "score": 0.9638052530429212,
+        "mrr": 0.20640233612736134,
+        "meanBuildMs": 391.6131600487066,
+        "meanQueryMs": 136.4417163700878,
+        "meanEstimatedTokens": 330.8568225496477,
+        "truncationRate": 0.0
+      },
+      "pairwise": {
+        "bothHit": 2966,
+        "ravelOnlyHit": 105,
+        "graphifyOnlyHit": 43,
+        "bothMiss": 8
+      },
+      "manifestSha256": "8a292f2b387122d53535a2b7bfdd85f5e72e2797061f2fe304d85f3109415384",
+      "resultsSha256": "b1c330cee1a2e58547e0c2fa2363c4bb1b39394bbd38adc8d279cdd6753d8250",
+      "runConfigSha256": "b2d9c8616d2628c128e53582a8264567636589c588c7e81ec7a1982b3a7c81e9"
+    },
+    {
+      "id": "repobench-python-java",
+      "cases": 10000,
+      "metric": "gold_cross_file_identifier_or_path_recall",
+      "ravel": {
+        "hits": 8912,
+        "score": 0.8912,
+        "mrr": 0.3651473795990657,
+        "meanBuildMs": 187.9918200729182,
+        "meanQueryMs": 59.20366056503262,
+        "meanEstimatedTokens": 1872.7158,
+        "truncationRate": 0.0
+      },
+      "graphify": {
+        "hits": 9086,
+        "score": 0.9086,
+        "mrr": 0.21770006676633566,
+        "meanBuildMs": 542.8422386125079,
+        "meanQueryMs": 155.25234726521884,
+        "meanEstimatedTokens": 1224.0273,
+        "truncationRate": 0.1588
+      },
+      "pairwise": {
+        "bothHit": 8622,
+        "ravelOnlyHit": 290,
+        "graphifyOnlyHit": 464,
+        "bothMiss": 624
+      },
+      "manifestSha256": "4951d368a4709f7ac3f32c1f246ff6b5b4b49b53962fd7cdccdf492d82841726",
+      "resultsSha256": "f5c84b811dbda36ee9575f6f637536d141b93dcb9f7122273c182d13836fc8c7",
+      "runConfigSha256": "34635cd270c430d56f70f60f43cac53fe832f6cc0abeb6bcfafec500a81369fc"
+    }
+  ],
+  "scaleSuite": {
+    "id": "real-fim-typescript-go",
+    "cases": 5769,
+    "metric": "target_file_return_rate_not_retrieval_correctness",
+    "ravel": {
+      "targetFileHits": 5428,
+      "targetFileRate": 0.9408909689720922,
+      "meanBuildMs": 184.33340842732932,
+      "meanQueryMs": 18.429421138487825,
+      "meanEstimatedTokens": 1583.7174553648813,
+      "truncationRate": 0.0
+    },
+    "graphify": {
+      "targetFileHits": 5712,
+      "targetFileRate": 0.9901196047841914,
+      "meanBuildMs": 346.1440387624675,
+      "meanQueryMs": 140.1315970756338,
+      "meanEstimatedTokens": 547.6793205061535,
+      "truncationRate": 0.011613797885248743
+    },
+    "pairwise": {
+      "bothReturnTarget": 5372,
+      "ravelOnlyReturnsTarget": 56,
+      "graphifyOnlyReturnsTarget": 340,
+      "bothMissTarget": 1
+    },
+    "byLanguage": {
+      "typescript": {
+        "cases": 3182,
+        "ravelTargetFileRate": 0.9861722187303583,
+        "graphifyTargetFileRate": 0.9833438089252042
+      },
+      "go": {
+        "cases": 2587,
+        "ravelTargetFileRate": 0.885195206803247,
+        "graphifyTargetFileRate": 0.9984538074990337
+      }
+    },
+    "manifestSha256": "e52b1e021a189a48778d6f8892ed507ed71a98b4837e9515998d91f9d4c56969",
+    "resultsSha256": "8af3124b8dd967ca24d4734a9f6d430cdc3c15fb6b441d6e7d5636cf30b98ae7",
+    "runConfigSha256": "d4c47539e40e95e75be0011972518ee019e44815fd83a0d756c18f6e2a51c8dd"
+  },
+  "supplemental": {
+    "selfQuality": {
+      "cases": 10,
+      "contextMeanRecall": 0.8400000000000001,
+      "contextMeanEvidenceRecall": 0.7083333333333334,
+      "contextMrr": 1.0,
+      "contextMeanLatencyMs": 11.035699999999999,
+      "flatMeanRecall": 0.5166666666666667,
+      "flatMrr": 0.925,
+      "qualityGatePassed": true
+    },
+    "selfGraphifyCompatibility": {
+      "cases": 10,
+      "tokenBudget": 800,
+      "metric": "normalized_expected_symbol_name_recall",
+      "ravel": 0.8150000000000001,
+      "graphify": 0.625
+    },
+    "t3codePayloadOnly": {
+      "cases": 10,
+      "tokenBudget": 800,
+      "ravelEstimatedTokens": 7676,
+      "graphifyEstimatedTokens": 9163
+    },
+    "externalQuality": {
+      "chi": {
+        "cases": 18,
+        "meanRecall": 0.8333333333333334,
+        "mrr": 0.8796296296296295,
+        "meanEvidenceRecall": 0.3888888888888889,
+        "gatePassed": false,
+        "failure": "meanEvidenceRecall 0.388889 is below minimum 0.400000"
+      },
+      "express": {
+        "cases": 18,
+        "meanRecall": 0.75,
+        "mrr": 0.8611111111111112,
+        "meanEvidenceRecall": 0.6111111111111112,
+        "gatePassed": null,
+        "officialResult": false,
+        "failure": "freshness gate rejected stale expected node and evidence IDs; values are diagnostic without the gate"
+      },
+      "click": {
+        "cases": 18,
+        "meanRecall": 0.6944444444444444,
+        "mrr": 0.6296296296296297,
+        "meanEvidenceRecall": 0.4444444444444444,
+        "gatePassed": true
+      }
+    },
+    "goMicrobenchmarks": {
+      "buildFixtureNsPerOp": 404247,
+      "analyzePythonHundredFunctionsNsPerOp": 8381734,
+      "analyzeTypeScriptDefaultWorkersNsPerOp": 236269271,
+      "searchThousandNodesNsPerOp": 1030411,
+      "buildIndexThousandNodesNsPerOp": 10599912,
+      "retrieveThousandNodesBfsNsPerOp": 1359493,
+      "retrieveThousandNodesDfsNsPerOp": 1291894
+    }
+  },
+  "limitations": [
+    "The suites use different gold definitions; scores are not combined into one synthetic overall metric.",
+    "Real-FIM target-file return rate is a parser and scale compatibility proxy, not retrieval or answer correctness.",
+    "No suite invokes an LLM or judges final answers.",
+    "Ravel context-batch warm-query timings and Graphify process-per-query timings are not directly comparable where the adapter records different process lifecycles.",
+    "Raw append-only result files are identified by SHA-256 above; this checked-in artifact is the aggregate summary."
+  ]
+}

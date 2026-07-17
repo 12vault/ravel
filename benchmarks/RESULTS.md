@@ -2,6 +2,51 @@
 
 This file is the human-readable record of Ravel vs Graphify runs. Raw, machine-readable results live in [`results/`](results/).
 
+## 2026-07-17: full latest-local Ravel vs Graphify 0.9.17 sweep
+
+This run used Ravel commit `eec9c3c7f1a738e35125feae606561ecab54ba7d` (`perf(query): promote high-confidence same-file candidates`) and Graphify 0.9.17 on an Apple M1 Pro (`darwin/arm64`). The Ravel binary reported `v0.2.5`, so the commit and executable SHA-256 identify it precisely: `6b817cf2…`. Graphify's executable SHA-256 was `a82e26c7…`. All ten primary paired adapters used two workers and a 2,000-token budget.
+
+All 23,525 primary paired cases completed with zero execution failures. Nine suites have retrieval gold; Real-FIM's 5,769 cases measure parser/scale compatibility and target-file return, not retrieval correctness. Because the adapters use different gold definitions, their scores are not averaged into a synthetic overall number.
+
+| Suite | Cases | Metric | Ravel | Graphify | MRR (R / G) |
+| --- | ---: | --- | ---: | ---: | ---: |
+| T3 Code TypeScript | 487 | Exact documented declaration | 204 (41.89%) | 20 (4.11%) | 0.1561 / 0.0010 |
+| Ghostty Swift | 455 | Exact documented declaration | 222 (48.79%) | 48 (10.55%) | 0.2773 / 0.0036 |
+| ripgrep Rust | 1,174 | Exact documented declaration | 431 (36.71%) | 175 (14.91%) | 0.1603 / 0.0040 |
+| libgit2 C | 1,167 | Exact documented declaration | 16 (1.37%) | 4 (0.34%) | 0.0047 / 0.0001 |
+| nlohmann/json C++ | 242 | Exact documented declaration | 36 (14.88%) | 22 (9.09%) | 0.0415 / 0.0054 |
+| CodeSearchNet Go | 1,005 | Gold file | 603 (60.00%) | 467 (46.47%) | 0.3044 / 0.0226 |
+| ContextBench Go | 104 | Mean gold-file recall | 20.50% (44 hit cases) | 0.00% (0 hit cases) | 0.1788 / 0.0000 |
+| CrossCodeEval TypeScript | 3,122 | Gold identifier or path | 3,071 (98.37%) | 3,009 (96.38%) | 0.6891 / 0.2064 |
+| RepoBench Python/Java | 10,000 | Gold cross-file identifier or path | 8,912 (89.12%) | 9,086 (90.86%) | 0.3651 / 0.2177 |
+| Real-FIM TypeScript/Go | 5,769 | Target file returned, not correctness | 5,428 (94.09%) | 5,712 (99.01%) | n/a |
+
+Ravel had higher recall on eight of the nine gold-retrieval suites and higher MRR on all nine. Graphify's retrieval-recall win was RepoBench by 1.74 percentage points; Ravel still had the higher RepoBench MRR, 0.3651 versus 0.2177. On Real-FIM, Graphify's 99.01% target-file rate beat Ravel's 94.09% overall. That difference came from Go (99.85% versus 88.52%); Ravel was slightly higher on TypeScript (98.62% versus 98.33%). Real-FIM has no retrieval gold, so this row must not be combined with the nine quality rows.
+
+The same-file promotion's direct T3 Code result was positive without increasing the 2,000-token budget. Exact hits rose from the previous 183/487 adjacency-cache baseline to 204/487, a gain of 21 hits and 4.31 percentage points. MRR rose from 0.1431 to 0.1561. Mean payload grew from 1,855 to 1,923 estimated tokens; Graphify 0.9.17 returned 20 exact hits and averaged 2,127 estimated tokens. Pairwise, T3 Code had 189 Ravel-only hits, 5 Graphify-only hits, 15 shared hits, and 278 shared misses.
+
+The largest paired differences were:
+
+- Ghostty: 203 Ravel-only hits versus 29 Graphify-only hits.
+- ripgrep: 335 Ravel-only hits versus 79 Graphify-only hits.
+- CodeSearchNet: 186 Ravel-only hits versus 50 Graphify-only hits.
+- CrossCodeEval: 105 Ravel-only hits versus 43 Graphify-only hits.
+- RepoBench: 290 Ravel-only hits versus 464 Graphify-only hits.
+
+ContextBench's Graphify zero was audited rather than accepted blindly. Graphify 0.9.17 stored basename-only Go paths such as `client.go` in those graphs, while the gold uses repository-relative paths such as `pkg/.../client.go`; the result cannot disambiguate same-named files. Conversely, Graphify's much smaller CrossCodeEval payload (331 versus 1,903 mean estimated tokens) is a real efficiency advantage at nearly the same recall. Ravel emitted no truncation on every primary suite except one T3 case; Graphify truncation ranged from 77.69% to 91.35% on the documentation and ContextBench suites, but was 0% on CrossCodeEval and 1.16% on Real-FIM.
+
+Latency columns in the artifact are operational measurements, not a universal speed contest. T3 Code and the C-family adapters use Ravel's warm reusable `context-batch` index while Graphify launches one query process per case. Other adapters have their own recorded process lifecycles. Compare latency only within an adapter after reading its execution metadata.
+
+Supplemental checks also completed:
+
+- The ten-case self quality gate passed: context recall 0.8400, evidence recall 0.7083, MRR 1.0000; flat recall was 0.5167 with MRR 0.9250.
+- On the self Graphify compatibility helper at 800 tokens, normalized expected-symbol recall was 81.5% for Ravel and 62.5% for Graphify.
+- The ten-question T3 payload-only helper returned 7,676 estimated Ravel tokens and 9,163 Graphify tokens. It does not measure correctness or model billing.
+- The external Click gate passed. Chi failed only evidence recall, 0.3889 against the 0.4000 minimum. Express's stored node/evidence IDs were stale against the latest graph, so the freshness gate rejected an official result; an ungated diagnostic measured 0.7500 recall, 0.8611 MRR, and 0.6111 evidence recall.
+- The local 1,000-node BFS retrieval microbenchmark measured 1.359 ms/op; DFS measured 1.292 ms/op; reusable index construction measured 10.600 ms/op.
+
+Full aggregate metrics, executable and input hashes, pairwise counts, supplemental results, and limitations are in the [`machine-readable sweep artifact`](results/ravel-eec9c3c-vs-graphify-0.9.17-2026-07-17.json).
+
 ## 2026-07-17: T3 Code retrieval ranking and adjacency verification
 
 This Ravel-only working-tree verification reused the pinned T3 Code graph and all 487 documentation-derived questions from the persistent TypeScript run below. Graphify was not rerun. The comparison isolates commit `018ccc2`, which builds compact directional adjacency and degree indexes once, filters and sorts only the neighbor lists actually expanded by traversal, and reuses outgoing adjacency when collecting result edges.

@@ -2,6 +2,29 @@
 
 See [`RESULTS.md`](RESULTS.md) for the running human-readable Ravel vs Graphify results log.
 
+## Latest complete comparison
+
+The current headline run is the 2026-07-17 sweep of Ravel commit `eec9c3c7f1a738e35125feae606561ecab54ba7d` against Graphify 0.9.17. It completed all 23,525 primary paired cases with zero execution failures on `darwin/arm64`, using two workers and a 2,000-token budget. The Ravel binary reported `v0.2.5`; use the commit and executable SHA-256 in the artifact to distinguish it from the published release binary.
+
+| Suite | Cases | Metric | Ravel | Graphify |
+| --- | ---: | --- | ---: | ---: |
+| T3 Code TypeScript | 487 | Exact declaration | 41.89% | 4.11% |
+| Ghostty Swift | 455 | Exact declaration | 48.79% | 10.55% |
+| ripgrep Rust | 1,174 | Exact declaration | 36.71% | 14.91% |
+| libgit2 C | 1,167 | Exact declaration | 1.37% | 0.34% |
+| nlohmann/json C++ | 242 | Exact declaration | 14.88% | 9.09% |
+| CodeSearchNet Go | 1,005 | Gold file | 60.00% | 46.47% |
+| ContextBench Go | 104 | Mean gold-file recall | 20.50% | 0.00% |
+| CrossCodeEval TypeScript | 3,122 | Gold identifier or path | 98.37% | 96.38% |
+| RepoBench Python/Java | 10,000 | Gold identifier or path | 89.12% | 90.86% |
+| Real-FIM TypeScript/Go | 5,769 | Target file returned, not correctness | 94.09% | 99.01% |
+
+Ravel had higher recall on eight of the nine gold-retrieval suites and higher MRR on all nine. Graphify won RepoBench recall. Graphify also returned the target file more often on Real-FIM, especially on incomplete Go files, but Real-FIM has no retrieval gold and is not an answer-quality benchmark. Do not average these rows: their gold definitions differ.
+
+The same-file promotion increased T3 Code exact retrieval from the preceding 183/487 baseline to 204/487 without increasing the token budget. Mean payload rose from 1,855 to 1,923 estimated tokens. The complete interpretation, pairwise counts, external quality-gate status, microbenchmarks, hashes, and latency caveats are in the [`results log`](RESULTS.md#2026-07-17-full-latest-local-ravel-vs-graphify-0917-sweep) and [`machine-readable artifact`](results/ravel-eec9c3c-vs-graphify-0.9.17-2026-07-17.json).
+
+Some query timings are intentionally not directly comparable. T3 Code and the C-family runners use Ravel's warm reusable `context-batch` index while Graphify launches one process per query; each artifact records those semantics. Graphify 0.9.17 also stores basename-only Go source paths in the ContextBench graphs, which cannot be matched unambiguously against repository-relative gold paths.
+
 ## Real repositories used by the language suite
 
 These comparisons run against first-party source from pinned, public project repositories. The repository owners do not endorse the benchmark; “official repository” means the project's own upstream repository, not an official project metric.
@@ -177,6 +200,8 @@ Remove `--limit 100` to run or resume all scorable cases. Raw records report gol
 
 `run_contextbench.py` uses ContextBench's human-labeled repository file and line spans. It checks out every exact public commit, builds each tool's graph once per case revision, sends the same issue statement and token budget to both tools, and reports file/span precision and recall, MRR, tokens, truncation, and build/query tail latency. Both tools receive the same checkout, but retain their native corpus coverage: Graphify uses its code-only extractor while Ravel also accepts its supported repository documents. Preparing Parquet input requires PyArrow; fetching the pinned repositories is an explicit network step, after which `run --offline` performs no repository fetches.
 
+In Graphify 0.9.17, the Go graphs produced for the current ContextBench run retained only source basenames. The adapter does not guess a repository-relative path from a basename because collisions would create false positives; this is why Graphify's current file/span score is zero even though it returned symbols.
+
 ```sh
 python benchmarks/run_contextbench.py prepare \
   --parquet /tmp/ContextBench/full.parquet \
@@ -269,7 +294,7 @@ python3 benchmarks/run_c_family.py run \
   --ravel /path/to/ravel --graphify graphify --limit 20
 ```
 
-Use fresh workspaces and remove `--limit 20` for all 1,167 C cases and 242 C++ cases. Each run creates separate byte-identical corpora for the tools, verifies that neither corpus changed, rejects source paths outside the assigned corpus, reverses build order across two trials, and alternates query order by stable case key. Full results are recorded in [`results/c-cpp-libgit2-nlohmann-ravel-working-tree-vs-graphify-0.9.12-2026-07-16.json`](results/c-cpp-libgit2-nlohmann-ravel-working-tree-vs-graphify-0.9.12-2026-07-16.json).
+Use fresh workspaces and remove `--limit 20` for all 1,167 C cases and 242 C++ cases. Each run creates separate byte-identical corpora for the tools, verifies that neither corpus changed, rejects source paths outside the assigned corpus, reverses build order across two trials, and alternates query order by stable case key. Graphify 0.9.17 may serialize an in-corpus path through `../graphify-corpus/...`; the validator resolves it against the assigned corpus before accepting it and still rejects traversal outside that corpus. The historical 0.9.12 results remain in [`results/c-cpp-libgit2-nlohmann-ravel-working-tree-vs-graphify-0.9.12-2026-07-16.json`](results/c-cpp-libgit2-nlohmann-ravel-working-tree-vs-graphify-0.9.12-2026-07-16.json); the current aggregate is linked above.
 
 `run_real_fim_scale.py` adds a large stability and tail-latency pass over all 5,769 TypeScript and Go cases in the official Real-FIM-Eval Add/Edit archives (3,182 TypeScript and 2,587 Go). Real-FIM-Eval does not provide gold retrieval spans, so this adapter must not be used to claim answer or retrieval correctness. It materializes the same pre-change file for both tools, fingerprints but never exposes the hidden canonical solution, and reports errors, non-empty output, target-file-return rate, payload, truncation, and build/query p50/p95/p99/max.
 
@@ -308,6 +333,8 @@ python3 benchmarks/compare_graphify.py \
 ```
 
 The adapter reports normalized expected symbol-name recall because Ravel and Graphify use incompatible node and edge ID schemes. It does not compare evidence recall, model answers, or judge scores and must not be presented as a universal quality ranking. Keep the raw graphs, tool versions, dataset, and output with any published result.
+
+In the 2026-07-17 current-local run, this ten-case helper measured 81.5% normalized expected-symbol recall for Ravel and 62.5% for Graphify 0.9.17 at an 800-token budget. The same-day ten-question T3 payload helper measured 7,676 estimated Ravel tokens and 9,163 Graphify tokens; that second helper measures payload size only.
 
 ## Historical ten-question T3 Code payload snapshot
 

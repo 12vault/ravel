@@ -396,14 +396,12 @@ def validate_graph_paths(graph: Path, tool: str, corpus: Path, files: list[Path]
         )
         if candidate.suffix.lower() not in source_suffixes:
             continue
-        if candidate.is_absolute():
-            try:
-                relative = candidate.resolve().relative_to(corpus.resolve()).as_posix()
-            except ValueError:
-                invalid.append(raw)
-                continue
-        else:
-            relative = candidate.as_posix().lstrip("./")
+        resolved = candidate.resolve() if candidate.is_absolute() else (corpus / candidate).resolve()
+        try:
+            relative = resolved.relative_to(corpus.resolve()).as_posix()
+        except ValueError:
+            invalid.append(raw)
+            continue
         if relative not in allowed:
             invalid.append(raw)
     if invalid:
