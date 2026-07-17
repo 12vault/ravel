@@ -43,7 +43,12 @@ const (
 	candidateBudgetPercent   = 92
 	shortlistLexicalPrefix   = 16
 	shortlistGraphReserve    = 8
+	shortlistSameFileRescues = 1
+	shortlistSameFileSlot    = 1
+	sameFileMinimumAnchors   = 8
 	shortlistAffinityRescues = 4
+	sameFileCandidateWindow  = maximumLexicalCandidates
+	sameFileAnchorLimit      = 24
 	affinityRerankWindow     = 800
 	affinityMaxDepth         = 3
 	affinityNeighborLimit    = 128
@@ -139,8 +144,19 @@ type RetrievalStats struct {
 	Truncated               bool             `json:"truncated"`
 	TruncatedReason         []string         `json:"truncatedReason,omitempty"`
 	CommunityBoost          bool             `json:"communityBoost,omitempty"`
+	SameFileRescues         []SameFileRescue `json:"sameFileRescues,omitempty"`
 	AffinityRescues         []AffinityRescue `json:"affinityRescues,omitempty"`
 	TraceNodes              []RetrievalTrace `json:"traceNodes,omitempty"`
+}
+
+// SameFileRescue describes one lexical candidate promoted because a stronger
+// candidate or bounded traversal result points at the same source file.
+type SameFileRescue struct {
+	ID             string `json:"id"`
+	AnchorPath     string `json:"anchorPath"`
+	AnchorCount    int    `json:"anchorCount"`
+	OriginalRank   int    `json:"originalRank"`
+	StructuralSlot int    `json:"structuralSlot"`
 }
 
 // AffinityRescue describes one below-cutoff lexical candidate promoted by
@@ -162,6 +178,8 @@ type RetrievalTrace struct {
 	PromotionRank       int     `json:"promotionRank,omitempty"`
 	PromotionExclusion  string  `json:"promotionExclusion,omitempty"`
 	OriginalLexicalRank int     `json:"originalLexicalRank,omitempty"`
+	SameFileRescued     bool    `json:"sameFileRescued,omitempty"`
+	SameFileAnchorPath  string  `json:"sameFileAnchorPath,omitempty"`
 	AffinityRescued     bool    `json:"affinityRescued,omitempty"`
 	AffinityScore       float64 `json:"affinityScore,omitempty"`
 	AffinityMargin      float64 `json:"affinityMargin,omitempty"`
@@ -195,6 +213,8 @@ type traversalResult struct {
 	exploredLimit     bool
 	lexicalCandidates int
 	lexicalOnly       map[string]bool
+	sameFileRescued   map[string]bool
+	sameFileRescues   []SameFileRescue
 	affinityRescues   []AffinityRescue
 }
 
@@ -311,6 +331,13 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 	adjacency := idx.newQueryAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, normalized)
 	if normalized.CandidateShortlist {
+		walk.sameFileRescues = idx.selectSameFileCandidates(
+			ranked, seedIDs, walk.order, shortlistLexicalPrefix, shortlistSameFileRescues,
+		)
+		walk.sameFileRescued = make(map[string]bool, len(walk.sameFileRescues))
+		for _, rescue := range walk.sameFileRescues {
+			walk.sameFileRescued[rescue.ID] = true
+		}
 		ranked, walk.affinityRescues = idx.rerankAffinityCandidates(ranked, seedIDs, adjacency, shortlistLexicalPrefix, shortlistAffinityRescues)
 	}
 	traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, ranked, seedSet, walk, normalized.CandidateShortlist)
@@ -322,6 +349,114 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 		}
 	}
 	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, adjacency.degree, walk, traces), nil
+}
+
+// selectSameFileCandidates spends a bounded part of the existing structural
+// shortlist reserve on lexically relevant declarations from files already
+// represented by strong lexical or traversal anchors. One rescue per file
+// prevents large files from taking over the shortlist.
+func (idx *Index) selectSameFileCandidates(ranked []rankedNode, seedIDs, walkOrder []string, prefix, rescueLimit int) []SameFileRescue {
+	if rescueLimit <= 0 || len(ranked) <= prefix || prefix < 0 {
+		return nil
+	}
+	type fileAnchor struct {
+		bestRank int
+		count    int
+	}
+	anchors := map[string]fileAnchor{}
+	anchorIDs := map[string]bool{}
+	walkedIDs := make(map[string]bool, len(walkOrder))
+	for _, id := range walkOrder {
+		walkedIDs[id] = true
+	}
+	addAnchor := func(id string, rank int) {
+		if anchorIDs[id] {
+			return
+		}
+		docIndex, ok := idx.byID[id]
+		if !ok {
+			return
+		}
+		path := idx.docs[docIndex].node.Path
+		if path == "" {
+			return
+		}
+		anchorIDs[id] = true
+		anchor := anchors[path]
+		if anchor.count == 0 || rank < anchor.bestRank {
+			anchor.bestRank = rank
+		}
+		anchor.count++
+		anchors[path] = anchor
+	}
+	for _, id := range seedIDs {
+		addAnchor(id, 0)
+	}
+	for position, candidate := range ranked[:min(prefix, len(ranked))] {
+		addAnchor(idx.docs[candidate.index].node.ID, position+1)
+	}
+	for position, id := range walkOrder[:min(len(walkOrder), sameFileAnchorLimit)] {
+		addAnchor(id, prefix+position+1)
+	}
+	if len(anchors) == 0 {
+		return nil
+	}
+	type rescueCandidate struct {
+		position   int
+		path       string
+		anchorRank int
+		anchorHits int
+		score      float64
+	}
+	windowEnd := min(len(ranked), sameFileCandidateWindow)
+	candidates := make([]rescueCandidate, 0, windowEnd-prefix)
+	for position := prefix; position < windowEnd; position++ {
+		candidate := ranked[position]
+		node := idx.docs[candidate.index].node
+		anchor, ok := anchors[node.Path]
+		if !ok || anchor.count < sameFileMinimumAnchors || anchorIDs[node.ID] || walkedIDs[node.ID] || !graph.SymbolKind(node.Kind) || !eligibleShortlistCandidate(node) {
+			continue
+		}
+		candidates = append(candidates, rescueCandidate{
+			position: position, path: node.Path, anchorRank: anchor.bestRank,
+			anchorHits: anchor.count, score: candidate.score,
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].anchorHits != candidates[j].anchorHits {
+			return candidates[i].anchorHits > candidates[j].anchorHits
+		}
+		if candidates[i].anchorRank != candidates[j].anchorRank {
+			return candidates[i].anchorRank < candidates[j].anchorRank
+		}
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].position < candidates[j].position
+	})
+	selectedPaths := map[string]bool{}
+	selectedCandidates := make([]rescueCandidate, 0, rescueLimit)
+	for _, candidate := range candidates {
+		if len(selectedCandidates) >= rescueLimit {
+			break
+		}
+		if selectedPaths[candidate.path] {
+			continue
+		}
+		selectedPaths[candidate.path] = true
+		selectedCandidates = append(selectedCandidates, candidate)
+	}
+	if len(selectedCandidates) == 0 {
+		return nil
+	}
+	rescues := make([]SameFileRescue, 0, len(selectedCandidates))
+	for _, candidate := range selectedCandidates {
+		rescues = append(rescues, SameFileRescue{
+			ID: idx.docs[ranked[candidate.position].index].node.ID, AnchorPath: candidate.path, AnchorCount: candidate.anchorHits,
+			OriginalRank: candidate.position + 1, StructuralSlot: shortlistSameFileSlot,
+		})
+	}
+	return rescues
 }
 
 // rerankAffinityCandidates gives a small number of below-cutoff candidates a
@@ -467,6 +602,10 @@ func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet 
 	for _, rescue := range walk.affinityRescues {
 		rescues[rescue.ID] = rescue
 	}
+	sameFileRescues := make(map[string]SameFileRescue, len(walk.sameFileRescues))
+	for _, rescue := range walk.sameFileRescues {
+		sameFileRescues[rescue.ID] = rescue
+	}
 	for _, id := range ids {
 		if _, duplicate := positions[id]; duplicate {
 			continue
@@ -474,6 +613,11 @@ func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet 
 		positions[id] = len(traces)
 		_, indexed := idx.byID[id]
 		trace := RetrievalTrace{ID: id, Indexed: indexed, Seeded: seedSet[id]}
+		if rescue, ok := sameFileRescues[id]; ok {
+			trace.OriginalLexicalRank = rescue.OriginalRank
+			trace.SameFileRescued = true
+			trace.SameFileAnchorPath = rescue.AnchorPath
+		}
 		if rescue, ok := rescues[id]; ok {
 			trace.OriginalLexicalRank = rescue.OriginalRank
 			trace.AffinityRescued = true
@@ -1509,6 +1653,7 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		SeedIDs: append([]string(nil), seedIDs...), RelationFilters: append([]graph.EdgeKind(nil), options.Relations...),
 		RelationFilterFrom: options.filterFrom, TokenBudget: options.TokenBudget,
 		CommunityBoost:  options.CommunityBoost,
+		SameFileRescues: append([]SameFileRescue(nil), walk.sameFileRescues...),
 		AffinityRescues: append([]AffinityRescue(nil), walk.affinityRescues...),
 		HubThreshold:    walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed,
 		BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order), LexicalCandidates: walk.lexicalCandidates,
@@ -1571,7 +1716,8 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 	}
 	if options.CandidateShortlist {
 		unique, uniqueOwners = prioritizeGraphCandidates(
-			unique, uniqueOwners, walk.lexicalOnly, shortlistLexicalPrefix, shortlistGraphReserve,
+			unique, uniqueOwners, walk.lexicalOnly, walk.sameFileRescued,
+			shortlistLexicalPrefix, shortlistGraphReserve, shortlistSameFileSlot,
 		)
 	}
 
@@ -1732,7 +1878,7 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 	return result
 }
 
-func prioritizeGraphCandidates(nodes []ContextNode, owners []string, lexicalOnly map[string]bool, prefix, reserve int) ([]ContextNode, []string) {
+func prioritizeGraphCandidates(nodes []ContextNode, owners []string, lexicalOnly, sameFileRescued map[string]bool, prefix, reserve, sameFileSlot int) ([]ContextNode, []string) {
 	if len(nodes) <= prefix || reserve <= 0 {
 		return nodes, owners
 	}
@@ -1747,8 +1893,29 @@ func prioritizeGraphCandidates(nodes []ContextNode, owners []string, lexicalOnly
 	for position := 0; position < min(prefix, len(nodes)); position++ {
 		add(position)
 	}
+	sameFileCount := 0
+	for position := prefix; position < len(nodes); position++ {
+		if sameFileRescued[owners[position]] {
+			sameFileCount++
+		}
+	}
+	graphReserve := max(0, reserve-min(reserve, sameFileCount))
+	graphBeforeRescue := min(graphReserve, max(0, sameFileSlot-1))
+	for position := prefix; position < len(nodes) && graphBeforeRescue > 0; position++ {
+		if !lexicalOnly[owners[position]] && !sameFileRescued[owners[position]] {
+			add(position)
+			graphBeforeRescue--
+			reserve--
+		}
+	}
 	for position := prefix; position < len(nodes) && reserve > 0; position++ {
-		if !lexicalOnly[owners[position]] {
+		if sameFileRescued[owners[position]] {
+			add(position)
+			reserve--
+		}
+	}
+	for position := prefix; position < len(nodes) && reserve > 0; position++ {
+		if !selected[position] && !lexicalOnly[owners[position]] {
 			add(position)
 			reserve--
 		}

@@ -1036,6 +1036,89 @@ func TestRetrievalTraceDiagnosesLexicalPromotionCutoff(t *testing.T) {
 	}
 }
 
+func TestSelectSameFileCandidatesPromotesOneBoundedSiblingPerFile(t *testing.T) {
+	nodes := make([]graph.Node, maximumLexicalCandidates+4)
+	ranked := make([]rankedNode, len(nodes))
+	for position := range nodes {
+		nodes[position] = graph.Node{
+			ID: fmt.Sprintf("node-%03d", position), Kind: graph.NodeFunction,
+			Name: fmt.Sprintf("Node%d", position), Path: fmt.Sprintf("file-%03d.go", position),
+		}
+		ranked[position] = rankedNode{index: position, score: float64(len(nodes) - position)}
+	}
+	targetPosition := maximumLexicalCandidates - 1
+	for position := 0; position < sameFileMinimumAnchors; position++ {
+		nodes[position].Path = "shared.go"
+	}
+	nodes[targetPosition].Path = "shared.go"
+	nodes[targetPosition+1].Path = "shared.go"
+	idx := NewIndex(graph.Graph{Nodes: nodes})
+
+	rescues := idx.selectSameFileCandidates(ranked, []string{nodes[0].ID}, []string{nodes[0].ID}, sameFileMinimumAnchors, 2)
+	if len(rescues) != 1 {
+		t.Fatalf("rescues = %#v, want one rescue for shared.go", rescues)
+	}
+	want := SameFileRescue{
+		ID: nodes[targetPosition].ID, AnchorPath: "shared.go", AnchorCount: sameFileMinimumAnchors,
+		OriginalRank: targetPosition + 1, StructuralSlot: shortlistSameFileSlot,
+	}
+	if rescues[0] != want {
+		t.Fatalf("rescue = %#v, want %#v", rescues[0], want)
+	}
+
+	walk := traversalResult{
+		order: []string{nodes[0].ID}, distance: map[string]int{nodes[0].ID: 0},
+		lexicalOnly: map[string]bool{}, sameFileRescued: map[string]bool{want.ID: true},
+		sameFileRescues: rescues,
+	}
+	walk = idx.promoteLexicalCandidates(walk, ranked, true)
+	if !walk.lexicalOnly[want.ID] {
+		t.Fatalf("same-file rescue %q lost its lexical origin", want.ID)
+	}
+	traces := idx.newRetrievalTraces([]string{want.ID}, ranked, nil, walk, true)
+	if len(traces) != 1 || !traces[0].SameFileRescued || traces[0].OriginalLexicalRank != want.OriginalRank || traces[0].SameFileAnchorPath != want.AnchorPath {
+		t.Fatalf("trace = %#v, want same-file rescue telemetry", traces)
+	}
+}
+
+func TestSelectSameFileCandidatesRejectsCandidatesOutsideWindow(t *testing.T) {
+	nodes := make([]graph.Node, sameFileCandidateWindow+1)
+	ranked := make([]rankedNode, len(nodes))
+	for position := range nodes {
+		nodes[position] = graph.Node{
+			ID: fmt.Sprintf("node-%04d", position), Kind: graph.NodeFunction,
+			Name: fmt.Sprintf("Node%d", position), Path: fmt.Sprintf("file-%04d.go", position),
+		}
+		ranked[position] = rankedNode{index: position, score: float64(len(nodes) - position)}
+	}
+	for position := 0; position < sameFileMinimumAnchors; position++ {
+		nodes[position].Path = "shared.go"
+	}
+	nodes[sameFileCandidateWindow].Path = "shared.go"
+	idx := NewIndex(graph.Graph{Nodes: nodes})
+	rescues := idx.selectSameFileCandidates(ranked, []string{nodes[0].ID}, nil, sameFileMinimumAnchors, 2)
+	if len(rescues) != 0 {
+		t.Fatalf("outside-window candidate was rescued: rescues=%#v", rescues)
+	}
+}
+
+func TestSelectSameFileCandidatesRequiresMinimumAnchors(t *testing.T) {
+	nodes := make([]graph.Node, sameFileMinimumAnchors+1)
+	ranked := make([]rankedNode, len(nodes))
+	for position := range nodes {
+		nodes[position] = graph.Node{
+			ID: fmt.Sprintf("node-%02d", position), Kind: graph.NodeFunction,
+			Name: fmt.Sprintf("Node%d", position), Path: "shared.go",
+		}
+		ranked[position] = rankedNode{index: position, score: float64(len(nodes) - position)}
+	}
+	idx := NewIndex(graph.Graph{Nodes: nodes})
+	rescues := idx.selectSameFileCandidates(ranked, []string{nodes[0].ID}, nil, sameFileMinimumAnchors-1, 1)
+	if len(rescues) != 0 {
+		t.Fatalf("candidate with only %d anchors was rescued: %#v", sameFileMinimumAnchors-1, rescues)
+	}
+}
+
 func TestRerankAffinityCandidatesRescuesConnectedBelowCutoffCandidate(t *testing.T) {
 	nodes := make([]graph.Node, maximumLexicalCandidates+4)
 	ranked := make([]rankedNode, len(nodes))
@@ -1092,7 +1175,7 @@ func TestPrioritizeGraphCandidatesReservesStructuralSlots(t *testing.T) {
 	}
 	delete(lexicalOnly, "node-4")
 	delete(lexicalOnly, "node-6")
-	gotNodes, gotOwners := prioritizeGraphCandidates(nodes, owners, lexicalOnly, 2, 2)
+	gotNodes, gotOwners := prioritizeGraphCandidates(nodes, owners, lexicalOnly, nil, 2, 2, shortlistSameFileSlot)
 	wantOwners := []string{"node-0", "node-1", "node-4", "node-6", "node-2", "node-3", "node-5"}
 	if !reflect.DeepEqual(gotOwners, wantOwners) {
 		t.Fatalf("owners = %v, want %v", gotOwners, wantOwners)
@@ -1101,6 +1184,25 @@ func TestPrioritizeGraphCandidatesReservesStructuralSlots(t *testing.T) {
 		if node.ID != gotOwners[position] {
 			t.Fatalf("node/owner mismatch at %d: %#v != %q", position, node, gotOwners[position])
 		}
+	}
+}
+
+func TestPrioritizeGraphCandidatesPlacesSameFileRescueAtConfiguredSlot(t *testing.T) {
+	nodes := make([]ContextNode, 7)
+	owners := make([]string, 7)
+	lexicalOnly := map[string]bool{}
+	for index := range nodes {
+		owners[index] = fmt.Sprintf("node-%d", index)
+		nodes[index] = ContextNode{ID: owners[index]}
+		lexicalOnly[owners[index]] = true
+	}
+	delete(lexicalOnly, "node-4")
+	delete(lexicalOnly, "node-6")
+	sameFileRescued := map[string]bool{"node-2": true}
+	_, gotOwners := prioritizeGraphCandidates(nodes, owners, lexicalOnly, sameFileRescued, 2, 3, 3)
+	wantOwners := []string{"node-0", "node-1", "node-4", "node-6", "node-2", "node-3", "node-5"}
+	if !reflect.DeepEqual(gotOwners, wantOwners) {
+		t.Fatalf("owners = %v, want same-file rescue after structural slots %v", gotOwners, wantOwners)
 	}
 }
 
