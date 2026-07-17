@@ -615,6 +615,44 @@ func TestRetrieveDistinguishesRankedShortlistSelectionFromTokenTruncation(t *tes
 	}
 }
 
+func TestRetrieveCandidateShortlistKeepsTopLexicalMatchThatIsNotASeed(t *testing.T) {
+	g := graph.Graph{Nodes: []graph.Node{
+		{ID: "seed", Kind: graph.NodeFunction, Name: "AssembleProviderInstanceRegistryLayerFixedSettingsWatcherControl"},
+		{ID: "gold", Kind: graph.NodeFunction, Name: "ProviderInstanceRegistryLayer"},
+		{ID: "other", Kind: graph.NodeFunction, Name: "SettingsWatcherLive"},
+	}}
+	idx := NewIndex(g)
+	question := "assemble a ProviderInstanceRegistry layer with fixed settings watcher control"
+	ranked := idx.rank(question)
+	if len(ranked) < 2 || ranked[1].index != idx.byID["gold"] {
+		t.Fatalf("fixture lexical order = %#v, want gold second", ranked)
+	}
+	result := mustRetrieve(t, idx, question, RetrieveOptions{
+		SeedLimit: 1, MaxNodes: 10, TokenBudget: 1_000, CandidateShortlist: true,
+	})
+	if !containsString(retrievalNodeIDs(result), "gold") || result.Nodes[1].ID != "gold" {
+		t.Fatalf("shortlist nodes = %#v, want non-seed lexical runner-up retained", result.Nodes)
+	}
+}
+
+func TestEligibleShortlistCandidateExcludesImportAndUnresolvedNoise(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		node graph.Node
+		want bool
+	}{
+		{name: "declaration", node: graph.Node{Kind: graph.NodeFunction}, want: true},
+		{name: "import", node: graph.Node{Kind: graph.NodeImport}, want: false},
+		{name: "unresolved call", node: graph.Node{Kind: graph.NodeFunction, Meta: map[string]string{"resolved": "false"}}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := eligibleShortlistCandidate(tc.node); got != tc.want {
+				t.Fatalf("eligibleShortlistCandidate() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRetrieveReportsTokenTruncationWhenTopCandidateCannotFit(t *testing.T) {
 	long := strings.Repeat("very-long-path-segment/", 40)
 	g := graph.Graph{Nodes: []graph.Node{{

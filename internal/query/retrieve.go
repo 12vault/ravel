@@ -260,7 +260,7 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 
 	adjacency, degree := idx.filteredAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, degree, normalized)
-	walk = idx.promoteAnchoredCandidates(walk, ranked)
+	walk = idx.promoteLexicalCandidates(walk, ranked, normalized.CandidateShortlist)
 	for seedID, edge := range seedEvidence {
 		if seedSet[seedID] {
 			walk.via[seedID] = cloneEdge(edge)
@@ -269,18 +269,22 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, degree, walk), nil
 }
 
-// promoteAnchoredCandidates exposes exact identifiers found in structured
-// import statements as compact lexical candidates without turning every
-// import into a traversal origin. This separates cheap discovery from graph
-// explanation and keeps broad queries bounded by their configured seed limit.
-func (idx *Index) promoteAnchoredCandidates(walk traversalResult, ranked []rankedNode) traversalResult {
+// promoteLexicalCandidates exposes ranked matches without turning every match
+// into a traversal origin. Candidate-shortlist mode is explicitly ranking
+// oriented, so it receives the leading lexical candidates; balanced context
+// keeps its legacy behavior and only promotes exact structured anchors.
+func (idx *Index) promoteLexicalCandidates(walk traversalResult, ranked []rankedNode, shortlist bool) traversalResult {
 	seen := make(map[string]bool, len(walk.order))
 	order := make([]string, 0, len(walk.order)+min(maximumLexicalCandidates, len(ranked)))
 	for _, candidate := range ranked {
-		if !candidate.anchored || len(order) >= maximumLexicalCandidates {
+		if (!shortlist && !candidate.anchored) || len(order) >= maximumLexicalCandidates {
 			continue
 		}
-		id := idx.docs[candidate.index].node.ID
+		node := idx.docs[candidate.index].node
+		if shortlist && !eligibleShortlistCandidate(node) {
+			continue
+		}
+		id := node.ID
 		if seen[id] {
 			continue
 		}
@@ -300,6 +304,13 @@ func (idx *Index) promoteAnchoredCandidates(walk traversalResult, ranked []ranke
 	}
 	walk.order = order
 	return walk
+}
+
+func eligibleShortlistCandidate(node graph.Node) bool {
+	if node.Kind == graph.NodeImport {
+		return false
+	}
+	return node.Meta == nil || node.Meta["resolved"] != "false"
 }
 
 func affectedDirection(relations []graph.EdgeKind) (Direction, error) {
