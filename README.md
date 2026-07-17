@@ -404,10 +404,11 @@ ravel audit --max-file-size 2097152 .
 ravel build --out /tmp/ravel-output .
 ravel build --no-call-graph .
 ravel build --jobs 2 .
+ravel build --force .
 ravel update .
 ```
 
-Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Tree-sitter analysis uses at most `analysis.jobs: 4` workers by default; `--jobs <n>` overrides it for one build or update. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json`, `output.markdownReport`, and `output.communityClustering` switches control generated artifacts and metadata. Community controls default to `output.communityGranularity: balanced` and `output.communityHubDegreeThreshold: 0` (automatic).
+Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Tree-sitter analysis uses at most `analysis.jobs: 4` workers by default; `--jobs <n>` overrides it for one build or update. Builds and updates reuse content hashes when a file's path, size, and nanosecond modification time are unchanged; use `--force` to rehash and reanalyze everything when a generator preserves that metadata. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json`, `output.markdownReport`, and `output.communityClustering` switches control generated artifacts and metadata. Community controls default to `output.communityGranularity: balanced` and `output.communityHubDegreeThreshold: 0` (automatic).
 
 ### Supported languages
 
