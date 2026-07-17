@@ -34,7 +34,7 @@ func InstallIntegration(opts IntegrationOptions) ([]string, error) {
 		return []string{instructions, settings}, nil
 	case "cursor":
 		path := filepath.Join(root, ".cursor", "rules", "ravel.mdc")
-		content := "---\ndescription: Use the local Ravel knowledge graph before broad repository searches\nalwaysApply: true\n---\n\n" + instructionBody()
+		content := "---\ndescription: Use Ravel to scope non-trivial coding tasks before broad repository searches\nalwaysApply: true\n---\n\n" + instructionBody()
 		return []string{path}, writeOwnedFile(path, content)
 	case "vscode", "copilot":
 		path := filepath.Join(root, ".github", "copilot-instructions.md")
@@ -128,7 +128,7 @@ func normalizeIntegration(platform string) string {
 }
 
 func instructionBody() string {
-	return "When `.reporavel/graph.json` exists, use `ravel context` for natural-language relationship questions and `ravel query` for exact lookups before broad source searches. Use `ravel explain`, `ravel path`, and the `ravel tech|understand|learn|diff` views for focused follow-up. Read `.reporavel/report.md` for an architecture overview. Treat inferred and unresolved relationships honestly."
+	return "When `.reporavel/graph.json` exists and a non-trivial coding task, bug investigation, or review has an unknown implementation location or change surface, run `ravel context \"<task>\"` before broad `rg`/`find` searches or opening many files. Use `ravel query` for exact symbol or path lookups, then `ravel explain` or `ravel path` for focused follow-up. Before modifying a selected shared symbol or file, use `ravel affected <target>` to find callers, tests, importers, and dependents. If source may have changed since the graph was loaded, refresh it once with `ravel update .`. Treat the graph as a map: read the returned source before editing and verify changes against source and tests. Skip graph calls for trivial known-file or local edits, or when the needed context is already loaded. Read `.reporavel/report.md` for an architecture overview. Treat inferred and unresolved relationships honestly."
 }
 
 func integrationInstructions(name string) string {
