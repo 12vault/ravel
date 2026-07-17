@@ -5,7 +5,6 @@
 <p align="center">
   <a href="https://github.com/12vault/ravel/actions/workflows/go.yml"><img src="https://github.com/12vault/ravel/actions/workflows/go.yml/badge.svg?branch=main" alt="Go checks"></a>
   <a href="https://github.com/12vault/ravel/releases"><img src="https://img.shields.io/github/v/release/12vault/ravel?display_name=tag&sort=semver" alt="Latest release"></a>
-  <a href="https://pkg.go.dev/github.com/12vault/ravel"><img src="https://pkg.go.dev/badge/github.com/12vault/ravel.svg" alt="Go Reference"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/12vault/ravel" alt="MIT License"></a>
 </p>
 
