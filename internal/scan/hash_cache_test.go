@@ -1,9 +1,11 @@
 package scan
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -185,4 +187,38 @@ func readStatHashCachePayload(t *testing.T, path string) statHashCachePayload {
 		t.Fatal(err)
 	}
 	return payload
+}
+
+func BenchmarkScanWithStatHashCache(b *testing.B) {
+	root := b.TempDir()
+	content := bytes.Repeat([]byte("package benchmark\n// hash payload\n"), 4096)
+	for index := 0; index < 512; index++ {
+		path := filepath.Join(root, "file-"+strconv.Itoa(index)+".go")
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			b.Fatal(err)
+		}
+	}
+	cfg := config.Default()
+	cfg.Scan.MaxTotalBytes = 128 << 20
+	options := Options{HashCachePath: filepath.Join(cfg.Output.Dir, ".state", "cache", "stat-index-v1.json")}
+	if _, err := ScanWithOptions(root, cfg, nil, options); err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("full-hash", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := Scan(root, cfg); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("stat-index", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := ScanWithOptions(root, cfg, nil, options); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
