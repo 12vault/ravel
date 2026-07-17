@@ -43,6 +43,11 @@ const (
 	candidateBudgetPercent   = 92
 	shortlistLexicalPrefix   = 12
 	shortlistGraphReserve    = 8
+	shortlistAffinityRescues = 2
+	affinityRerankWindow     = 1_024
+	affinityMaxDepth         = 3
+	affinityNeighborLimit    = 256
+	affinityFrontierLimit    = 4_096
 	traceReachabilityLimit   = 20_000
 	// Affected bootstrap seeds include the target plus bounded source/container
 	// and symbol nodes. This prevents very large files or packages from turning
@@ -289,6 +294,9 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 
 	adjacency := idx.newQueryAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, normalized)
+	if normalized.CandidateShortlist {
+		ranked = idx.rerankAffinityCandidates(ranked, seedIDs, adjacency, shortlistLexicalPrefix, shortlistAffinityRescues)
+	}
 	traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, ranked, seedSet, walk, normalized.CandidateShortlist)
 	idx.diagnoseTraversalExclusions(traces, seedIDs, seedSet, scores, adjacency, normalized, walk)
 	walk = idx.promoteLexicalCandidates(walk, ranked, normalized.CandidateShortlist)
@@ -298,6 +306,121 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 		}
 	}
 	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, adjacency.degree, walk, traces), nil
+}
+
+// rerankAffinityCandidates gives a small number of below-cutoff candidates a
+// shortlist position when bounded graph propagation connects them to lexical
+// seeds. The leading lexical prefix remains stable.
+func (idx *Index) rerankAffinityCandidates(ranked []rankedNode, seedIDs []string, adjacency *queryAdjacency, prefix, rescueLimit int) []rankedNode {
+	if rescueLimit <= 0 || len(ranked) <= maximumLexicalCandidates || prefix >= maximumLexicalCandidates {
+		return ranked
+	}
+	rankByID := make(map[string]int, len(ranked))
+	for position, candidate := range ranked {
+		rankByID[idx.docs[candidate.index].node.ID] = position
+	}
+	frontier := map[string]float64{}
+	affinity := map[string]float64{}
+	for _, seedID := range seedIDs {
+		weight := 1.0
+		if position, ok := rankByID[seedID]; ok {
+			weight = 1.0 / float64(position+1)
+		}
+		frontier[seedID] = max(frontier[seedID], weight)
+		affinity[seedID] = max(affinity[seedID], weight)
+	}
+	for depth := 0; depth < affinityMaxDepth && len(frontier) > 0; depth++ {
+		next := map[string]float64{}
+		for nodeID, weight := range frontier {
+			neighbors := adjacency.neighborsOf(nodeID)
+			degreePenalty := math.Sqrt(float64(max(1, len(neighbors))))
+			for _, edge := range neighbors[:min(len(neighbors), affinityNeighborLimit)] {
+				nextID := adjacency.nodeID(edge)
+				propagated := weight / degreePenalty
+				if propagated > next[nextID] {
+					next[nextID] = propagated
+				}
+				if propagated > affinity[nextID] {
+					affinity[nextID] = propagated
+				}
+			}
+		}
+		frontier = strongestAffinity(next, affinityFrontierLimit)
+	}
+	type rescueCandidate struct {
+		position int
+		affinity float64
+		score    float64
+	}
+	windowEnd := min(len(ranked), affinityRerankWindow)
+	candidates := make([]rescueCandidate, 0, windowEnd-maximumLexicalCandidates)
+	for position := maximumLexicalCandidates; position < windowEnd; position++ {
+		node := idx.docs[ranked[position].index].node
+		if !eligibleShortlistCandidate(node) || affinity[node.ID] == 0 {
+			continue
+		}
+		candidates = append(candidates, rescueCandidate{
+			position: position, affinity: affinity[node.ID], score: ranked[position].score,
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if candidates[i].affinity != candidates[j].affinity {
+			return candidates[i].affinity > candidates[j].affinity
+		}
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score > candidates[j].score
+		}
+		return candidates[i].position < candidates[j].position
+	})
+	selected := map[int]bool{}
+	for _, candidate := range candidates {
+		if len(selected) >= rescueLimit {
+			break
+		}
+		selected[candidate.position] = true
+	}
+	if len(selected) == 0 {
+		return ranked
+	}
+	result := make([]rankedNode, 0, len(ranked))
+	result = append(result, ranked[:prefix]...)
+	for _, candidate := range candidates {
+		if selected[candidate.position] {
+			result = append(result, ranked[candidate.position])
+		}
+	}
+	for position, candidate := range ranked {
+		if position < prefix || selected[position] {
+			continue
+		}
+		result = append(result, candidate)
+	}
+	return result
+}
+
+func strongestAffinity(values map[string]float64, limit int) map[string]float64 {
+	if len(values) <= limit {
+		return values
+	}
+	type weightedNode struct {
+		id     string
+		weight float64
+	}
+	ordered := make([]weightedNode, 0, len(values))
+	for id, weight := range values {
+		ordered = append(ordered, weightedNode{id: id, weight: weight})
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].weight != ordered[j].weight {
+			return ordered[i].weight > ordered[j].weight
+		}
+		return ordered[i].id < ordered[j].id
+	})
+	result := make(map[string]float64, limit)
+	for _, node := range ordered[:limit] {
+		result[node.id] = node.weight
+	}
+	return result
 }
 
 func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet map[string]bool, walk traversalResult, shortlist bool) []RetrievalTrace {

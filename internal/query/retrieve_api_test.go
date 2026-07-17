@@ -946,6 +946,30 @@ func TestRetrievalTraceDiagnosesLexicalPromotionCutoff(t *testing.T) {
 	}
 }
 
+func TestRerankAffinityCandidatesRescuesConnectedBelowCutoffCandidate(t *testing.T) {
+	nodes := make([]graph.Node, maximumLexicalCandidates+4)
+	ranked := make([]rankedNode, len(nodes))
+	for position := range nodes {
+		nodes[position] = graph.Node{
+			ID: fmt.Sprintf("node-%03d", position), Kind: graph.NodeFunction,
+			Name: fmt.Sprintf("Node%d", position),
+		}
+		ranked[position] = rankedNode{index: position, score: float64(len(nodes) - position)}
+	}
+	g := graph.Graph{Nodes: nodes, Edges: []graph.Edge{
+		testQueryEdge(graph.EdgeCalls, nodes[0].ID, nodes[maximumLexicalCandidates].ID),
+	}}
+	idx := NewIndex(g)
+	options := normalizedRetrieveOptions{RetrieveOptions: RetrieveOptions{Direction: DirectionBoth}}
+	got := idx.rerankAffinityCandidates(ranked, []string{nodes[0].ID}, idx.newQueryAdjacency(options, nil), 2, 2)
+	if got[0].index != 0 || got[1].index != 1 || got[2].index != maximumLexicalCandidates {
+		t.Fatalf("leading reranked indexes = [%d %d %d], want [0 1 %d]", got[0].index, got[1].index, got[2].index, maximumLexicalCandidates)
+	}
+	if len(got) != len(ranked) {
+		t.Fatalf("reranked length = %d, want %d", len(got), len(ranked))
+	}
+}
+
 func TestPrioritizeGraphCandidatesReservesStructuralSlots(t *testing.T) {
 	nodes := make([]ContextNode, 7)
 	owners := make([]string, 7)
