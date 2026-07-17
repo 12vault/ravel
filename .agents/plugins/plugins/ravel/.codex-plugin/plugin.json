@@ -1,6 +1,6 @@
 {
   "name": "ravel",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Build and explore safe local knowledge graphs for code, documents, PDFs, and schemas.",
   "author": {
     "name": "Ravel Labs"
