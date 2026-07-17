@@ -1,6 +1,6 @@
 ---
 name: ravel
-description: Build, enrich, query, explain, visualize, and teach codebase or document knowledge graphs with Ravel. Use when the user invokes $ravel or /ravel; asks to understand architecture, technologies, business domains, change impact, onboarding, docs, PDFs, or schemas; or wants graph-first repository analysis across any programming language.
+description: Build, enrich, query, explain, visualize, and teach codebase or document knowledge graphs with Ravel. Use when the user invokes $ravel or /ravel; asks to locate implementation context for a non-trivial coding task; asks to understand architecture, technologies, business domains, change impact, onboarding, docs, PDFs, or schemas; or wants graph-first repository analysis across any programming language.
 ---
 
 # Ravel
@@ -14,6 +14,7 @@ Use the Go CLI for deterministic scanning, storage, queries, and validation. Use
 - `ravel learn`: create dependency-ordered tours and onboarding material. Read `references/workflows.md`.
 - `ravel diff`: analyze the impact of current changes. Read `references/workflows.md`.
 - `ravel docs`, `ravel pdf`, or `ravel schema`: ingest non-code sources. Read `references/corpus.md`.
+- Non-trivial coding tasks: when the implementation files, symbols, or change surface are not already known, run `ravel context "<user task>"` before broad repository search or opening many files. Refine exact targets with `ravel query`, `ravel explain`, or `ravel path`, then run `ravel affected <target>` before editing a selected shared symbol or file. Treat the graph as a map: read the returned source and tests before changing code. Skip this step for trivial, known-file, or strictly local edits and when sufficient context is already loaded.
 - Natural-language relationship questions: prefer `ravel context` for a connected, token-bounded subgraph. Use `ravel query` for a short exact/lexical result list, then `ravel path` or `ravel explain` for a named target.
 - Read compact truncation reasons literally: `token_budget` may justify raising `--token-budget`, while `branch_limit` requires narrower relations/depth or a larger `--branch-fanout`. More output tokens do not reopen a pruned traversal branch.
 - Reverse-impact questions: use `ravel affected <file|symbol|node-id>` for incoming callers, references, implementers, importers, and dependents. Its default impact filter excludes generic containment noise. Files bootstrap direct definitions; packages/modules/directories bootstrap directly contained files plus direct definitions, capped at 20 origins. It does not recursively expand repository or nested-directory trees; use changed-file inputs or `ravel diff` for that scope. Unresolved targets remain errors rather than guesses.
@@ -29,7 +30,7 @@ Use the Go CLI for deterministic scanning, storage, queries, and validation. Use
 ## Core workflow
 
 1. After bootstrap, check for `.reporavel/graph.json`. When it exists, run `ravel update <target>` once before reading or querying the graph. This local, hash-aware refresh needs no additional consent; report changed paths or refresh failures, and never hide a stale-graph warning.
-2. Read `.reporavel/report.md` after the refresh. Before broad source search, use `ravel context "<question>"`; use `ravel query` when only a symbol or path lookup is needed.
+2. Read `.reporavel/report.md` after the refresh. For a non-trivial coding task with an unknown implementation location or change surface, use `ravel context "<user task>"` before broad source search; use `ravel query` when only a symbol or path lookup is needed, and `ravel affected <target>` before changing a selected shared target.
 3. When no graph exists, run `ravel audit <target>`, show the user what will be read, and ask before the initial `ravel build <target>`.
 4. When an update invalidates agent enrichment needed by the request, read `references/workflows.md` and `references/orchestration.md`, use the changed paths recorded by the update, and rerun only the affected roles. Do not redo unaffected enrichment.
 5. For enrichment workflows, run `ravel plan <route> --json` and dispatch every ready role. Parallelize only tasks whose dependencies are complete.

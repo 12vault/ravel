@@ -145,6 +145,8 @@ ravel install --project --platform codex
 
 That command installs the complete skill bundle: orchestration instructions, eight role prompts, references, and launchers. Marketplace packages also include native Ravel binaries for macOS, Linux, and Windows on amd64 and arm64. If `ravel` is not already on `PATH`, the skill uses the matching bundled binary in place, with no initial download or separate installation.
 
+Project installs for supported assistants also add an owned query-first integration. When a graph exists and a non-trivial coding task has an unknown implementation location or change surface, the assistant is told to run `ravel context "<user task>"` before broad repository search, refine exact targets, run `ravel affected <target>` before changing shared code, and then verify the returned source and tests. Trivial known-file and strictly local edits skip the graph step.
+
 Then invoke the skill in Codex:
 
 ```text
@@ -438,7 +440,9 @@ ravel benchmark --graph .reporavel --dataset benchmarks/ravel-retrieval.jsonl --
 
 ## Agent workflow
 
-The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a progressive agent workflow for technical maps, architecture understanding, business domains, change impact, documents, PDFs, schemas, articles, and dependency-ordered learning tours. Installers and marketplace packages publish it as the required uppercase `SKILL.md`.
+The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a progressive agent workflow for coding-context discovery, technical maps, architecture understanding, business domains, change impact, documents, PDFs, schemas, articles, and dependency-ordered learning tours. Installers and marketplace packages publish it as the required uppercase `SKILL.md`.
+
+For everyday coding work, the query-first loop is: run `context` with the user's task, refine with `query`, `explain`, or `path`, check the selected target with `affected`, then read the returned implementation and tests before editing. The graph narrows exploration; it does not replace source inspection or verification.
 
 The intended loop is:
 
@@ -452,7 +456,7 @@ Use `ravel tools` before document, PDF, or schema work. It discovers local extra
 
 ## Native integrations and hooks
 
-Project installs place the portable skill in the platform's native directory. For Codex, Claude Code, Cursor, VS Code/Copilot, Gemini CLI, and OpenCode, Ravel also installs owned project instructions, rules, or hooks. Existing configuration is preserved, repeated installs are idempotent, and uninstall removes only Ravel-owned content.
+Project installs place the portable skill in the platform's native directory. For Codex, Claude Code, Cursor, VS Code/Copilot, Gemini CLI, and OpenCode, Ravel also installs owned project instructions, rules, or hooks that apply the same query-first coding workflow. Existing configuration is preserved, repeated installs are idempotent, and uninstall removes only Ravel-owned content.
 
 Manage a native integration directly:
 
