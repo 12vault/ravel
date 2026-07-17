@@ -2,6 +2,34 @@
 
 This file is the human-readable record of Ravel vs Graphify runs. Raw, machine-readable results live in [`results/`](results/).
 
+## 2026-07-17: T3 Code retrieval ranking and adjacency verification
+
+This Ravel-only working-tree verification reused the pinned T3 Code graph and all 487 documentation-derived questions from the persistent TypeScript run below. Graphify was not rerun. The comparison isolates commit `018ccc2`, which builds compact directional adjacency and degree indexes once, filters and sorts only the neighbor lists actually expanded by traversal, and reuses outgoing adjacency when collecting result edges.
+
+The cached representation preserved every measured retrieval and payload result from the post-ranking baseline:
+
+| Quality measurement | Before adjacency cache | Cached adjacency |
+| --- | ---: | ---: |
+| Exact declaration retrieval | 183/487 (37.58%) | 183/487 (37.58%) |
+| MRR | 0.1431 | 0.1431 |
+| Rank-one hits | 39 | 39 |
+| Mean payload | 1,855 tokens | 1,855 tokens |
+| Payload p95 | 1,924 tokens | 1,924 tokens |
+
+On the synthetic 1,000-node query benchmark, median BFS retrieval improved from 1.987 ms to 1.309 ms, allocated bytes fell from 1,908,813 to 1,146,473 per operation, and allocations fell from 9,451 to 4,431 per operation. That is 34.1% less time, 39.9% fewer bytes, and 53.1% fewer allocations. The cost moves to reusable index construction: median index-build time changed from 10.121 ms to 10.237 ms (+1.1%) and allocated bytes from 9,133,475 to 9,207,337 (+0.8%). Retrieval medians use three baseline and five updated trials; index-build medians use three trials each.
+
+| Warm latency across 487 T3 questions | Before adjacency cache | Cached adjacency, repeat |
+| --- | ---: | ---: |
+| Mean | 1,371.54 ms | 1,177.23 ms |
+| p50 | 1,271.12 ms | 1,061.77 ms |
+| p95 | 2,224.02 ms | 2,196.26 ms |
+| p99 | 2,905.12 ms | 3,116.36 ms |
+| Maximum | 5,423.56 ms | 6,915.08 ms |
+
+The full-corpus repeat improved mean latency by 14.2%, p50 by 16.5%, and p95 by 1.2%. Its p99 and maximum were 7.3% and 27.5% higher, but those separate-run extremes did not reproduce when isolated: ten direct runs of the slow `PREVIEW_WEBVIEW_PREFERENCES` case improved from 6,167.84 ms mean / 7,241.84 ms maximum to 5,540.74 ms mean / 5,828.33 ms maximum. Treat the full-run p99 and maximum differences as machine-state noise, not a demonstrated tail regression.
+
+Regression coverage compares cached adjacency with the previous construction across outgoing, incoming, bidirectional, relation-filtered, direction-preferred, community-aware, self-loop, and invalid-endpoint cases. It also verifies that only expanded nodes are sorted and that the histogram hub threshold matches the exact 99th percentile. The full Go suite, the 32-test Python benchmark suite, and the query package under the race detector passed. Aggregate measurements, hashes, trial counts, and limitations are recorded in the [`machine-readable summary`](results/t3code-typescript-ravel-query-adjacency-working-tree-2026-07-17.json).
+
 ## 2026-07-17: T3 Code TypeScript extraction development verification
 
 This Ravel-only working-tree verification reused the pinned, documentation-stripped T3 Code corpus and all 487 questions from the persistent run below. Graphify was not rerun; its archived result is included only as the fixed comparison point. The change adds syntax-backed module-level TypeScript/JavaScript bindings and narrowly recovers valid TypeScript declarations that the embedded grammar represents as `ERROR` nodes. Recovered declarations are marked partial rather than presented as complete parses.

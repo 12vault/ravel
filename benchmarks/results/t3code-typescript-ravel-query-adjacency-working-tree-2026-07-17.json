@@ -1,0 +1,143 @@
+{
+  "benchmark": "T3 Code TypeScript Ravel query adjacency development verification",
+  "date": "2026-07-17",
+  "environment": {
+    "cpu": "Apple M1 Pro",
+    "os": "darwin",
+    "arch": "arm64"
+  },
+  "source": {
+    "repository": "https://github.com/pingdotgg/t3code",
+    "revision": "2a33a18716854b8d07378008cf3101ad999209ae",
+    "caseCount": 487,
+    "casesPath": "benchmarks/results/t3code-typescript-2a33a187-cases.jsonl",
+    "casesSha256": "10bc04b7cabeb2b926256b6149995b1d88911672e3a6b9ce0d8394b9a151f4dd",
+    "graphSha256": "18cccfde72c18e36afebb587c53327ca503bef96e87df83372fce6d9d42143ee"
+  },
+  "ravel": {
+    "implementationCommit": "018ccc23549e0445c68e8479b93d3867c6969ed6",
+    "preChangeCommit": "816d671a6ef5358f1a7618eaa299f8b73312496f",
+    "profile": "broad",
+    "tokenBudget": 2000,
+    "baselineExecutableSha256": "3d6f0643fe5f962d0997cfa17add268ef6affbbe2431fc54bbbec5a0a4c3fb1a",
+    "updatedExecutableSha256": "e4cd41ec3cf1ad25d62d8a0bedcb31eaf160c7edd5e6fbd225792fdd18af9c79"
+  },
+  "quality": {
+    "baseline": {
+      "exactDeclarationHits": 183,
+      "exactDeclarationRecall": 0.3757700205338809,
+      "mrr": 0.14314722754227271,
+      "rankOneHits": 39,
+      "meanPayloadTokens": 1855.447638603696,
+      "p95PayloadTokens": 1924
+    },
+    "updated": {
+      "exactDeclarationHits": 183,
+      "exactDeclarationRecall": 0.3757700205338809,
+      "mrr": 0.14314722754227271,
+      "rankOneHits": 39,
+      "meanPayloadTokens": 1855.447638603696,
+      "p95PayloadTokens": 1924
+    }
+  },
+  "microbenchmark": {
+    "graphNodes": 1000,
+    "retrieveBfs": {
+      "baselineTrials": 3,
+      "updatedTrials": 5,
+      "baselineMedianNsPerOp": 1986641,
+      "updatedMedianNsPerOp": 1309494,
+      "timeChangePercent": -34.085,
+      "baselineBytesPerOp": 1908813,
+      "updatedBytesPerOp": 1146473,
+      "bytesChangePercent": -39.938,
+      "baselineAllocationsPerOp": 9451,
+      "updatedAllocationsPerOp": 4431,
+      "allocationsChangePercent": -53.116
+    },
+    "indexBuild": {
+      "baselineTrials": 3,
+      "updatedTrials": 3,
+      "baselineMedianNsPerOp": 10121214,
+      "updatedMedianNsPerOp": 10236564,
+      "timeChangePercent": 1.140,
+      "baselineBytesPerOp": 9133475,
+      "updatedBytesPerOp": 9207337,
+      "bytesChangePercent": 0.809
+    }
+  },
+  "fullCorpusLatencyMs": {
+    "baseline": {
+      "mean": 1371.5423792772074,
+      "p50": 1271.117,
+      "p95": 2224.022791,
+      "p99": 2905.119375,
+      "max": 5423.558375
+    },
+    "updatedRunOne": {
+      "mean": 1239.8882953470227,
+      "p50": 1112.146292,
+      "p95": 2363.930333,
+      "p99": 3355.504958,
+      "max": 6700.781792
+    },
+    "updatedRunTwo": {
+      "startup": 5946.617583,
+      "mean": 1177.2278904640657,
+      "p50": 1061.773167,
+      "p95": 2196.2605,
+      "p99": 3116.363959,
+      "max": 6915.081917
+    }
+  },
+  "isolatedTailQuery": {
+    "case": "PREVIEW_WEBVIEW_PREFERENCES",
+    "trialsPerExecutable": 10,
+    "baselineMs": [
+      5858.33175,
+      6432.436709,
+      6589.26875,
+      6000.68275,
+      5803.644959,
+      6451.655875,
+      7241.843375,
+      5997.810583,
+      5824.992208,
+      5477.684958
+    ],
+    "updatedMs": [
+      5686.600375,
+      5415.877125,
+      5460.422458,
+      5567.921375,
+      5828.331292,
+      5532.063625,
+      5486.830542,
+      5469.113291,
+      5492.85025,
+      5467.417375
+    ],
+    "baseline": {
+      "mean": 6167.8351917,
+      "p50": 5999.2466665,
+      "max": 7241.843375
+    },
+    "updated": {
+      "mean": 5540.7427708,
+      "p50": 5489.840396,
+      "max": 5828.331292
+    }
+  },
+  "verification": [
+    "go test ./...",
+    "go test -race ./internal/query",
+    "python3 -m unittest discover -s benchmarks -p 'test_*.py' (32 tests)",
+    "cached adjacency compared with legacy construction across direction, filtering, ordering, community, self-loop, and invalid-endpoint cases"
+  ],
+  "limitations": [
+    "This is a Ravel-only development verification; Graphify was not rerun.",
+    "The full-corpus latency samples were separate runs under changing machine state, so p99 and maximum differences are not treated as deterministic regressions.",
+    "The microbenchmark is synthetic and reports medians from different trial counts for baseline and updated retrieval.",
+    "The benchmarked updated executable predates two final non-impacting changes in the implementation commit: cached outgoing-edge lookup outside Retrieve and a hub-threshold fallback not exercised by this graph."
+  ]
+}
