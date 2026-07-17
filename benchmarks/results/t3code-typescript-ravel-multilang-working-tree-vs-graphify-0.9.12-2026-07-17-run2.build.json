@@ -74,8 +74,8 @@
   "graphifyGraphEdges": 35998,
   "graphifyGraphNodes": 18455,
   "queryGraphs": {
-    "graphify": "/private/tmp/t3code-typescript-rerun-2a33a187-20260717/graphify-graph-2/graphify-out/graph.json",
-    "ravel": "/private/tmp/t3code-typescript-rerun-2a33a187-20260717/ravel-graph-2"
+    "graphify": "<benchmark-workspace>/graphify-graph-2/graphify-out/graph.json",
+    "ravel": "<benchmark-workspace>/ravel-graph-2"
   },
   "ravelBuildMs": 23597.573979466688,
   "ravelDeclarationCoverage": {

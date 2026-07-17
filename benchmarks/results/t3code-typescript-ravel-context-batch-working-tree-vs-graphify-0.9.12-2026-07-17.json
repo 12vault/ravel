@@ -95,7 +95,7 @@
     "truncationRate": 0.9075975359342916
   },
   "graphifyExecutable": {
-    "path": "/Users/12ya/.local/share/uv/tools/graphifyy/bin/graphify",
+    "path": "<graphify-executable>",
     "sha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
   },
   "graphifyVersion": "graphify 0.9.12",
@@ -176,7 +176,7 @@
     "truncationRate": 0.0
   },
   "ravelExecutable": {
-    "path": "/private/tmp/ravel-context-batch-fixed",
+    "path": "<ravel-executable>",
     "sha256": "dfd59dbb55c8ad5c8dceae78903f7fb210de7b55a14d32b0becb35fd572e5c07"
   },
   "ravelExecution": {
@@ -220,8 +220,8 @@
     "--candidate-shortlist"
   ],
   "ravelVersion": "ravel v0.2.5",
-  "resultsSha256": "2b2f97488226d117d2b9e3d7a645c2bf7b7dc81609fa30d46d920fa3bba12209",
-  "runConfigSha256": "3ccaf62a4d60b4422122bafb5c87bcca7e2b10cc3fbfd0adede91729150ce35d",
+  "resultsSha256": "1981d396729d023c3b8d7c0a0a35044208b7776b07b7280074e6588321dc280f",
+  "runConfigSha256": "829d98a6c3b9dcafb0a2e739c9ab2bbe86b67d1b197eae63128a4e91c5a83a78",
   "sharedCorpusFiles": 1952,
   "source": {
     "excludedTrackedRoot": ".repos",

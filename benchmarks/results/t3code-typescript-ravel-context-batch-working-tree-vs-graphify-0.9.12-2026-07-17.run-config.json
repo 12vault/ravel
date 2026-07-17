@@ -3,7 +3,7 @@
   "buildOrder": "balanced-two-round",
   "cases": 487,
   "graphifyExecutable": {
-    "path": "/Users/12ya/.local/share/uv/tools/graphifyy/bin/graphify",
+    "path": "<graphify-executable>",
     "sha256": "90ab6099efdd91f20dad4d6aa51cf6dee2712bc2e6d6ef5ef7fb59ac07d6a021"
   },
   "keepItems": 20,
@@ -11,7 +11,7 @@
   "queryMode": "typescript-jsdoc-symbol-redacted-v1",
   "queryOrder": "alternating-by-selection-key",
   "ravelExecutable": {
-    "path": "/private/tmp/ravel-context-batch-fixed",
+    "path": "<ravel-executable>",
     "sha256": "dfd59dbb55c8ad5c8dceae78903f7fb210de7b55a14d32b0becb35fd572e5c07"
   },
   "ravelExecutionAdapterVersion": "ravel-context-batch-v1",
