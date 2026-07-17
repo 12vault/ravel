@@ -58,6 +58,8 @@ Keep each role scoped to explicit files from the audited corpus. Do not let agen
 
 On the first invocation, run `scripts/ravel.sh version` on macOS/Linux or `scripts/ravel.ps1 version` on Windows, then use that launcher for every Ravel command. The launcher compares the global CLI with the version in `VERSION`, entirely locally. When the global CLI is older, it selects the bundled binary and prints a short, non-blocking update notice; surface that notice to the user and continue the task. The source-checkout launcher may select the synchronized repository marketplace binary. It never downloads, installs, or updates anything.
 
+The selected CLI automatically refreshes only Ravel skill bundles and static project instructions that already contain Ravel-owned installation markers. This lets binary and marketplace updates migrate existing integrations on their next invocation without creating a new platform integration or replacing an existing hook command. Set `RAVEL_NO_AUTO_REFRESH=1` to disable this local maintenance.
+
 If the packaged launcher is absent, probe `ravel context --help`. If that fails, stop and ask before installing or updating Ravel. Never invoke `ravel update-check` or `ravel self-update` automatically during a skill task: `update-check` performs an explicit release-metadata network request, and `self-update` downloads and replaces software. After resolving the command, continue from `ravel audit`.
 
 ## Safety
@@ -66,4 +68,4 @@ If the packaged launcher is absent, probe `ravel context --help`. If that fails,
 - Never read `.env`, keys, certificates, credential stores, or ignored files. Ravel applies `.gitignore`, credential-directory, and key-material exclusions before content reads; stop if an audit contradicts that policy.
 - Include every evidence file in fragment `sourcePaths`. Tag direct evidence with `confidence: extracted` and `evidence: path:line`; tag agent reasoning with `confidence: inferred` and a concrete `rationale`.
 - Treat unresolved and ambiguous relationships honestly.
-- Never install hooks, dependencies, models, or integrations without consent.
+- Never create new hooks, dependencies, models, or integrations without consent. Automatic refresh may maintain only previously installed Ravel-owned skills and instructions; it must not expand platform or project scope.

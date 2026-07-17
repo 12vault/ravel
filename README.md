@@ -511,7 +511,9 @@ ravel self-update --platforms codex,claude
 ravel self-update --platforms codex,claude --project
 ```
 
-The command downloads the selected release archive and checksum, verifies it, atomically replaces the binary, then refreshes only the explicitly listed skill destinations. Marketplace-managed skills update through their marketplace client.
+The command downloads the selected release archive and checksum, verifies it, and atomically replaces the binary. The replacement binary then refreshes any Ravel skill bundles already installed in standard user or project locations plus existing Ravel-owned static project instructions. Existing hook commands are preserved, and no new platform integration is created. The explicit `--platforms` flags still install or refresh the requested destinations when they are missing. Set `RAVEL_NO_AUTO_REFRESH=1` to disable automatic maintenance.
+
+Marketplace-managed skills update through their marketplace client. On the updated skill's first local launcher invocation, its bundled or selected CLI performs the same existing-installation refresh, so owned `AGENTS.md`, `CLAUDE.md`, Cursor, Copilot, Gemini, and OpenCode guidance does not remain stale.
 
 Installed Ravel skills perform a zero-network local version handshake on their first invocation. Their launcher compares the global CLI with the skill's `VERSION`; when the global CLI is older, it uses the bundled binary and prints a non-blocking update hint. It does not run `update-check` or `self-update` automatically.
 
