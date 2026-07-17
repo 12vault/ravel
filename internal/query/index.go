@@ -24,6 +24,8 @@ const (
 	substringSourceBonus = 0.5
 	structuredNameBonus  = 100_000.0
 	structuredPathBonus  = 20_000.0
+	naturalLanguageTerms = 6
+	naturalExactScale    = 0.25
 )
 
 // Index is an immutable, reusable query index over a graph. It keeps retrieval
@@ -185,12 +187,12 @@ func (idx *Index) rankWithAnchors(text, anchorText string) []rankedNode {
 	}
 	candidates := idx.candidates(terms)
 	phrase := strings.Join(terms, " ")
-	rawTermCounts := termCounts(searchTokens(anchorText))
+	rawTerms := searchTokens(anchorText)
 	anchors := extractStructuredQueryAnchors(anchorText)
 	ranked := make([]rankedNode, 0, len(candidates))
 	for _, docIndex := range candidates {
 		doc := &idx.docs[docIndex]
-		score, matched, anchored := idx.score(doc, terms, phrase, rawTermCounts, anchors)
+		score, matched, anchored := idx.score(doc, terms, phrase, rawTerms, anchors)
 		if score > 0 {
 			ranked = append(ranked, rankedNode{index: docIndex, score: score, matchedTerms: matched, anchored: anchored})
 		}
@@ -209,7 +211,7 @@ func (idx *Index) rankWithAnchors(text, anchorText string) []rankedNode {
 	return ranked
 }
 
-func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTermCounts map[string]int, anchors structuredQueryAnchors) (float64, map[string]bool, bool) {
+func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTerms []string, anchors structuredQueryAnchors) (float64, map[string]bool, bool) {
 	matched := map[string]bool{}
 	score := 0.0
 	anchorScore, anchored := idx.structuredAnchorScore(doc, anchors)
@@ -232,18 +234,14 @@ func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTerm
 		nameMatch := false
 		switch {
 		case doc.nameText == term || strings.TrimSuffix(doc.nameText, " ()") == term:
-			tiered += exactNameBonus * idf
-			qualified := rawTermCounts[term] > 1 && (doc.pathTerms[term] > 0 || doc.packageTerms[term] > 0)
-			if !qualified {
-				for sourceTerm := range rawTermCounts {
-					if sourceTerm != term && doc.packageTerms[sourceTerm] > 0 {
-						qualified = true
-						break
-					}
-				}
+			exactBonus := exactNameBonus
+			if len(terms) > naturalLanguageTerms {
+				exactBonus *= naturalExactScale
 			}
+			tiered += exactBonus * idf
+			qualified := hasQualifiedNameEvidence(doc, term, rawTerms)
 			if graph.SymbolKind(doc.node.Kind) && qualified {
-				// A repeated package/path + symbol token (for example
+				// A repeated package + symbol token (for example
 				// "scan Scan"), or a package plus exact symbol (for
 				// example "query Search"), is a qualified-name signal.
 				// Keep it outside the broad-question coverage penalty so a
@@ -313,6 +311,29 @@ func (idx *Index) score(doc *indexedNode, terms []string, phrase string, rawTerm
 	// excerpt cannot drown out an exact imported identifier or path.
 	score += anchorScore
 	return score, matched, anchored
+}
+
+// hasQualifiedNameEvidence recognizes compact source-qualified lookups such as
+// "cache Cache" and "query Search". Requiring the qualifier and symbol to be
+// adjacent prevents unrelated words in long prose from turning an ordinary
+// exact-name match into a qualified symbol lookup.
+func hasQualifiedNameEvidence(doc *indexedNode, term string, rawTerms []string) bool {
+	for index, rawTerm := range rawTerms {
+		if rawTerm != term || index == 0 {
+			continue
+		}
+		qualifier := rawTerms[index-1]
+		if qualifier == term {
+			if doc.packageTerms[term] > 0 {
+				return true
+			}
+			continue
+		}
+		if doc.packageTerms[qualifier] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (idx *Index) structuredAnchorScore(doc *indexedNode, anchors structuredQueryAnchors) (float64, bool) {

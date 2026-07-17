@@ -137,6 +137,30 @@ func TestIndexPrefersSourceQualifiedExactSymbolOverVerboseCoverage(t *testing.T)
 	}
 }
 
+func TestIndexDoesNotInferQualificationFromDistantProse(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "noise", Kind: graph.NodeVariable, Name: "PREPARED", Path: "packages/client-runtime/src/connection/registry.test.ts", Package: "client-runtime"},
+		{ID: "gold", Kind: graph.NodeFunction, Name: "buildEnvironmentAuthHeaders", Path: "packages/client-runtime/src/state/environmentHttpAuth.ts", Package: "client-runtime"},
+	}
+	query := "Build the authorization headers for an authenticated environment HTTP request matching the credential the connection was prepared with"
+	results := NewIndex(graph.Graph{Nodes: nodes}).Search(query, 2)
+	if len(results) == 0 || results[0].Node.ID != "gold" {
+		t.Fatalf("ranked results = %#v, want the multi-term description match first", results)
+	}
+}
+
+func TestIndexDoesNotTreatJSDocLinkSyntaxAsSourceQualification(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "noise", Kind: graph.NodeFunction, Name: "run", Path: "apps/web/src/cloud/linkEnvironment.ts", Package: "apps/web/src/cloud"},
+		{ID: "gold", Kind: graph.NodeFunction, Name: "toRequestError", Path: "apps/server/src/provider/Layers/OpenCodeAdapter.ts", Package: "apps/server/src/provider/Layers"},
+	}
+	query := "Map a tagged OpenCodeRuntimeError produced by {@link runOpenCodeSdk} into the adapter boundary ProviderAdapterRequestError"
+	results := NewIndex(graph.Graph{Nodes: nodes}).Search(query, 2)
+	if len(results) == 0 || results[0].Node.ID != "gold" {
+		t.Fatalf("ranked results = %#v, want JSDoc link syntax left unqualified", results)
+	}
+}
+
 func TestIndexStronglyBoostsStructuredImportIdentifiersAndPaths(t *testing.T) {
 	tests := []struct {
 		name  string
