@@ -41,7 +41,12 @@ type Index struct {
 	trigramPostings   map[string][]int
 	averageLength     fieldLengths
 
-	edgeKinds map[graph.EdgeKind]bool
+	edgeKinds  map[graph.EdgeKind]bool
+	outgoing   [][]adjacentEdge
+	incoming   [][]adjacentEdge
+	outDegree  []int
+	inDegree   []int
+	bothDegree []int
 
 	idfMu    sync.RWMutex
 	idfCache map[string]float64
@@ -72,9 +77,9 @@ type fieldLengths struct {
 }
 
 type adjacentEdge struct {
-	nodeID   string
-	edge     graph.Edge
-	outgoing bool
+	nodeIndex int
+	edge      graph.Edge
+	outgoing  bool
 }
 
 type rankedNode struct {
@@ -127,14 +132,40 @@ func NewIndex(g graph.Graph) *Index {
 		idx.averageLength.id /= count
 		idx.averageLength.meta /= count
 	}
+	idx.outgoing = make([][]adjacentEdge, len(idx.docs))
+	idx.incoming = make([][]adjacentEdge, len(idx.docs))
+	idx.outDegree = make([]int, len(idx.docs))
+	idx.inDegree = make([]int, len(idx.docs))
+	idx.bothDegree = make([]int, len(idx.docs))
 	for _, edge := range g.Edges {
-		if _, fromOK := idx.byID[edge.From]; !fromOK {
+		fromIndex, fromOK := idx.byID[edge.From]
+		if !fromOK {
 			continue
 		}
-		if _, toOK := idx.byID[edge.To]; !toOK {
+		toIndex, toOK := idx.byID[edge.To]
+		if !toOK {
 			continue
 		}
 		idx.edgeKinds[edge.Kind] = true
+		idx.outDegree[fromIndex]++
+		idx.inDegree[toIndex]++
+		idx.bothDegree[fromIndex]++
+		if fromIndex != toIndex {
+			idx.bothDegree[toIndex]++
+		}
+	}
+	for docIndex := range idx.docs {
+		idx.outgoing[docIndex] = make([]adjacentEdge, 0, idx.outDegree[docIndex])
+		idx.incoming[docIndex] = make([]adjacentEdge, 0, idx.inDegree[docIndex])
+	}
+	for _, edge := range g.Edges {
+		fromIndex, fromOK := idx.byID[edge.From]
+		toIndex, toOK := idx.byID[edge.To]
+		if !fromOK || !toOK {
+			continue
+		}
+		idx.outgoing[fromIndex] = append(idx.outgoing[fromIndex], adjacentEdge{nodeIndex: toIndex, edge: edge, outgoing: true})
+		idx.incoming[toIndex] = append(idx.incoming[toIndex], adjacentEdge{nodeIndex: fromIndex, edge: edge, outgoing: false})
 	}
 	return idx
 }

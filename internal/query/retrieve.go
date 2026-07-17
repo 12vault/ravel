@@ -258,15 +258,15 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 		}
 	}
 
-	adjacency, degree := idx.filteredAdjacency(normalized, scores)
-	walk := idx.traverse(seedIDs, seedSet, adjacency, degree, normalized)
+	adjacency := idx.newQueryAdjacency(normalized, scores)
+	walk := idx.traverse(seedIDs, seedSet, adjacency, normalized)
 	walk = idx.promoteLexicalCandidates(walk, ranked, normalized.CandidateShortlist)
 	for seedID, edge := range seedEvidence {
 		if seedSet[seedID] {
 			walk.via[seedID] = cloneEdge(edge)
 		}
 	}
-	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, degree, walk), nil
+	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, adjacency.degree, walk), nil
 }
 
 // promoteLexicalCandidates exposes ranked matches without turning every match
@@ -461,11 +461,13 @@ func sortAffectedDefinitions(definitions []graph.Edge, impactCounts map[string]i
 
 func (idx *Index) outgoingEdges(from string, kind graph.EdgeKind) []graph.Edge {
 	var result []graph.Edge
-	for _, edge := range idx.graph.Edges {
-		if edge.From == from && edge.Kind == kind {
-			if _, ok := idx.byID[edge.To]; ok {
-				result = append(result, cloneEdge(edge))
-			}
+	docIndex, ok := idx.byID[from]
+	if !ok {
+		return result
+	}
+	for _, adjacent := range idx.outgoing[docIndex] {
+		if adjacent.edge.Kind == kind {
+			result = append(result, cloneEdge(adjacent.edge))
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -797,71 +799,132 @@ func (idx *Index) seedMatchedTerms(candidate rankedNode, terms []string) map[str
 	return matched
 }
 
-func (idx *Index) filteredAdjacency(options normalizedRetrieveOptions, scores map[string]int) (map[string][]adjacentEdge, map[string]int) {
-	adjacency := map[string][]adjacentEdge{}
-	add := func(from string, edge adjacentEdge) {
-		if options.filterEdges && !options.relationSet[edge.edge.Kind] {
-			return
-		}
-		adjacency[from] = append(adjacency[from], edge)
+type queryAdjacency struct {
+	idx       *Index
+	options   normalizedRetrieveOptions
+	scores    map[string]int
+	degree    []int
+	neighbors map[int][]adjacentEdge
+}
+
+func (idx *Index) newQueryAdjacency(options normalizedRetrieveOptions, scores map[string]int) *queryAdjacency {
+	return &queryAdjacency{
+		idx: idx, options: options, scores: scores,
+		degree: idx.degreeForOptions(options), neighbors: map[int][]adjacentEdge{},
 	}
-	for _, edge := range idx.graph.Edges {
-		if _, fromOK := idx.byID[edge.From]; !fromOK {
-			continue
-		}
-		if _, toOK := idx.byID[edge.To]; !toOK {
-			continue
-		}
+}
+
+func (idx *Index) degreeForOptions(options normalizedRetrieveOptions) []int {
+	if !options.filterEdges {
 		switch options.Direction {
 		case DirectionOut:
-			add(edge.From, adjacentEdge{nodeID: edge.To, edge: edge, outgoing: true})
+			return idx.outDegree
 		case DirectionIn:
-			add(edge.To, adjacentEdge{nodeID: edge.From, edge: edge, outgoing: false})
-		case DirectionBoth:
-			add(edge.From, adjacentEdge{nodeID: edge.To, edge: edge, outgoing: true})
-			if edge.From != edge.To {
-				add(edge.To, adjacentEdge{nodeID: edge.From, edge: edge, outgoing: false})
+			return idx.inDegree
+		default:
+			return idx.bothDegree
+		}
+	}
+	degree := make([]int, len(idx.docs))
+	for fromIndex, edges := range idx.outgoing {
+		for _, adjacent := range edges {
+			if !options.relationSet[adjacent.edge.Kind] {
+				continue
+			}
+			switch options.Direction {
+			case DirectionOut:
+				degree[fromIndex]++
+			case DirectionIn:
+				degree[adjacent.nodeIndex]++
+			case DirectionBoth:
+				degree[fromIndex]++
+				if fromIndex != adjacent.nodeIndex {
+					degree[adjacent.nodeIndex]++
+				}
 			}
 		}
 	}
-	degree := map[string]int{}
-	for _, doc := range idx.docs {
-		degree[doc.node.ID] = len(adjacency[doc.node.ID])
+	return degree
+}
+
+func (adjacency *queryAdjacency) degreeOf(nodeID string) int {
+	docIndex, ok := adjacency.idx.byID[nodeID]
+	if !ok {
+		return 0
 	}
-	for nodeID := range adjacency {
-		sort.SliceStable(adjacency[nodeID], func(i, j int) bool {
-			left := adjacency[nodeID][i]
-			right := adjacency[nodeID][j]
-			if options.directionPreference != "" && left.outgoing != right.outgoing {
-				if options.directionPreference == DirectionOut {
+	return adjacency.degree[docIndex]
+}
+
+func (adjacency *queryAdjacency) nodeID(edge adjacentEdge) string {
+	return adjacency.idx.docs[edge.nodeIndex].node.ID
+}
+
+func (adjacency *queryAdjacency) neighborsOf(nodeID string) []adjacentEdge {
+	docIndex, ok := adjacency.idx.byID[nodeID]
+	if !ok {
+		return nil
+	}
+	if cached, ok := adjacency.neighbors[docIndex]; ok {
+		return cached
+	}
+	neighbors := make([]adjacentEdge, 0, adjacency.degree[docIndex])
+	add := func(edges []adjacentEdge, skipSelf bool) {
+		for _, edge := range edges {
+			if skipSelf && edge.nodeIndex == docIndex {
+				continue
+			}
+			if adjacency.options.filterEdges && !adjacency.options.relationSet[edge.edge.Kind] {
+				continue
+			}
+			neighbors = append(neighbors, edge)
+		}
+	}
+	switch adjacency.options.Direction {
+	case DirectionOut:
+		add(adjacency.idx.outgoing[docIndex], false)
+	case DirectionIn:
+		add(adjacency.idx.incoming[docIndex], false)
+	case DirectionBoth:
+		add(adjacency.idx.outgoing[docIndex], false)
+		add(adjacency.idx.incoming[docIndex], true)
+	}
+	if len(neighbors) > 1 {
+		origin := adjacency.idx.nodeCommunity(nodeID)
+		sort.SliceStable(neighbors, func(i, j int) bool {
+			left := neighbors[i]
+			right := neighbors[j]
+			leftID := adjacency.nodeID(left)
+			rightID := adjacency.nodeID(right)
+			if adjacency.options.directionPreference != "" && left.outgoing != right.outgoing {
+				if adjacency.options.directionPreference == DirectionOut {
 					return left.outgoing
 				}
 				return !left.outgoing
 			}
-			if scores[left.nodeID] != scores[right.nodeID] {
-				return scores[left.nodeID] > scores[right.nodeID]
+			if adjacency.scores[leftID] != adjacency.scores[rightID] {
+				return adjacency.scores[leftID] > adjacency.scores[rightID]
 			}
 			if relationPriority(left.edge.Kind) != relationPriority(right.edge.Kind) {
 				return relationPriority(left.edge.Kind) < relationPriority(right.edge.Kind)
 			}
-			if degree[left.nodeID] != degree[right.nodeID] {
-				return degree[left.nodeID] < degree[right.nodeID]
+			if adjacency.degree[left.nodeIndex] != adjacency.degree[right.nodeIndex] {
+				return adjacency.degree[left.nodeIndex] < adjacency.degree[right.nodeIndex]
 			}
-			if options.CommunityBoost {
-				origin := idx.nodeCommunity(nodeID)
-				leftSame := origin != "" && idx.nodeCommunity(left.nodeID) == origin
-				rightSame := origin != "" && idx.nodeCommunity(right.nodeID) == origin
+			if adjacency.options.CommunityBoost {
+				leftSame := origin != "" && adjacency.idx.nodeCommunity(leftID) == origin
+				rightSame := origin != "" && adjacency.idx.nodeCommunity(rightID) == origin
 				if leftSame != rightSame {
 					return leftSame
 				}
 			}
-			if left.nodeID != right.nodeID {
-				return left.nodeID < right.nodeID
+			if leftID != rightID {
+				return leftID < rightID
 			}
 			return left.edge.ID < right.edge.ID
 		})
 	}
-	return adjacency, degree
+	adjacency.neighbors[docIndex] = neighbors
+	return neighbors
 }
 
 func (idx *Index) nodeCommunity(id string) string {
@@ -881,9 +944,9 @@ func relationPriority(kind graph.EdgeKind) int {
 	}
 }
 
-func (idx *Index) traverse(seedIDs []string, seedSet map[string]bool, adjacency map[string][]adjacentEdge, degree map[string]int, options normalizedRetrieveOptions) traversalResult {
+func (idx *Index) traverse(seedIDs []string, seedSet map[string]bool, adjacency *queryAdjacency, options normalizedRetrieveOptions) traversalResult {
 	result := traversalResult{distance: map[string]int{}, via: map[string]graph.Edge{}}
-	result.hubThreshold = hubThreshold(degree, options.HubDegreeThreshold)
+	result.hubThreshold = hubThreshold(adjacency.degree, options.HubDegreeThreshold)
 	result.branchFanout = traversalFanout(options.MaxNodes, len(seedIDs), options.MaxDepth, options.BranchFanout)
 	exploreLimit := max(1_000, options.MaxNodes*20)
 	exploreLimit = min(exploreLimit, 50_000)
@@ -895,9 +958,9 @@ func (idx *Index) traverse(seedIDs []string, seedSet map[string]bool, adjacency 
 		result.order = append(result.order, seed)
 	}
 	if options.Traversal == TraversalDFS {
-		idx.traverseDFS(&result, seedIDs, seedSet, adjacency, degree, options.MaxDepth, exploreLimit, result.branchFanout)
+		idx.traverseDFS(&result, seedIDs, seedSet, adjacency, options.MaxDepth, exploreLimit, result.branchFanout)
 	} else {
-		idx.traverseBFS(&result, seedIDs, seedSet, adjacency, degree, options.MaxDepth, exploreLimit, result.branchFanout)
+		idx.traverseBFS(&result, seedIDs, seedSet, adjacency, options.MaxDepth, exploreLimit, result.branchFanout)
 	}
 	return result
 }
@@ -911,7 +974,7 @@ func traversalFanout(maxNodes, seeds, depth, configured int) int {
 	return max(4, min(16, perBranch))
 }
 
-func (idx *Index) traverseBFS(result *traversalResult, seeds []string, seedSet map[string]bool, adjacency map[string][]adjacentEdge, degree map[string]int, depth, exploreLimit, fanout int) {
+func (idx *Index) traverseBFS(result *traversalResult, seeds []string, seedSet map[string]bool, adjacency *queryAdjacency, depth, exploreLimit, fanout int) {
 	queue := append([]string(nil), seeds...)
 	for len(queue) > 0 {
 		current := queue[0]
@@ -920,13 +983,14 @@ func (idx *Index) traverseBFS(result *traversalResult, seeds []string, seedSet m
 		if currentDepth >= depth {
 			continue
 		}
-		if !seedSet[current] && result.hubThreshold >= 0 && degree[current] >= result.hubThreshold {
+		if !seedSet[current] && result.hubThreshold >= 0 && adjacency.degreeOf(current) >= result.hubThreshold {
 			result.hubsSuppressed++
 			continue
 		}
 		expanded := 0
-		for _, adjacent := range adjacency[current] {
-			if _, seen := result.distance[adjacent.nodeID]; seen {
+		for _, adjacent := range adjacency.neighborsOf(current) {
+			nextID := adjacency.nodeID(adjacent)
+			if _, seen := result.distance[nextID]; seen {
 				continue
 			}
 			if expanded >= fanout {
@@ -937,16 +1001,16 @@ func (idx *Index) traverseBFS(result *traversalResult, seeds []string, seedSet m
 				result.exploredLimit = true
 				return
 			}
-			result.distance[adjacent.nodeID] = currentDepth + 1
-			result.via[adjacent.nodeID] = adjacent.edge
-			result.order = append(result.order, adjacent.nodeID)
-			queue = append(queue, adjacent.nodeID)
+			result.distance[nextID] = currentDepth + 1
+			result.via[nextID] = adjacent.edge
+			result.order = append(result.order, nextID)
+			queue = append(queue, nextID)
 			expanded++
 		}
 	}
 }
 
-func (idx *Index) traverseDFS(result *traversalResult, seeds []string, seedSet map[string]bool, adjacency map[string][]adjacentEdge, degree map[string]int, depth, exploreLimit, fanout int) {
+func (idx *Index) traverseDFS(result *traversalResult, seeds []string, seedSet map[string]bool, adjacency *queryAdjacency, depth, exploreLimit, fanout int) {
 	type item struct {
 		id    string
 		depth int
@@ -971,18 +1035,19 @@ func (idx *Index) traverseDFS(result *traversalResult, seeds []string, seedSet m
 			if current.depth >= depth {
 				continue
 			}
-			if !seedSet[current.id] && result.hubThreshold >= 0 && degree[current.id] >= result.hubThreshold {
+			if !seedSet[current.id] && result.hubThreshold >= 0 && adjacency.degreeOf(current.id) >= result.hubThreshold {
 				if !suppressed[current.id] {
 					suppressed[current.id] = true
 					result.hubsSuppressed++
 				}
 				continue
 			}
-			edges := adjacency[current.id]
+			edges := adjacency.neighborsOf(current.id)
 			chosen := make([]adjacentEdge, 0, min(fanout, len(edges)))
 			for _, adjacent := range edges {
+				nextID := adjacency.nodeID(adjacent)
 				nextDepth := current.depth + 1
-				previousDepth, seen := result.distance[adjacent.nodeID]
+				previousDepth, seen := result.distance[nextID]
 				if seen && previousDepth <= nextDepth {
 					continue
 				}
@@ -994,40 +1059,56 @@ func (idx *Index) traverseDFS(result *traversalResult, seeds []string, seedSet m
 			}
 			for i := len(chosen) - 1; i >= 0; i-- {
 				adjacent := chosen[i]
+				nextID := adjacency.nodeID(adjacent)
 				nextDepth := current.depth + 1
 				if len(result.distance) >= exploreLimit {
 					result.exploredLimit = true
 					return
 				}
-				result.distance[adjacent.nodeID] = nextDepth
-				result.via[adjacent.nodeID] = adjacent.edge
-				stack = append(stack, item{id: adjacent.nodeID, depth: nextDepth})
+				result.distance[nextID] = nextDepth
+				result.via[nextID] = adjacent.edge
+				stack = append(stack, item{id: nextID, depth: nextDepth})
 			}
 		}
 	}
 }
 
-func hubThreshold(degree map[string]int, configured int) int {
+func hubThreshold(degree []int, configured int) int {
 	if configured == -1 {
 		return -1
 	}
 	if configured > 0 {
 		return configured
 	}
-	values := make([]int, 0, len(degree))
-	for _, value := range degree {
-		values = append(values, value)
-	}
-	if len(values) == 0 {
+	if len(degree) == 0 {
 		return 50
 	}
-	sort.Ints(values)
-	index := int(math.Ceil(float64(len(values))*0.99)) - 1
-	index = max(0, min(index, len(values)-1))
-	return max(50, values[index])
+	maxDegree := 0
+	for _, value := range degree {
+		maxDegree = max(maxDegree, value)
+	}
+	if maxDegree >= len(degree) {
+		values := append([]int(nil), degree...)
+		sort.Ints(values)
+		index := int(math.Ceil(float64(len(values))*0.99)) - 1
+		return max(50, values[max(0, min(index, len(values)-1))])
+	}
+	counts := make([]int, maxDegree+1)
+	for _, value := range degree {
+		counts[value]++
+	}
+	target := int(math.Ceil(float64(len(degree)) * 0.99))
+	seen := 0
+	for value, count := range counts {
+		seen += count
+		if seen >= target {
+			return max(50, value)
+		}
+	}
+	return 50
 }
 
-func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOptions, seedIDs []string, seedSet map[string]bool, scores, degree map[string]int, walk traversalResult) Retrieval {
+func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOptions, seedIDs []string, seedSet map[string]bool, scores map[string]int, degree []int, walk traversalResult) Retrieval {
 	stats := RetrievalStats{
 		Traversal: options.Traversal, Direction: options.Direction, DirectionPreference: options.directionPreference, Depth: options.MaxDepth,
 		SeedIDs: append([]string(nil), seedIDs...), RelationFilters: append([]graph.EdgeKind(nil), options.Relations...),
@@ -1060,7 +1141,7 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		if !ok {
 			continue
 		}
-		node := contextNode(idx.docs[docIndex].node, scores[nodeID], walk.distance[nodeID], degree[nodeID], seedSet[nodeID])
+		node := contextNode(idx.docs[docIndex].node, scores[nodeID], walk.distance[nodeID], degree[docIndex], seedSet[nodeID])
 		if edge, hasVia := walk.via[nodeID]; hasVia {
 			node.ViaEdgeID = stableEdgeID(edge)
 		}
@@ -1244,14 +1325,21 @@ func betterContextCandidate(left, right ContextNode) bool {
 
 func (idx *Index) edgesWithin(nodes map[string]bool, relationSet map[graph.EdgeKind]bool) []ContextEdge {
 	var result []ContextEdge
-	for _, edge := range idx.graph.Edges {
-		if !nodes[edge.From] || !nodes[edge.To] {
+	for nodeID := range nodes {
+		docIndex, ok := idx.byID[nodeID]
+		if !ok {
 			continue
 		}
-		if len(relationSet) > 0 && !relationSet[edge.Kind] {
-			continue
+		for _, adjacent := range idx.outgoing[docIndex] {
+			edge := adjacent.edge
+			if !nodes[edge.To] {
+				continue
+			}
+			if len(relationSet) > 0 && !relationSet[edge.Kind] {
+				continue
+			}
+			result = append(result, contextEdge(edge))
 		}
-		result = append(result, contextEdge(edge))
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if relationPriority(result[i].Kind) != relationPriority(result[j].Kind) {
