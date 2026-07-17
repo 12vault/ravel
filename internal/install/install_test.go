@@ -43,6 +43,12 @@ func TestInstallAndUninstallSkillForEveryPlatform(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "agents", "code-analyzer.md")); err != nil {
 					t.Fatalf("installed agents missing: %v", err)
 				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "VERSION")); err != nil {
+					t.Fatalf("installed VERSION missing: %v", err)
+				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "THIRD_PARTY_NOTICES.md")); err != nil {
+					t.Fatalf("installed notices missing: %v", err)
+				}
 				bootstrap := filepath.Join(filepath.Dir(dst), "scripts", "bootstrap.sh")
 				if info, err := os.Stat(bootstrap); err != nil || info.Mode()&0o111 == 0 {
 					t.Fatalf("installed executable bootstrap missing: %v, mode %v", err, infoMode(info))
@@ -124,6 +130,11 @@ func TestInstallCodexPreservesExistingConfigurationAndIsIdempotent(t *testing.T)
 	if !strings.Contains(string(agents), "# Existing") || strings.Count(string(agents), agentsStart) != 1 {
 		t.Fatalf("unexpected AGENTS.md:\n%s", agents)
 	}
+	for _, want := range []string{"non-trivial coding task", "ravel context", "ravel affected", "read the returned source", "trivial known-file"} {
+		if !strings.Contains(string(agents), want) {
+			t.Fatalf("AGENTS.md is missing coding-context guidance %q:\n%s", want, agents)
+		}
+	}
 
 	var hooks map[string]any
 	data, err := os.ReadFile(hooksPath)
@@ -176,6 +187,11 @@ func TestAssistantHookOnlyRespondsWhenGraphExists(t *testing.T) {
 	if err != nil || !strings.Contains(string(data), "systemMessage") {
 		t.Fatalf("AssistantHook with graph = %q, %v", data, err)
 	}
+	for _, want := range []string{"non-trivial coding task", "ravel context", "ravel affected", "read the returned source"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("AssistantHook output is missing %q: %s", want, data)
+		}
+	}
 }
 
 func TestNativeProjectIntegrationsAreIdempotentAndReversible(t *testing.T) {
@@ -194,6 +210,16 @@ func TestNativeProjectIntegrationsAreIdempotentAndReversible(t *testing.T) {
 				if _, err := os.Stat(path); err != nil {
 					t.Fatalf("missing integration file %s: %v", path, err)
 				}
+			}
+			var foundCodingGuidance bool
+			for _, path := range paths {
+				data, err := os.ReadFile(path)
+				if err == nil && strings.Contains(string(data), "non-trivial coding task") && strings.Contains(string(data), "ravel affected") {
+					foundCodingGuidance = true
+				}
+			}
+			if !foundCodingGuidance {
+				t.Fatalf("%s integration did not install coding-context guidance", platform)
 			}
 			removed, err := UninstallIntegration(platform, root)
 			if err != nil {

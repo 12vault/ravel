@@ -2,6 +2,7 @@ package treeanalyzer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/12vault/ravel/internal/graph"
 	"github.com/12vault/ravel/internal/lang"
 	"github.com/12vault/ravel/internal/scan"
+	"github.com/odvcencio/gotreesitter/grammars"
 )
 
 func TestMain(m *testing.M) {
@@ -161,13 +163,13 @@ func TestParallelAnalysisHonorsCancellation(t *testing.T) {
 
 func TestAnalysisWorkerCountCapsAtProcsAndFiles(t *testing.T) {
 	want := runtime.GOMAXPROCS(0)
-	if want > 8 {
-		want = 8
+	if want > 3 {
+		want = 3
 	}
-	if got := analysisWorkerCount(8); got != want {
+	if got := analysisWorkerCount(8, 3); got != want {
 		t.Fatalf("workers = %d, want %d", got, want)
 	}
-	if got := analysisWorkerCount(0); got != 0 {
+	if got := analysisWorkerCount(0, 3); got != 0 {
 		t.Fatalf("empty input workers = %d, want 0", got)
 	}
 }
@@ -176,12 +178,92 @@ func TestSmallTreeSitterInputsStaySerial(t *testing.T) {
 	if minProcessWorkerFiles != 20 {
 		t.Fatalf("process worker threshold = %d, want Graphify-compatible threshold 20", minProcessWorkerFiles)
 	}
-	if got := isolatedWorkerCount(minProcessWorkerFiles - 1); got != 0 {
+	if got := isolatedWorkerCount(minProcessWorkerFiles-1, defaultMaxWorkers); got != 0 {
 		t.Fatalf("small Tree-sitter process worker count = %d, want 0", got)
 	}
-	want := analysisWorkerCount(minProcessWorkerFiles)
-	if got := isolatedWorkerCount(minProcessWorkerFiles); got != want {
+	want := analysisWorkerCount(minProcessWorkerFiles, defaultMaxWorkers)
+	if got := isolatedWorkerCount(minProcessWorkerFiles, defaultMaxWorkers); got != want {
 		t.Fatalf("large Tree-sitter process worker count = %d, want %d", got, want)
+	}
+}
+
+func TestFileCacheReparsesOnlyChangedFilesAndPreservesCrossFileResolution(t *testing.T) {
+	root := t.TempDir()
+	files := []scan.File{
+		{Path: "src/app.ts", AbsPath: filepath.Join(root, "src", "app.ts"), Language: "typescript", Hash: "app-v1"},
+		{Path: "src/helper.ts", AbsPath: filepath.Join(root, "src", "helper.ts"), Language: "typescript", Hash: "helper-v1"},
+	}
+	for index, source := range []string{
+		"export function run(): number { return helper(); }\n",
+		"export function helper(): number { return 1; }\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(files[index].AbsPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(files[index].AbsPath, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		files[index].Size = int64(len(source))
+	}
+
+	previousParse := parseSourceFile
+	parseCalls := 0
+	parseSourceFile = func(ctx context.Context, file scan.File, entry grammars.LangEntry, timeoutMicros uint64) (parsedFile, []graph.Diagnostic, error) {
+		parseCalls++
+		return previousParse(ctx, file, entry, timeoutMicros)
+	}
+	t.Cleanup(func() { parseSourceFile = previousParse })
+
+	cache := &memoryFileAnalysisCache{entries: map[string][]byte{}}
+	analyzer := NewWithJobs("typescript", 1)
+	first, err := analyzer.AnalyzeWithFileCache(context.Background(), root, files, nil, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parseCalls != 2 {
+		t.Fatalf("cold parse calls = %d, want 2", parseCalls)
+	}
+	second, err := analyzer.AnalyzeWithFileCache(context.Background(), root, files, nil, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parseCalls != 2 || !reflect.DeepEqual(first, second) {
+		t.Fatalf("warm cache reparsed files or changed result: calls=%d", parseCalls)
+	}
+
+	changed := "export function helper(): number { return 2; }\n"
+	if err := os.WriteFile(files[1].AbsPath, []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files[1].Hash = "helper-v2"
+	files[1].Size = int64(len(changed))
+	third, err := analyzer.AnalyzeWithFileCache(context.Background(), root, files, nil, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parseCalls != 3 {
+		t.Fatalf("changed parse calls = %d, want 3", parseCalls)
+	}
+	run := nodeNamedAtPath(third.Nodes, "run", "src/app.ts")
+	helper := nodeNamedAtPath(third.Nodes, "helper", "src/helper.ts")
+	if run == nil || helper == nil || !hasEdge(third.Edges, graph.EdgeCalls, run.ID, helper.ID, "true") {
+		t.Fatalf("cached and changed files lost cross-file call resolution: nodes=%#v edges=%#v", third.Nodes, third.Edges)
+	}
+}
+
+type memoryFileAnalysisCache struct {
+	entries map[string][]byte
+}
+
+func (cache *memoryFileAnalysisCache) Load(file scan.File, destination any) bool {
+	data, ok := cache.entries[file.Path+"\x00"+file.Hash]
+	return ok && json.Unmarshal(data, destination) == nil
+}
+
+func (cache *memoryFileAnalysisCache) Store(file scan.File, value any) {
+	data, err := json.Marshal(value)
+	if err == nil {
+		cache.entries[file.Path+"\x00"+file.Hash] = data
 	}
 }
 

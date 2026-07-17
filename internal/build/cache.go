@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/12vault/ravel/internal/lang"
@@ -18,12 +17,14 @@ const analysisCacheSchema = 1
 type CacheOptions struct {
 	OutputDir string
 	Version   string
+	Force     bool
 }
 
 type analysisCache struct {
 	dir     string
 	root    string
 	version string
+	force   bool
 	used    map[string]bool
 }
 
@@ -46,6 +47,19 @@ type analysisCacheEntry struct {
 	Result lang.AnalysisResult `json:"result"`
 }
 
+type analysisFileCacheEntry struct {
+	Schema int             `json:"schema"`
+	Key    string          `json:"key"`
+	Value  json.RawMessage `json:"value"`
+}
+
+type fileAnalysisCache struct {
+	cache    *analysisCache
+	identity string
+	hits     int
+	misses   int
+}
+
 func newAnalysisCache(root string, options CacheOptions) *analysisCache {
 	if strings.TrimSpace(options.OutputDir) == "" || strings.TrimSpace(options.Version) == "" {
 		return nil
@@ -58,8 +72,16 @@ func newAnalysisCache(root string, options CacheOptions) *analysisCache {
 		dir:     filepath.Join(out, ".state", "cache", "analysis-v1"),
 		root:    root,
 		version: options.Version,
+		force:   options.Force,
 		used:    map[string]bool{},
 	}
+}
+
+func statHashCachePath(options CacheOptions) string {
+	if strings.TrimSpace(options.OutputDir) == "" || strings.TrimSpace(options.Version) == "" {
+		return ""
+	}
+	return filepath.Join(options.OutputDir, ".state", "cache", "stat-index-v1.json")
 }
 
 func (c *analysisCache) key(analyzer string, files []scan.File) (string, error) {
@@ -103,6 +125,9 @@ func safeCacheName(value string) string {
 func (c *analysisCache) load(unit, key string) (*lang.AnalysisResult, bool) {
 	path := c.path(unit)
 	c.used[path] = true
+	if c.force {
+		return nil, false
+	}
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Size() > 256<<20 {
 		return nil, false
@@ -132,6 +157,67 @@ func (c *analysisCache) save(unit, key string, result *lang.AnalysisResult) erro
 	return writeCacheAtomic(path, data)
 }
 
+func (c *analysisCache) files(identity string) *fileAnalysisCache {
+	return &fileAnalysisCache{cache: c, identity: identity}
+}
+
+func (c *fileAnalysisCache) Load(file scan.File, destination any) bool {
+	if c.cache.force {
+		c.misses++
+		return false
+	}
+	key, err := c.cache.key(c.identity, []scan.File{file})
+	if err != nil {
+		c.misses++
+		return false
+	}
+	path := c.cache.path(c.unit(file))
+	c.cache.used[path] = true
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 256<<20 {
+		c.misses++
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		c.misses++
+		return false
+	}
+	var entry analysisFileCacheEntry
+	if json.Unmarshal(data, &entry) != nil || entry.Schema != analysisCacheSchema || entry.Key != key || json.Unmarshal(entry.Value, destination) != nil {
+		c.misses++
+		return false
+	}
+	c.hits++
+	return true
+}
+
+func (c *fileAnalysisCache) Store(file scan.File, value any) {
+	key, err := c.cache.key(c.identity, []scan.File{file})
+	if err != nil {
+		return
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	path := c.cache.path(c.unit(file))
+	c.cache.used[path] = true
+	data, err := json.Marshal(analysisFileCacheEntry{Schema: analysisCacheSchema, Key: key, Value: encoded})
+	if err != nil {
+		return
+	}
+	data = append(data, '\n')
+	if os.MkdirAll(c.cache.dir, 0o755) != nil {
+		return
+	}
+	_ = writeCacheAtomic(path, data)
+}
+
+func (c *fileAnalysisCache) unit(file scan.File) string {
+	return "file:" + c.identity + ":" + file.Path
+}
+
 func (c *analysisCache) prune() {
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
@@ -149,6 +235,10 @@ func (c *analysisCache) prune() {
 }
 
 func writeCacheAtomic(path string, data []byte) (err error) {
+	// Analysis cache entries are reconstructible. Rename keeps readers from
+	// observing partial JSON, while skipping per-entry fsync avoids making cold
+	// builds wait for hundreds of disposable cache files to reach stable storage.
+	// Durable graph artifacts still use store.WriteJSON's synced write path.
 	temporary, err := os.CreateTemp(filepath.Dir(path), ".analysis-cache-*.tmp")
 	if err != nil {
 		return err
@@ -164,9 +254,6 @@ func writeCacheAtomic(path string, data []byte) (err error) {
 	if _, err := temporary.Write(data); err != nil {
 		return err
 	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
 	if err := temporary.Close(); err != nil {
 		return err
 	}
@@ -174,13 +261,5 @@ func writeCacheAtomic(path string, data []byte) (err error) {
 		return err
 	}
 	temporaryPath = ""
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil && runtime.GOOS != "windows" {
-		return err
-	}
 	return nil
 }

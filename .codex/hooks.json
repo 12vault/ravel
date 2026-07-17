@@ -4,7 +4,7 @@
       {
         "hooks": [
           {
-            "command": "'/var/folders/08/lftlfpsd54xbwclhx0c0kln80000gn/T/go-build769885432/b001/exe/ravel' assistant-hook",
+            "command": "'/Users/12ya/.local/bin/ravel' assistant-hook",
             "type": "command"
           }
         ],

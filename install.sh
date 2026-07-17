@@ -32,6 +32,9 @@ tar -xzf "$tmp/$asset" -C "$tmp" ravel
 mkdir -p "$install_dir"
 install -m 0755 "$tmp/ravel" "$install_dir/ravel"
 echo "Installed ravel to $install_dir/ravel"
+# The new binary refreshes only Ravel-owned skills and project instructions
+# that were already installed. Fresh installations remain opt-in.
+"$install_dir/ravel" version >/dev/null
 
 case ":${PATH:-}:" in
   *":$install_dir:"*) ;;

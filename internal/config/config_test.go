@@ -15,6 +15,7 @@ analysis:
   polyglot: false
   callGraph: false
   typeResolution: false
+  jobs: 2
 output:
   dir: "custom-output"
   json: false
@@ -37,6 +38,9 @@ output:
 	}
 	if cfg.Analysis.CallGraph {
 		t.Fatal("Analysis.CallGraph = true, want false")
+	}
+	if cfg.Analysis.Jobs != 2 {
+		t.Fatalf("Analysis.Jobs = %d, want 2", cfg.Analysis.Jobs)
 	}
 	if cfg.Output.Dir != "custom-output" {
 		t.Fatalf("Output.Dir = %q, want custom-output", cfg.Output.Dir)
@@ -108,6 +112,7 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 		{name: "unknown section", content: "database:\n  enabled: true\n", want: `unknown section "database"`},
 		{name: "invalid boolean", content: "analysis:\n  go: maybe\n", want: "expected true or false"},
 		{name: "invalid integer", content: "scan:\n  maxFileSize: large\n", want: "expected an integer"},
+		{name: "invalid analysis jobs", content: "analysis:\n  jobs: 0\n", want: "analysis.jobs must be between 1 and 256"},
 		{name: "invalid traversal", content: "retrieval:\n  traversal: sideways\n", want: "retrieval.traversal must be bfs or dfs"},
 		{name: "invalid direction", content: "retrieval:\n  direction: around\n", want: "retrieval.direction must be out, in, or both"},
 		{name: "invalid branch fanout", content: "retrieval:\n  branchFanout: -1\n", want: "retrieval.branchFanout must be 0 (automatic) or between"},

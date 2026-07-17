@@ -1,0 +1,226 @@
+package install
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/12vault/ravel/skills"
+)
+
+// RefreshOptions scopes automatic maintenance to installations that already
+// exist. RefreshExisting never creates a new skill or platform integration.
+type RefreshOptions struct {
+	ProjectDir string
+	HomeDir    string
+}
+
+type RefreshResult struct {
+	Skills       []string
+	Integrations []string
+}
+
+// RefreshExisting updates previously installed skill bundles and project
+// instructions from the currently running binary. Existing hook commands are
+// preserved so marketplace cache paths or user-managed launchers are not
+// silently replaced.
+func RefreshExisting(opts RefreshOptions) (RefreshResult, error) {
+	root, err := discoverProjectRoot(opts.ProjectDir)
+	if err != nil {
+		return RefreshResult{}, err
+	}
+	home := opts.HomeDir
+	if home == "" {
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return RefreshResult{}, err
+		}
+	}
+
+	var result RefreshResult
+	var refreshErrors []error
+	seenSkills := map[string]bool{}
+	for _, scope := range []SkillOptions{
+		{Project: true, ProjectDir: root, HomeDir: home},
+		{Project: false, ProjectDir: root, HomeDir: home},
+	} {
+		for _, platform := range canonicalSkillPlatforms() {
+			candidate := scope
+			candidate.Platform = platform
+			destination, destinationErr := skillDestination(candidate)
+			if destinationErr != nil {
+				refreshErrors = append(refreshErrors, destinationErr)
+				continue
+			}
+			destination = filepath.Clean(destination)
+			if seenSkills[destination] {
+				continue
+			}
+			seenSkills[destination] = true
+			info, statErr := os.Lstat(destination)
+			if errors.Is(statErr, os.ErrNotExist) {
+				continue
+			}
+			if statErr != nil {
+				refreshErrors = append(refreshErrors, fmt.Errorf("inspect installed skill %s: %w", destination, statErr))
+				continue
+			}
+			if !info.Mode().IsRegular() {
+				continue
+			}
+			if installedSkillCurrent(destination) {
+				continue
+			}
+			installed, installErr := InstallSkill(candidate)
+			if installErr != nil {
+				refreshErrors = append(refreshErrors, fmt.Errorf("refresh installed skill %s: %w", destination, installErr))
+				continue
+			}
+			result.Skills = append(result.Skills, installed)
+		}
+	}
+
+	for _, platform := range existingProjectIntegrations(root) {
+		paths, refreshErr := refreshProjectIntegration(platform, root)
+		if refreshErr != nil {
+			refreshErrors = append(refreshErrors, fmt.Errorf("refresh %s integration: %w", platform, refreshErr))
+			continue
+		}
+		result.Integrations = append(result.Integrations, paths...)
+	}
+	sort.Strings(result.Skills)
+	sort.Strings(result.Integrations)
+	return result, errors.Join(refreshErrors...)
+}
+
+func canonicalSkillPlatforms() []string {
+	platforms := make([]string, 0, len(platformPaths))
+	for platform := range platformPaths {
+		platforms = append(platforms, platform)
+	}
+	sort.Strings(platforms)
+	return platforms
+}
+
+func installedSkillCurrent(destination string) bool {
+	support, err := skills.SupportFiles()
+	if err != nil {
+		return false
+	}
+	wantVersion, ok := support["VERSION"]
+	if !ok {
+		return false
+	}
+	actualVersion, err := os.ReadFile(filepath.Join(filepath.Dir(destination), "VERSION"))
+	return err == nil && bytes.Equal(actualVersion, wantVersion)
+}
+
+func discoverProjectRoot(start string) (string, error) {
+	if start == "" {
+		start = "."
+	}
+	directory, err := filepath.Abs(start)
+	if err != nil {
+		return "", err
+	}
+	for current := directory; ; current = filepath.Dir(current) {
+		if fileExists(filepath.Join(current, ".git")) || len(existingProjectIntegrations(current)) > 0 {
+			return current, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+	return directory, nil
+}
+
+func existingProjectIntegrations(root string) []string {
+	var platforms []string
+	if ownedHeading(filepath.Join(root, "AGENTS.md"), "## RepoRavel") ||
+		fileContains(filepath.Join(root, ".codex", "hooks.json"), "assistant-hook") {
+		platforms = append(platforms, "codex")
+	}
+	if ownedHeading(filepath.Join(root, "CLAUDE.md"), "## Ravel for Claude Code") ||
+		fileContains(filepath.Join(root, ".claude", "settings.json"), "assistant-hook", "--platform claude") {
+		platforms = append(platforms, "claude")
+	}
+	if fileContains(filepath.Join(root, ".cursor", "rules", "ravel.mdc"), ".reporavel/graph.json") {
+		platforms = append(platforms, "cursor")
+	}
+	if ownedHeading(filepath.Join(root, ".github", "copilot-instructions.md"), "## Ravel for GitHub Copilot") {
+		platforms = append(platforms, "vscode")
+	}
+	if ownedHeading(filepath.Join(root, "GEMINI.md"), "## Ravel for Gemini CLI") ||
+		fileContains(filepath.Join(root, ".gemini", "settings.json"), "assistant-hook", "--platform gemini") {
+		platforms = append(platforms, "gemini")
+	}
+	if ownedHeading(filepath.Join(root, "AGENTS.md"), "## Ravel for OpenCode") ||
+		fileContains(filepath.Join(root, ".opencode", "plugins", "ravel.js"), "Generated by Ravel") {
+		platforms = append(platforms, "opencode")
+	}
+	return platforms
+}
+
+func ownedHeading(path, heading string) bool {
+	return fileContains(path, agentsStart, heading, agentsEnd)
+}
+
+func fileContains(path string, needles ...string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	content := string(data)
+	for _, needle := range needles {
+		if !strings.Contains(content, needle) {
+			return false
+		}
+	}
+	return true
+}
+
+func fileExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+func refreshProjectIntegration(platform, root string) ([]string, error) {
+	switch platform {
+	case "codex":
+		path := filepath.Join(root, "AGENTS.md")
+		return []string{path}, updateOwnedSection(path, codexInstructions())
+	case "claude":
+		path := filepath.Join(root, "CLAUDE.md")
+		return []string{path}, updateOwnedSection(path, integrationInstructions("Claude Code"))
+	case "cursor":
+		path := filepath.Join(root, ".cursor", "rules", "ravel.mdc")
+		return []string{path}, writeOwnedFile(path, cursorRule())
+	case "vscode":
+		path := filepath.Join(root, ".github", "copilot-instructions.md")
+		return []string{path}, updateOwnedSection(path, integrationInstructions("GitHub Copilot"))
+	case "gemini":
+		path := filepath.Join(root, "GEMINI.md")
+		return []string{path}, updateOwnedSection(path, integrationInstructions("Gemini CLI"))
+	case "opencode":
+		instructions := filepath.Join(root, "AGENTS.md")
+		if err := updateOwnedSection(instructions, integrationInstructions("OpenCode")); err != nil {
+			return nil, err
+		}
+		paths := []string{instructions}
+		plugin := filepath.Join(root, ".opencode", "plugins", "ravel.js")
+		if fileExists(plugin) {
+			if err := writeOwnedFile(plugin, openCodePlugin()); err != nil {
+				return nil, err
+			}
+			paths = append(paths, plugin)
+		}
+		return paths, nil
+	default:
+		return nil, fmt.Errorf("native project integration is unavailable for %q", platform)
+	}
+}

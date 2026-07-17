@@ -21,6 +21,9 @@ try {
   New-Item -ItemType Directory -Force -Path $installDir | Out-Null
   Copy-Item (Join-Path $tmp "ravel.exe") (Join-Path $installDir "ravel.exe") -Force
   Write-Output "Installed ravel to $installDir\ravel.exe"
+  # The new binary refreshes only Ravel-owned skills and project instructions
+  # that were already installed. Fresh installations remain opt-in.
+  & (Join-Path $installDir "ravel.exe") version | Out-Null
   $pathEntries = $env:Path -split [IO.Path]::PathSeparator
   if ($pathEntries -notcontains $installDir) {
     Write-Warning "$installDir is not on PATH."

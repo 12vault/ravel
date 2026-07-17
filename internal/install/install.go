@@ -98,7 +98,7 @@ func InstallSkill(opts SkillOptions) (string, error) {
 			return "", err
 		}
 		mode := os.FileMode(0o644)
-		if strings.HasPrefix(name, "scripts/") {
+		if strings.HasPrefix(name, "scripts/") && strings.HasSuffix(name, ".sh") {
 			mode = 0o755
 		}
 		if err := os.WriteFile(path, support[name], mode); err != nil {
@@ -113,6 +113,15 @@ func InstallSkill(opts SkillOptions) (string, error) {
 			return "", err
 		}
 		if err := replaceDirectory(source, filepath.Join(filepath.Dir(dst), directory)); err != nil {
+			return "", err
+		}
+	}
+	for _, name := range []string{"VERSION", "THIRD_PARTY_NOTICES.md"} {
+		data, ok := support[name]
+		if !ok {
+			return "", fmt.Errorf("embedded skill bundle omits %s", name)
+		}
+		if err := writeFileIfChanged(filepath.Join(filepath.Dir(dst), name), data, 0o644); err != nil {
 			return "", err
 		}
 	}
@@ -167,6 +176,14 @@ func UninstallSkill(opts SkillOptions) (string, bool, error) {
 		return dst, false, err
 	} else if err == nil {
 		removed = true
+	}
+	for _, name := range []string{"VERSION", "THIRD_PARTY_NOTICES.md"} {
+		path := filepath.Join(filepath.Dir(dst), name)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return dst, false, err
+		} else if err == nil {
+			removed = true
+		}
 	}
 	for _, directory := range []string{"references", "agents", "scripts"} {
 		path := filepath.Join(filepath.Dir(dst), directory)
@@ -304,7 +321,7 @@ func AssistantHook(root, platform string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	message := "Ravel graph found. Prefer ravel context for relationship questions, ravel query for exact lookups, then explain, path, tech, understand, learn, and diff before broad source searches."
+	message := "Ravel graph found. " + instructionBody()
 	if strings.EqualFold(platform, "claude") {
 		return json.Marshal(map[string]any{"hookSpecificOutput": map[string]string{
 			"hookEventName":     "PreToolUse",
@@ -317,8 +334,7 @@ func AssistantHook(root, platform string) ([]byte, error) {
 func codexInstructions() string {
 	return agentsStart + "\n" +
 		"## RepoRavel\n\n" +
-		"When `.reporavel/graph.json` exists, use `ravel context` for relationship questions and `ravel query` for exact lookups before broad source searches. Use `ravel explain` and `ravel path` for focused follow-up. " +
-		"Read `.reporavel/report.md` for an architecture overview. Treat unresolved calls as unresolved.\n" +
+		instructionBody() + "\n" +
 		agentsEnd + "\n"
 }
 
@@ -334,7 +350,16 @@ func updateOwnedSection(path, section string) error {
 			return fmt.Errorf("%s contains an unterminated RepoRavel section", path)
 		}
 		end := start + endRel + len(agentsEnd)
-		content = strings.TrimRight(content[:start], "\n") + "\n\n" + strings.TrimSpace(section) + strings.TrimLeft(content[end:], "\n")
+		prefix := strings.TrimRight(content[:start], "\n")
+		suffix := strings.TrimLeft(content[end:], "\n")
+		content = prefix
+		if content != "" {
+			content += "\n\n"
+		}
+		content += strings.TrimSpace(section)
+		if suffix != "" {
+			content += "\n\n" + suffix
+		}
 	} else if strings.TrimSpace(content) == "" {
 		content = section
 	} else {
@@ -346,7 +371,7 @@ func updateOwnedSection(path, section string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(content), 0o644)
+	return writeFileIfChanged(path, []byte(content), 0o644)
 }
 
 func removeOwnedSection(path string) error {
@@ -452,7 +477,18 @@ func writeJSONObject(path string, value map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return writeFileIfChanged(path, data, 0o644)
+}
+
+func writeFileIfChanged(path string, data []byte, mode os.FileMode) error {
+	existing, err := os.ReadFile(path)
+	if err == nil && bytes.Equal(existing, data) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.WriteFile(path, data, mode)
 }
 
 func objectAt(parent map[string]any, key string) map[string]any {

@@ -247,6 +247,13 @@ func runSelfUpdate(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Updated Ravel binary: %s\n", path)
+	// Execute the replacement once so its embedded skill bundle can refresh
+	// installations created by older releases. The new binary only updates
+	// Ravel-owned artifacts that already exist.
+	refresh := exec.CommandContext(ctx, path, "version")
+	if output, refreshErr := refresh.CombinedOutput(); refreshErr != nil {
+		fmt.Fprintf(stdout, "Warning: updated binary could not refresh existing integrations: %v: %s\n", refreshErr, strings.TrimSpace(string(output)))
+	}
 	for _, platform := range strings.Split(*platforms, ",") {
 		platform = strings.TrimSpace(platform)
 		if platform == "" {
@@ -623,7 +630,9 @@ func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writ
 	outDir := fs.String("out", "", "output directory")
 	maxFileSize := fs.Int64("max-file-size", 0, "max file size in bytes")
 	noCallGraph := fs.Bool("no-call-graph", false, "disable AST call extraction")
-	if err := fs.Parse(flexibleFlags(args, "config", "out", "max-file-size")); err != nil {
+	jobs := fs.Int("jobs", 0, "maximum concurrent analysis workers")
+	force := fs.Bool("force", false, "ignore build caches and rebuild from source")
+	if err := fs.Parse(flexibleFlags(args, "config", "out", "max-file-size", "jobs")); err != nil {
 		return err
 	}
 	root := "."
@@ -637,9 +646,15 @@ func runBuild(ctx context.Context, args []string, stdout, progressOutput io.Writ
 	if *noCallGraph {
 		cfg.Analysis.CallGraph = false
 	}
+	if flagWasSet(fs, "jobs") && (*jobs < 1 || *jobs > 256) {
+		return fmt.Errorf("--jobs must be between 1 and 256")
+	}
+	if flagWasSet(fs, "jobs") {
+		cfg.Analysis.Jobs = *jobs
+	}
 	progress := newTraversalProgress(progressOutput)
 	defer progress.Close()
-	result, err := buildrunner.RunWithCache(ctx, root, cfg, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version})
+	result, err := buildrunner.RunWithCache(ctx, root, cfg, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version, Force: *force})
 	if err != nil {
 		return err
 	}
@@ -684,7 +699,9 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	outDir := fs.String("out", "", "output directory")
 	maxFileSize := fs.Int64("max-file-size", 0, "max file size in bytes")
 	noCallGraph := fs.Bool("no-call-graph", false, "disable AST call extraction")
-	if err := fs.Parse(flexibleFlags(args, "config", "out", "max-file-size")); err != nil {
+	jobs := fs.Int("jobs", 0, "maximum concurrent analysis workers")
+	force := fs.Bool("force", false, "ignore build caches and rebuild from source")
+	if err := fs.Parse(flexibleFlags(args, "config", "out", "max-file-size", "jobs")); err != nil {
 		return err
 	}
 	root := "."
@@ -697,6 +714,12 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	}
 	if *noCallGraph {
 		cfg.Analysis.CallGraph = false
+	}
+	if flagWasSet(fs, "jobs") && (*jobs < 1 || *jobs > 256) {
+		return fmt.Errorf("--jobs must be between 1 and 256")
+	}
+	if flagWasSet(fs, "jobs") {
+		cfg.Analysis.Jobs = *jobs
 	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
@@ -716,7 +739,7 @@ func runUpdate(ctx context.Context, args []string, stdout, progressOutput io.Wri
 	}
 	progress := newTraversalProgress(progressOutput)
 	defer progress.Close()
-	result, err := updater.RunWithCache(ctx, root, cfg, previous, previousScan, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version})
+	result, err := updater.RunWithCache(ctx, root, cfg, previous, previousScan, progress.Build, buildrunner.CacheOptions{OutputDir: cfg.Output.Dir, Version: Version, Force: *force})
 	if err != nil {
 		return err
 	}
@@ -1717,6 +1740,16 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(item *flag.Flag) {
+		if item.Name == name {
+			found = true
+		}
+	})
+	return found
+}
+
 func flexibleFlags(args []string, valueFlags ...string) []string {
 	needsValue := map[string]bool{}
 	for _, name := range valueFlags {
@@ -1812,8 +1845,8 @@ func commandUsage(w io.Writer, command string) error {
 		"plan":          "ravel plan [--json] <route> [paths...]",
 		"audit":         "ravel audit [--config <path>] [--out <dir>] [root]",
 		"scan":          "ravel scan [--config <path>] [--out <dir>] [root]",
-		"build":         "ravel build [--config <path>] [--out <dir>] [root]",
-		"update":        "ravel update [--config <path>] [--out <dir>] [root]",
+		"build":         "ravel build [--config <path>] [--out <dir>] [--jobs <n>] [--force] [root]",
+		"update":        "ravel update [--config <path>] [--out <dir>] [--jobs <n>] [--force] [root]",
 		"watch":         "ravel watch [--interval 2s] [root]",
 		"share":         "ravel share [--from <dir>] [--out ravel-graph]",
 		"merge":         "ravel merge [--out <dir>] <alias=graph-directory>...",
@@ -1879,8 +1912,8 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  ravel plan [--json] <route> [paths...]")
 	fmt.Fprintln(w, "  ravel benchmark --dataset <cases.jsonl> [--answers <judgments.jsonl>] [--gate <quality-gate.json>] [--retriever context|flat] [--token-budget 2000]")
 	fmt.Fprintln(w, "  ravel audit [root]")
-	fmt.Fprintln(w, "  ravel build [root]")
-	fmt.Fprintln(w, "  ravel update [root]")
+	fmt.Fprintln(w, "  ravel build [--jobs 4] [root]")
+	fmt.Fprintln(w, "  ravel update [--jobs 4] [root]")
 	fmt.Fprintln(w, "  ravel watch [--interval 2s] [root]")
 	fmt.Fprintln(w, "  ravel share [--out ravel-graph]")
 	fmt.Fprintln(w, "  ravel merge [--out .ravel-workspace] <alias=graph-directory>...")

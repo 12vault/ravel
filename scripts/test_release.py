@@ -8,6 +8,10 @@ import os
 import platform
 import subprocess
 
+# Release smoke tests execute packaged binaries from the source checkout. Keep
+# those probes read-only; automatic refresh is covered by Go integration tests.
+os.environ.setdefault("RAVEL_NO_AUTO_REFRESH", "1")
+
 root = Path(__file__).resolve().parents[1]
 source = (root / "internal/cli/commands.go").read_text()
 version = re.search(r'var Version = "v([^"]+)"', source).group(1)

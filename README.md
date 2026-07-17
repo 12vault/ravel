@@ -145,6 +145,8 @@ ravel install --project --platform codex
 
 That command installs the complete skill bundle: orchestration instructions, eight role prompts, references, and launchers. Marketplace packages also include native Ravel binaries for macOS, Linux, and Windows on amd64 and arm64. If `ravel` is not already on `PATH`, the skill uses the matching bundled binary in place, with no initial download or separate installation.
 
+Project installs for supported assistants also add an owned query-first integration. When a graph exists and a non-trivial coding task has an unknown implementation location or change surface, the assistant is told to run `ravel context "<user task>"` before broad repository search, refine exact targets, run `ravel affected <target>` before changing shared code, and then verify the returned source and tests. Trivial known-file and strictly local edits skip the graph step.
+
 Then invoke the skill in Codex:
 
 ```text
@@ -401,10 +403,12 @@ Useful command-line overrides include:
 ravel audit --max-file-size 2097152 .
 ravel build --out /tmp/ravel-output .
 ravel build --no-call-graph .
+ravel build --jobs 2 .
+ravel build --force .
 ravel update .
 ```
 
-Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json`, `output.markdownReport`, and `output.communityClustering` switches control generated artifacts and metadata. Community controls default to `output.communityGranularity: balanced` and `output.communityHubDegreeThreshold: 0` (automatic).
+Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Tree-sitter analysis uses at most `analysis.jobs: 4` workers by default; `--jobs <n>` overrides it for one build or update. Builds and updates reuse content hashes when a file's path, size, and nanosecond modification time are unchanged; use `--force` to rehash and reanalyze everything when a generator preserves that metadata. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json`, `output.markdownReport`, and `output.communityClustering` switches control generated artifacts and metadata. Community controls default to `output.communityGranularity: balanced` and `output.communityHubDegreeThreshold: 0` (automatic).
 
 ### Supported languages
 
@@ -438,7 +442,9 @@ ravel benchmark --graph .reporavel --dataset benchmarks/ravel-retrieval.jsonl --
 
 ## Agent workflow
 
-The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a progressive agent workflow for technical maps, architecture understanding, business domains, change impact, documents, PDFs, schemas, articles, and dependency-ordered learning tours. Installers and marketplace packages publish it as the required uppercase `SKILL.md`.
+The repository includes [`skills/ravel/skill.md`](skills/ravel/skill.md), a progressive agent workflow for coding-context discovery, technical maps, architecture understanding, business domains, change impact, documents, PDFs, schemas, articles, and dependency-ordered learning tours. Installers and marketplace packages publish it as the required uppercase `SKILL.md`.
+
+For everyday coding work, the query-first loop is: run `context` with the user's task, refine with `query`, `explain`, or `path`, check the selected target with `affected`, then read the returned implementation and tests before editing. The graph narrows exploration; it does not replace source inspection or verification.
 
 The intended loop is:
 
@@ -452,7 +458,7 @@ Use `ravel tools` before document, PDF, or schema work. It discovers local extra
 
 ## Native integrations and hooks
 
-Project installs place the portable skill in the platform's native directory. For Codex, Claude Code, Cursor, VS Code/Copilot, Gemini CLI, and OpenCode, Ravel also installs owned project instructions, rules, or hooks. Existing configuration is preserved, repeated installs are idempotent, and uninstall removes only Ravel-owned content.
+Project installs place the portable skill in the platform's native directory. For Codex, Claude Code, Cursor, VS Code/Copilot, Gemini CLI, and OpenCode, Ravel also installs owned project instructions, rules, or hooks that apply the same query-first coding workflow. Existing configuration is preserved, repeated installs are idempotent, and uninstall removes only Ravel-owned content.
 
 Manage a native integration directly:
 
@@ -506,7 +512,9 @@ ravel self-update --platforms codex,claude
 ravel self-update --platforms codex,claude --project
 ```
 
-The command downloads the selected release archive and checksum, verifies it, atomically replaces the binary, then refreshes only the explicitly listed skill destinations. Marketplace-managed skills update through their marketplace client.
+The command downloads the selected release archive and checksum, verifies it, and atomically replaces the binary. The replacement binary then refreshes any Ravel skill bundles already installed in standard user or project locations plus existing Ravel-owned static project instructions. Existing hook commands are preserved, and no new platform integration is created. The explicit `--platforms` flags still install or refresh the requested destinations when they are missing. Set `RAVEL_NO_AUTO_REFRESH=1` to disable automatic maintenance.
+
+Marketplace-managed skills update through their marketplace client. On the updated skill's first local launcher invocation, its bundled or selected CLI performs the same existing-installation refresh, so owned `AGENTS.md`, `CLAUDE.md`, Cursor, Copilot, Gemini, and OpenCode guidance does not remain stale.
 
 Installed Ravel skills perform a zero-network local version handshake on their first invocation. Their launcher compares the global CLI with the skill's `VERSION`; when the global CLI is older, it uses the bundled binary and prints a non-blocking update hint. It does not run `update-check` or `self-update` automatically.
 

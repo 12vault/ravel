@@ -38,6 +38,11 @@ type Result struct {
 	TotalBytes int64     `json:"totalBytes"`
 }
 
+type Options struct {
+	HashCachePath string
+	ForceHashing  bool
+}
+
 func Scan(root string, cfg config.Config) (Result, error) {
 	return ScanWithProgress(root, cfg, nil)
 }
@@ -45,6 +50,12 @@ func Scan(root string, cfg config.Config) (Result, error) {
 // ScanWithProgress scans root and reports each filesystem entry before it is
 // inspected. The callback is optional and is intended for live CLI feedback.
 func ScanWithProgress(root string, cfg config.Config, visit func(path string, files int)) (Result, error) {
+	return ScanWithOptions(root, cfg, visit, Options{})
+}
+
+// ScanWithOptions scans root with optional, reconstructible file-hash caching.
+// Callers that require a fresh content audit should use Scan or ScanWithProgress.
+func ScanWithOptions(root string, cfg config.Config, visit func(path string, files int), options Options) (Result, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return Result{}, err
@@ -68,6 +79,7 @@ func ScanWithProgress(root string, cfg config.Config, visit func(path string, fi
 		outputPath = filepath.Join(absRoot, outputPath)
 	}
 	outputPath = filepath.Clean(outputPath)
+	hashCache := newStatHashCache(options.HashCachePath, absRoot, options.ForceHashing)
 
 	err = filepath.WalkDir(absRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -136,7 +148,12 @@ func ScanWithProgress(root string, cfg config.Config, visit func(path string, fi
 			result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "over max total size"})
 			return nil
 		}
-		hash, err := fileHash(path)
+		var hash string
+		if hashCache != nil {
+			hash, err = hashCache.hash(path, relPath, info, fileHash)
+		} else {
+			hash, err = fileHash(path)
+		}
 		if err != nil {
 			if errors.Is(err, os.ErrPermission) {
 				result.Ignored = append(result.Ignored, Ignored{Path: relPath, Reason: "permission denied"})
@@ -158,6 +175,11 @@ func ScanWithProgress(root string, cfg config.Config, visit func(path string, fi
 	})
 	if err != nil {
 		return Result{}, err
+	}
+	// Hash-cache failures never make a valid scan fail. The next build will
+	// simply hash files again and reconstruct the index.
+	if hashCache != nil {
+		_ = hashCache.save()
 	}
 	sort.Slice(result.Files, func(i, j int) bool { return result.Files[i].Path < result.Files[j].Path })
 	sort.Slice(result.Ignored, func(i, j int) bool { return result.Ignored[i].Path < result.Ignored[j].Path })
