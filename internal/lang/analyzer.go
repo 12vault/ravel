@@ -25,3 +25,17 @@ type ProgressAnalyzer interface {
 	Analyzer
 	AnalyzeWithProgress(ctx context.Context, root string, files []scan.File, progress func(path string, completed int)) (*AnalysisResult, error)
 }
+
+// FileAnalysisCache stores analyzer-owned, per-file intermediate results. The
+// build layer owns persistence and invalidation; analyzers own the value shape.
+type FileAnalysisCache interface {
+	Load(file scan.File, destination any) bool
+	Store(file scan.File, value any)
+}
+
+// IncrementalProgressAnalyzer reuses per-file intermediate results while still
+// receiving the complete language unit for cross-file relationship resolution.
+type IncrementalProgressAnalyzer interface {
+	ProgressAnalyzer
+	AnalyzeWithFileCache(ctx context.Context, root string, files []scan.File, progress func(path string, completed int), cache FileAnalysisCache) (*AnalysisResult, error)
+}

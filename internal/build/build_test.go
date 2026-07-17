@@ -2,14 +2,17 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/12vault/ravel/internal/config"
 	"github.com/12vault/ravel/internal/graph"
+	"github.com/12vault/ravel/internal/scan"
 )
 
 func TestRunBuildsGoGraph(t *testing.T) {
@@ -284,6 +287,124 @@ func TestRunWithCacheInvalidatesGoAnalyzerSettings(t *testing.T) {
 	if countStage(changedStages, "Analyzing go") != 1 {
 		t.Fatalf("changed Go settings stages = %v, want invalidation", changedStages)
 	}
+}
+
+func TestRunWithCacheInvalidatesPolyglotFilesIndependently(t *testing.T) {
+	root := t.TempDir()
+	sources := map[string]string{
+		"src/app.ts":    "export function run(): number { return helper(); }\n",
+		"src/helper.ts": "export function helper(): number { return 1; }\n",
+	}
+	for path, source := range sources {
+		absolute := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(absolute, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := config.Default()
+	cfg.Analysis.Go = false
+	cfg.Analysis.Documents = false
+	cfg.Analysis.Schemas = false
+	cache := CacheOptions{OutputDir: cfg.Output.Dir, Version: "test-v1"}
+
+	first, coldStages := runCachedBuild(t, root, cfg, cache)
+	if countStage(coldStages, "Analyzing typescript") == 0 {
+		t.Fatalf("cold TypeScript stages = %v, want analysis", coldStages)
+	}
+	entries := polyglotCacheEntries(t, root, cfg.Output.Dir)
+	if len(entries) != 2 {
+		t.Fatalf("per-file TypeScript cache entries = %#v, want 2", entries)
+	}
+	baseline := time.Unix(946684800, 0)
+	for _, path := range entries {
+		if err := os.Chtimes(path, baseline, baseline); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	second, warmStages := runCachedBuild(t, root, cfg, cache)
+	if countStage(warmStages, "Cached typescript") != 1 {
+		t.Fatalf("warm TypeScript stages = %v, want cache hit", warmStages)
+	}
+	if !reflect.DeepEqual(first.Graph.Nodes, second.Graph.Nodes) || !reflect.DeepEqual(first.Graph.Edges, second.Graph.Edges) {
+		t.Fatal("warm per-file cache changed the graph")
+	}
+	for source, path := range entries {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.ModTime().Equal(baseline) {
+			t.Fatalf("warm cache rewrote %s at %s: modTime=%v", source, path, info.ModTime())
+		}
+	}
+
+	changed := "export function helper(): number { return 2; }\n"
+	if err := os.WriteFile(filepath.Join(root, "src", "helper.ts"), []byte(changed), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	third, changedStages := runCachedBuild(t, root, cfg, cache)
+	if countStage(changedStages, "Analyzing typescript") == 0 {
+		t.Fatalf("changed TypeScript stages = %v, want partial analysis", changedStages)
+	}
+	entries = polyglotCacheEntries(t, root, cfg.Output.Dir)
+	for source, path := range entries {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if source == "src/app.ts" && !info.ModTime().Equal(baseline) {
+			t.Fatalf("unchanged TypeScript cache was rewritten: %s", path)
+		}
+		if source == "src/helper.ts" && info.ModTime().Equal(baseline) {
+			t.Fatalf("changed TypeScript cache was not rewritten: %s", path)
+		}
+	}
+	var runID, helperID string
+	for _, node := range third.Graph.Nodes {
+		if node.Path == "src/app.ts" && node.Name == "run" {
+			runID = node.ID
+		}
+		if node.Path == "src/helper.ts" && node.Name == "helper" {
+			helperID = node.ID
+		}
+	}
+	if runID == "" || helperID == "" || !hasEdge(third.Graph, graph.EdgeCalls, runID, helperID) {
+		t.Fatalf("mixed cached and changed parses lost cross-file call: run=%q helper=%q", runID, helperID)
+	}
+}
+
+func polyglotCacheEntries(t *testing.T, root, outputDir string) map[string]string {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(root, outputDir, ".state", "cache", "analysis-v1", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := map[string]string{}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envelope struct {
+			Value json.RawMessage `json:"value"`
+		}
+		if json.Unmarshal(data, &envelope) != nil || len(envelope.Value) == 0 {
+			continue
+		}
+		var cached struct {
+			Parsed struct {
+				File scan.File `json:"file"`
+			} `json:"parsed"`
+		}
+		if json.Unmarshal(envelope.Value, &cached) == nil && cached.Parsed.File.Path != "" {
+			entries[cached.Parsed.File.Path] = path
+		}
+	}
+	return entries
 }
 
 func runCachedBuild(t *testing.T, root string, cfg config.Config, cache CacheOptions) (Result, []string) {

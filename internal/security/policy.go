@@ -19,6 +19,7 @@ func WriteDoctor(w io.Writer, cfg config.Config) {
 	fmt.Fprintf(w, "Output dir: %s\n", cfg.Output.Dir)
 	fmt.Fprintln(w, "Scanned language inventory: scanner detection for audited safe files (inventory only)")
 	fmt.Fprintf(w, "Polyglot Tree-sitter semantics: %s (syntax extracted; name-based targets inferred)\n", enabledLabel(cfg.Analysis.Polyglot))
+	fmt.Fprintf(w, "Tree-sitter worker limit: %d\n", cfg.Analysis.Jobs)
 	fmt.Fprintln(w, "Deterministic semantics: Go AST; pure-Go Tree-sitter definitions/call sites; Markdown headings/links; SQL tables/views/columns/indexes/foreign keys/FROM/JOIN references")
 	fmt.Fprintf(w, "Max file size: %d bytes\n", cfg.Scan.MaxFileSizeBytes)
 	fmt.Fprintf(w, "Max total read size: %d bytes\n", cfg.Scan.MaxTotalBytes)

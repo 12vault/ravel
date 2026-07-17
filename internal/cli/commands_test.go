@@ -133,6 +133,27 @@ func TestExecutePrintsDiscoverableSubcommandHelp(t *testing.T) {
 	}
 }
 
+func TestBuildAndUpdateExposeAndValidateJobs(t *testing.T) {
+	for _, command := range []string{"build", "update"} {
+		t.Run(command+" help", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if err := Execute(context.Background(), []string{command, "--help"}, &stdout, &stderr); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(stdout.String(), "--jobs <n>") {
+				t.Fatalf("%s help omits --jobs: %q", command, stdout.String())
+			}
+		})
+		t.Run(command+" invalid jobs", func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := Execute(context.Background(), []string{command, "--jobs", "0"}, &stdout, &stderr)
+			if err == nil || !strings.Contains(err.Error(), "--jobs must be between 1 and 256") {
+				t.Fatalf("%s invalid jobs error = %v", command, err)
+			}
+		})
+	}
+}
+
 func TestSameScanUsesPathsAndHashes(t *testing.T) {
 	before := scan.Result{Files: []scan.File{{Path: "a.go", Hash: "one"}}}
 	after := scan.Result{Files: []scan.File{{Path: "a.go", Hash: "one", ModTime: time.Now()}}}

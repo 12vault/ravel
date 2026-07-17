@@ -46,6 +46,19 @@ type analysisCacheEntry struct {
 	Result lang.AnalysisResult `json:"result"`
 }
 
+type analysisFileCacheEntry struct {
+	Schema int             `json:"schema"`
+	Key    string          `json:"key"`
+	Value  json.RawMessage `json:"value"`
+}
+
+type fileAnalysisCache struct {
+	cache    *analysisCache
+	identity string
+	hits     int
+	misses   int
+}
+
 func newAnalysisCache(root string, options CacheOptions) *analysisCache {
 	if strings.TrimSpace(options.OutputDir) == "" || strings.TrimSpace(options.Version) == "" {
 		return nil
@@ -130,6 +143,63 @@ func (c *analysisCache) save(unit, key string, result *lang.AnalysisResult) erro
 	}
 	data = append(data, '\n')
 	return writeCacheAtomic(path, data)
+}
+
+func (c *analysisCache) files(identity string) *fileAnalysisCache {
+	return &fileAnalysisCache{cache: c, identity: identity}
+}
+
+func (c *fileAnalysisCache) Load(file scan.File, destination any) bool {
+	key, err := c.cache.key(c.identity, []scan.File{file})
+	if err != nil {
+		c.misses++
+		return false
+	}
+	path := c.cache.path(c.unit(file))
+	c.cache.used[path] = true
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 256<<20 {
+		c.misses++
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		c.misses++
+		return false
+	}
+	var entry analysisFileCacheEntry
+	if json.Unmarshal(data, &entry) != nil || entry.Schema != analysisCacheSchema || entry.Key != key || json.Unmarshal(entry.Value, destination) != nil {
+		c.misses++
+		return false
+	}
+	c.hits++
+	return true
+}
+
+func (c *fileAnalysisCache) Store(file scan.File, value any) {
+	key, err := c.cache.key(c.identity, []scan.File{file})
+	if err != nil {
+		return
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	path := c.cache.path(c.unit(file))
+	c.cache.used[path] = true
+	data, err := json.Marshal(analysisFileCacheEntry{Schema: analysisCacheSchema, Key: key, Value: encoded})
+	if err != nil {
+		return
+	}
+	data = append(data, '\n')
+	if os.MkdirAll(c.cache.dir, 0o755) != nil {
+		return
+	}
+	_ = writeCacheAtomic(path, data)
+}
+
+func (c *fileAnalysisCache) unit(file scan.File) string {
+	return "file:" + c.identity + ":" + file.Path
 }
 
 func (c *analysisCache) prune() {

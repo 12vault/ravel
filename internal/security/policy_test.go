@@ -16,6 +16,7 @@ func TestWriteDoctorDistinguishesInventoryFromDeterministicSemantics(t *testing.
 	for _, want := range []string{
 		"Scanned language inventory: scanner detection for audited safe files (inventory only)",
 		"Polyglot Tree-sitter semantics: enabled (syntax extracted; name-based targets inferred)",
+		"Tree-sitter worker limit: 4",
 		"Deterministic semantics: Go AST; pure-Go Tree-sitter definitions/call sites; Markdown headings/links; SQL tables/views/columns/indexes/foreign keys/FROM/JOIN references",
 	} {
 		if !strings.Contains(text, want) {

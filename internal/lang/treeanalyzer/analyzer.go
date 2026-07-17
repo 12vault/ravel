@@ -23,17 +23,30 @@ import (
 
 const parseTimeoutMicros = 2_000_000
 
+// Keep the default below typical desktop core counts so indexing remains
+// responsive alongside editors, simulators, and builds. Callers can opt in to
+// more parallelism with analysis.jobs or --jobs.
+const defaultMaxWorkers = 4
+
 // gotreesitter starts process-wide heap-growth accounting at this source size.
 // Those measurements include allocations from other parser goroutines, so
 // large files must parse exclusively to avoid false memory_budget failures.
 const concurrentParseMaxFileSize = 64*1024 - 1
 
 type Analyzer struct {
-	language string
+	language   string
+	maxWorkers int
 }
 
 func New(language string) *Analyzer {
-	return &Analyzer{language: strings.TrimSpace(language)}
+	return NewWithJobs(language, defaultMaxWorkers)
+}
+
+func NewWithJobs(language string, jobs int) *Analyzer {
+	if jobs < 1 {
+		jobs = defaultMaxWorkers
+	}
+	return &Analyzer{language: strings.TrimSpace(language), maxWorkers: jobs}
 }
 
 func (a *Analyzer) Language() string { return a.language }
@@ -112,23 +125,15 @@ type reference struct {
 }
 
 func (a *Analyzer) Analyze(ctx context.Context, _ string, files []scan.File) (*lang.AnalysisResult, error) {
-	return a.AnalyzeWithProgress(ctx, "", files, nil)
+	return a.analyzeWithFileCache(ctx, files, nil, nil)
 }
 
 func (a *Analyzer) AnalyzeWithProgress(ctx context.Context, _ string, files []scan.File, progress func(path string, completed int)) (*lang.AnalysisResult, error) {
-	processWorkers := isolatedWorkerCount(len(files))
-	if processWorkers > 1 {
-		result, err := a.analyzeWithProcessWorkers(ctx, files, progress, processWorkers)
-		if err == nil {
-			return result, nil
-		}
-		if !isProcessWorkerUnavailable(err) {
-			return nil, err
-		}
-		// Embedders may use treeanalyzer without exposing Ravel's hidden worker
-		// command. Preserve library compatibility with a safe serial fallback.
-	}
-	return a.analyzeWithWorkers(ctx, files, progress, 1)
+	return a.analyzeWithFileCache(ctx, files, progress, nil)
+}
+
+func (a *Analyzer) AnalyzeWithFileCache(ctx context.Context, _ string, files []scan.File, progress func(path string, completed int), cache lang.FileAnalysisCache) (*lang.AnalysisResult, error) {
+	return a.analyzeWithFileCache(ctx, files, progress, cache)
 }
 
 type parseOutcome struct {
@@ -138,7 +143,18 @@ type parseOutcome struct {
 	contributed bool
 }
 
-func analysisWorkerCount(fileCount int) int {
+type parseJob struct {
+	index int
+	file  scan.File
+}
+
+type cachedParseOutcome struct {
+	Parsed      processParsedFile  `json:"parsed"`
+	Diagnostics []graph.Diagnostic `json:"diagnostics,omitempty"`
+	Contributed bool               `json:"contributed"`
+}
+
+func analysisWorkerCount(fileCount, maxWorkers int) int {
 	if fileCount <= 0 {
 		return 0
 	}
@@ -149,36 +165,113 @@ func analysisWorkerCount(fileCount int) int {
 	if workers > fileCount {
 		workers = fileCount
 	}
+	if maxWorkers > 0 && workers > maxWorkers {
+		workers = maxWorkers
+	}
 	return workers
 }
 
-func isolatedWorkerCount(fileCount int) int {
+func isolatedWorkerCount(fileCount, maxWorkers int) int {
 	if fileCount < minProcessWorkerFiles {
 		return 0
 	}
-	return analysisWorkerCount(fileCount)
+	return analysisWorkerCount(fileCount, maxWorkers)
 }
 
 func (a *Analyzer) analyzeWithWorkers(ctx context.Context, files []scan.File, progress func(path string, completed int), workers int) (*lang.AnalysisResult, error) {
-	result := &lang.AnalysisResult{}
+	outcomes, ready, jobs := newParsePlan(files, nil)
+	if err := a.parseWithWorkers(ctx, files, jobs, outcomes, ready, progress, workers); err != nil {
+		return nil, err
+	}
+	return analysisFromOutcomes(outcomes), nil
+}
+
+func (a *Analyzer) analyzeWithFileCache(ctx context.Context, files []scan.File, progress func(path string, completed int), cache lang.FileAnalysisCache) (*lang.AnalysisResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if len(files) == 0 {
-		return result, nil
+		return &lang.AnalysisResult{}, nil
+	}
+	outcomes, ready, jobs := newParsePlan(files, cache)
+	workers := isolatedWorkerCount(len(jobs), a.maxWorkers)
+	var err error
+	if workers > 1 {
+		err = a.parseWithProcessWorkers(ctx, files, jobs, outcomes, ready, progress, workers)
+		if isProcessWorkerUnavailable(err) {
+			// Embedders may use treeanalyzer without exposing Ravel's hidden worker
+			// command. Preserve library compatibility with a safe serial fallback.
+			err = a.parseWithWorkers(ctx, files, jobs, outcomes, ready, progress, 1)
+		}
+	} else {
+		err = a.parseWithWorkers(ctx, files, jobs, outcomes, ready, progress, 1)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if cache != nil {
+		for _, job := range jobs {
+			outcome := outcomes[job.index]
+			cache.Store(job.file, cachedParseOutcome{
+				Parsed: parsedFileToProcessParsed(outcome.parsed), Diagnostics: outcome.diagnostics,
+				Contributed: outcome.contributed,
+			})
+		}
+	}
+	return analysisFromOutcomes(outcomes), nil
+}
+
+func newParsePlan(files []scan.File, cache lang.FileAnalysisCache) ([]parseOutcome, []bool, []parseJob) {
+	outcomes := make([]parseOutcome, len(files))
+	ready := make([]bool, len(files))
+	jobs := make([]parseJob, 0, len(files))
+	for index, file := range files {
+		var cached cachedParseOutcome
+		if cache != nil && cache.Load(file, &cached) {
+			cached.Parsed.File = file
+			outcomes[index] = parseOutcome{
+				parsed: processParsedToParsedFile(cached.Parsed), diagnostics: cached.Diagnostics,
+				contributed: cached.Contributed,
+			}
+			ready[index] = true
+			continue
+		}
+		jobs = append(jobs, parseJob{index: index, file: file})
+	}
+	return outcomes, ready, jobs
+}
+
+func analysisFromOutcomes(outcomes []parseOutcome) *lang.AnalysisResult {
+	result := &lang.AnalysisResult{}
+	parsed := make([]parsedFile, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		result.Diagnostics = append(result.Diagnostics, outcome.diagnostics...)
+		if outcome.contributed {
+			parsed = append(parsed, outcome.parsed)
+		}
+	}
+	emitDefinitions(parsed, result)
+	emitReferences(parsed, result)
+	emitHeritage(parsed, result)
+	emitImports(parsed, result)
+	return result
+}
+
+func (a *Analyzer) parseWithWorkers(ctx context.Context, files []scan.File, jobs []parseJob, outcomes []parseOutcome, ready []bool, progress func(path string, completed int), workers int) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if workers < 1 {
 		workers = 1
 	}
-	if workers > len(files) {
-		workers = len(files)
+	if workers > len(jobs) && len(jobs) > 0 {
+		workers = len(jobs)
 	}
 
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer gotreesitter.DrainArenaPools()
 
-	outcomes := make([]parseOutcome, len(files))
 	finished := make(chan int, workers)
 	var next atomic.Int64
 	var parseGate sync.RWMutex
@@ -191,11 +284,13 @@ func (a *Analyzer) analyzeWithWorkers(ctx context.Context, files []scan.File, pr
 				if workerCtx.Err() != nil {
 					return
 				}
-				index := int(next.Add(1)) - 1
-				if index >= len(files) {
+				jobIndex := int(next.Add(1)) - 1
+				if jobIndex >= len(jobs) {
 					return
 				}
-				file := files[index]
+				job := jobs[jobIndex]
+				index := job.index
+				file := job.file
 				entry := entryForFile(a.language, file.Path)
 				if entry == nil || entry.Language == nil {
 					select {
@@ -214,7 +309,7 @@ func (a *Analyzer) analyzeWithWorkers(ctx context.Context, files []scan.File, pr
 				} else {
 					parseGate.Lock()
 				}
-				pf, diagnostics, err := parseFile(workerCtx, file, *entry, timeoutMicros)
+				pf, diagnostics, err := parseSourceFile(workerCtx, file, *entry, timeoutMicros)
 				if file.Size <= concurrentParseMaxFileSize {
 					parseGate.RUnlock()
 				} else {
@@ -230,12 +325,10 @@ func (a *Analyzer) analyzeWithWorkers(ctx context.Context, files []scan.File, pr
 		}()
 	}
 
-	parsed := make([]parsedFile, 0, len(files))
-	ready := make([]bool, len(files))
 	for i, file := range files {
 		if err := workerCtx.Err(); err != nil {
 			wg.Wait()
-			return nil, err
+			return err
 		}
 		if progress != nil {
 			progress(file.Path, i)
@@ -246,18 +339,14 @@ func (a *Analyzer) analyzeWithWorkers(ctx context.Context, files []scan.File, pr
 				ready[index] = true
 			case <-workerCtx.Done():
 				wg.Wait()
-				return nil, workerCtx.Err()
+				return workerCtx.Err()
 			}
 		}
 		outcome := outcomes[i]
 		if outcome.err != nil {
 			cancel()
 			wg.Wait()
-			return nil, outcome.err
-		}
-		result.Diagnostics = append(result.Diagnostics, outcome.diagnostics...)
-		if outcome.contributed {
-			parsed = append(parsed, outcome.parsed)
+			return outcome.err
 		}
 	}
 	wg.Wait()
@@ -265,11 +354,7 @@ func (a *Analyzer) analyzeWithWorkers(ctx context.Context, files []scan.File, pr
 		progress(files[len(files)-1].Path, len(files))
 	}
 
-	emitDefinitions(parsed, result)
-	emitReferences(parsed, result)
-	emitHeritage(parsed, result)
-	emitImports(parsed, result)
-	return result, nil
+	return nil
 }
 
 func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry, timeoutMicros uint64) (parsedFile, []graph.Diagnostic, error) {
@@ -375,6 +460,8 @@ func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry, ti
 	pf.references = dedupeReferences(pf.references)
 	return pf, diagnostics, nil
 }
+
+var parseSourceFile = parseFile
 
 var importDeclarationTypes = map[string]map[string]bool{
 	"javascript": {"import_statement": true, "export_statement": true},

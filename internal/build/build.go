@@ -71,7 +71,7 @@ func RunWithCache(ctx context.Context, root string, cfg config.Config, progress 
 	for language, files := range filesByLanguage {
 		analyzer, ok := registry.ForLanguage(language)
 		if !ok && cfg.Analysis.Polyglot && treeanalyzer.Supports(language, files) {
-			analyzer, ok = treeanalyzer.New(language), true
+			analyzer, ok = treeanalyzer.NewWithJobs(language, cfg.Analysis.Jobs), true
 		}
 		if !ok {
 			for _, file := range files {
@@ -217,6 +217,15 @@ func analyzeWithCache(ctx context.Context, cache *analysisCache, identity, unit 
 		return nil, err
 	}
 	if cache != nil {
+		if incremental, ok := analyzer.(lang.IncrementalProgressAnalyzer); ok {
+			fileCache := cache.files(identity)
+			result, err := incremental.AnalyzeWithFileCache(ctx, root, files, fileProgress, fileCache)
+			if err != nil {
+				return nil, err
+			}
+			status(fileCache.misses == 0 && fileCache.hits > 0)
+			return result, nil
+		}
 		key, err := cache.key(identity, files)
 		if err != nil {
 			return nil, err

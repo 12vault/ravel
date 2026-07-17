@@ -403,10 +403,11 @@ Useful command-line overrides include:
 ravel audit --max-file-size 2097152 .
 ravel build --out /tmp/ravel-output .
 ravel build --no-call-graph .
+ravel build --jobs 2 .
 ravel update .
 ```
 
-Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json`, `output.markdownReport`, and `output.communityClustering` switches control generated artifacts and metadata. Community controls default to `output.communityGranularity: balanced` and `output.communityHubDegreeThreshold: 0` (automatic).
+Configuration is strict: unknown settings, invalid values, and options that are not implemented yet return an error. Tree-sitter analysis uses at most `analysis.jobs: 4` workers by default; `--jobs <n>` overrides it for one build or update. Set `analysis.go` to `false` to disable Go semantics and `analysis.polyglot` to `false` to disable Tree-sitter semantics. Disable both, plus `analysis.documents` and `analysis.schemas`, for topology-only output. The `output.json`, `output.markdownReport`, and `output.communityClustering` switches control generated artifacts and metadata. Community controls default to `output.communityGranularity: balanced` and `output.communityHubDegreeThreshold: 0` (automatic).
 
 ### Supported languages
 

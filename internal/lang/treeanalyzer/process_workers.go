@@ -53,39 +53,39 @@ type processWorkerResponse struct {
 }
 
 type processParsedFile struct {
-	File        scan.File
-	Language    string
-	Source      []byte
-	Definitions []processDefinition
-	References  []processReference
-	Heritage    []gotreesitter.HeritageRef
-	Imports     []gotreesitter.ImportRef
+	File        scan.File                  `json:"file"`
+	Language    string                     `json:"language"`
+	Source      []byte                     `json:"source"`
+	Definitions []processDefinition        `json:"definitions,omitempty"`
+	References  []processReference         `json:"references,omitempty"`
+	Heritage    []gotreesitter.HeritageRef `json:"heritage,omitempty"`
+	Imports     []gotreesitter.ImportRef   `json:"imports,omitempty"`
 }
 
 type processDefinition struct {
-	ID        string
-	Name      string
-	Qualified string
-	Kind      graph.NodeKind
-	Path      string
-	Language  string
-	StartByte uint32
-	EndByte   uint32
-	StartLine int
-	EndLine   int
-	Column    int
-	Partial   bool
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Qualified string         `json:"qualified"`
+	Kind      graph.NodeKind `json:"kind"`
+	Path      string         `json:"path"`
+	Language  string         `json:"language"`
+	StartByte uint32         `json:"startByte"`
+	EndByte   uint32         `json:"endByte"`
+	StartLine int            `json:"startLine"`
+	EndLine   int            `json:"endLine"`
+	Column    int            `json:"column"`
+	Partial   bool           `json:"partial,omitempty"`
 }
 
 type processReference struct {
-	Name      string
-	Kind      graph.EdgeKind
-	Path      string
-	Language  string
-	StartByte uint32
-	EndByte   uint32
-	StartLine int
-	Column    int
+	Name      string         `json:"name"`
+	Kind      graph.EdgeKind `json:"kind"`
+	Path      string         `json:"path"`
+	Language  string         `json:"language"`
+	StartByte uint32         `json:"startByte"`
+	EndByte   uint32         `json:"endByte"`
+	StartLine int            `json:"startLine"`
+	Column    int            `json:"column"`
 }
 
 type processWorker struct {
@@ -210,18 +210,25 @@ func (worker *processWorker) parse(request processWorkerRequest) (processWorkerR
 }
 
 func (a *Analyzer) analyzeWithProcessWorkers(ctx context.Context, files []scan.File, progress func(path string, completed int), workers int) (*lang.AnalysisResult, error) {
-	result := &lang.AnalysisResult{}
-	if err := ctx.Err(); err != nil {
+	outcomes, ready, jobs := newParsePlan(files, nil)
+	if err := a.parseWithProcessWorkers(ctx, files, jobs, outcomes, ready, progress, workers); err != nil {
 		return nil, err
 	}
+	return analysisFromOutcomes(outcomes), nil
+}
+
+func (a *Analyzer) parseWithProcessWorkers(ctx context.Context, files []scan.File, jobs []parseJob, outcomes []parseOutcome, ready []bool, progress func(path string, completed int), workers int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(files) == 0 {
-		return result, nil
+		return nil
 	}
 	if workers < 1 {
 		workers = 1
 	}
-	if workers > len(files) {
-		workers = len(files)
+	if workers > len(jobs) {
+		workers = len(jobs)
 	}
 
 	workerCtx, cancel := context.WithCancel(ctx)
@@ -234,12 +241,11 @@ func (a *Analyzer) analyzeWithProcessWorkers(ctx context.Context, files []scan.F
 			for _, started := range pool {
 				_ = started.stop()
 			}
-			return nil, err
+			return err
 		}
 		pool = append(pool, worker)
 	}
 
-	outcomes := make([]parseOutcome, len(files))
 	finished := make(chan int, workers)
 	workerErrors := make(chan error, workers)
 	var next atomic.Int64
@@ -260,17 +266,19 @@ func (a *Analyzer) analyzeWithProcessWorkers(ctx context.Context, files []scan.F
 				if workerCtx.Err() != nil {
 					return
 				}
-				index := int(next.Add(1)) - 1
-				if index >= len(files) {
+				jobIndex := int(next.Add(1)) - 1
+				if jobIndex >= len(jobs) {
 					return
 				}
+				job := jobs[jobIndex]
+				index := job.index
 				response, err := worker.parse(processWorkerRequest{
-					Index: index, Language: a.language, File: files[index],
+					Index: index, Language: a.language, File: job.file,
 					TimeoutMicros: processWorkerTimeoutMicros(workers),
 				})
 				if err != nil {
 					select {
-					case workerErrors <- fmt.Errorf("parse %s in worker: %w", files[index].Path, err):
+					case workerErrors <- fmt.Errorf("parse %s in worker: %w", job.file.Path, err):
 					case <-workerCtx.Done():
 					}
 					cancel()
@@ -292,8 +300,6 @@ func (a *Analyzer) analyzeWithProcessWorkers(ctx context.Context, files []scan.F
 		}(worker)
 	}
 
-	parsed := make([]parsedFile, 0, len(files))
-	ready := make([]bool, len(files))
 	for i, file := range files {
 		if progress != nil {
 			progress(file.Path, i)
@@ -305,17 +311,17 @@ func (a *Analyzer) analyzeWithProcessWorkers(ctx context.Context, files []scan.F
 			case err := <-workerErrors:
 				cancel()
 				wg.Wait()
-				return nil, err
+				return err
 			case <-workerCtx.Done():
 				wg.Wait()
 				if err := ctx.Err(); err != nil {
-					return nil, err
+					return err
 				}
 				select {
 				case err := <-workerErrors:
-					return nil, err
+					return err
 				default:
-					return nil, workerCtx.Err()
+					return workerCtx.Err()
 				}
 			}
 		}
@@ -323,27 +329,19 @@ func (a *Analyzer) analyzeWithProcessWorkers(ctx context.Context, files []scan.F
 		if outcome.err != nil {
 			cancel()
 			wg.Wait()
-			return nil, outcome.err
-		}
-		result.Diagnostics = append(result.Diagnostics, outcome.diagnostics...)
-		if outcome.contributed {
-			parsed = append(parsed, outcome.parsed)
+			return outcome.err
 		}
 	}
 	wg.Wait()
 	select {
 	case err := <-workerErrors:
-		return nil, err
+		return err
 	default:
 	}
 	if progress != nil {
 		progress(files[len(files)-1].Path, len(files))
 	}
-	emitDefinitions(parsed, result)
-	emitReferences(parsed, result)
-	emitHeritage(parsed, result)
-	emitImports(parsed, result)
-	return result, nil
+	return nil
 }
 
 // RunProcessWorker serves the hidden single-threaded parser process protocol.
@@ -371,7 +369,7 @@ func RunProcessWorker(ctx context.Context, input io.Reader, output io.Writer) er
 			}
 			continue
 		}
-		parsed, diagnostics, err := parseFile(ctx, request.File, *entry, request.TimeoutMicros)
+		parsed, diagnostics, err := parseSourceFile(ctx, request.File, *entry, request.TimeoutMicros)
 		response.Parsed = parsedFileToProcessParsed(parsed)
 		response.Diagnostics = diagnostics
 		response.Contributed = true

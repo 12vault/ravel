@@ -28,6 +28,7 @@ type AnalysisConfig struct {
 	Schemas        bool
 	CallGraph      bool
 	TypeResolution bool
+	Jobs           int
 }
 
 type OutputConfig struct {
@@ -69,6 +70,7 @@ func Default() Config {
 			Schemas:        true,
 			CallGraph:      true,
 			TypeResolution: false,
+			Jobs:           4,
 		},
 		Retrieval: RetrievalConfig{
 			Traversal:          "bfs",
@@ -229,6 +231,12 @@ func applyValue(cfg *Config, key, value string) error {
 			return fmt.Errorf("%s: %w", key, err)
 		}
 		cfg.Analysis.TypeResolution = parsed
+	case "analysis.jobs":
+		parsed, err := parseInt(value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+		cfg.Analysis.Jobs = int(parsed)
 	case "retrieval.traversal":
 		cfg.Retrieval.Traversal = strings.ToLower(value)
 	case "retrieval.direction":
@@ -344,6 +352,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.Analysis.TypeResolution {
 		return fmt.Errorf("analysis.typeResolution is not implemented")
+	}
+	if cfg.Analysis.Jobs < 1 || cfg.Analysis.Jobs > 256 {
+		return fmt.Errorf("analysis.jobs must be between 1 and 256")
 	}
 	if cfg.Retrieval.Traversal != "bfs" && cfg.Retrieval.Traversal != "dfs" {
 		return fmt.Errorf("retrieval.traversal must be bfs or dfs")
@@ -462,6 +473,7 @@ analysis:
   schemas: true
   callGraph: true
   typeResolution: false
+  jobs: 4
 
 retrieval:
   traversal: bfs
