@@ -529,7 +529,15 @@ def retrieval_funnel(trace_ids: list[str] | None, traces: list[dict]) -> dict:
         "returned": any(int(trace.get("returnedRank") or 0) > 0 for trace in traces),
         "droppedReasons": sorted({
             str(trace.get("droppedReason")) for trace in traces if trace.get("droppedReason")
-        }) or (["trace_unavailable"] if trace_ids else ["not_indexed"]),
+        }) or (["trace_unavailable"] if trace_ids and not traces else (["not_indexed"] if not trace_ids else [])),
+        "promotionExclusions": sorted({
+            str(trace.get("promotionExclusion")) for trace in traces
+            if trace.get("promotionExclusion")
+        }),
+        "traversalExclusions": sorted({
+            str(trace.get("traversalExclusion")) for trace in traces
+            if trace.get("traversalExclusion")
+        }),
     }
 
 
@@ -561,9 +569,15 @@ def summarize(results_path: Path, build: dict, language: str, item_limit: int) -
         stages = ("indexed", "ranked", "seeded", "traversed", "walked", "candidate", "returned")
         funnels = [row["ravel"]["funnel"] for row in ok if "funnel" in row["ravel"]]
         dropped = {}
+        promotion_exclusions = {}
+        traversal_exclusions = {}
         for funnel in funnels:
             for reason in funnel.get("droppedReasons", []):
                 dropped[reason] = dropped.get(reason, 0) + 1
+            for reason in funnel.get("promotionExclusions", []):
+                promotion_exclusions[reason] = promotion_exclusions.get(reason, 0) + 1
+            for reason in funnel.get("traversalExclusions", []):
+                traversal_exclusions[reason] = traversal_exclusions.get(reason, 0) + 1
         return {
             "cases": len(funnels),
             "stages": {
@@ -577,6 +591,8 @@ def summarize(results_path: Path, build: dict, language: str, item_limit: int) -
                 for stage in stages
             },
             "droppedReasons": dict(sorted(dropped.items())),
+            "promotionExclusions": dict(sorted(promotion_exclusions.items())),
+            "traversalExclusions": dict(sorted(traversal_exclusions.items())),
         }
 
     return {

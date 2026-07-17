@@ -43,6 +43,7 @@ const (
 	candidateBudgetPercent   = 92
 	shortlistLexicalPrefix   = 12
 	shortlistGraphReserve    = 8
+	traceReachabilityLimit   = 20_000
 	// Affected bootstrap seeds include the target plus bounded source/container
 	// and symbol nodes. This prevents very large files or packages from turning
 	// reverse-impact lookup into an unbounded traversal origin set.
@@ -139,17 +140,20 @@ type RetrievalStats struct {
 // RetrievalTrace records how one requested node moved through retrieval. It is
 // diagnostic only: traced nodes never affect ranking, traversal, or packing.
 type RetrievalTrace struct {
-	ID            string `json:"id"`
-	Indexed       bool   `json:"indexed"`
-	LexicalRank   int    `json:"lexicalRank,omitempty"`
-	Seeded        bool   `json:"seeded,omitempty"`
-	Traversed     bool   `json:"traversed,omitempty"`
-	Depth         int    `json:"depth,omitempty"`
-	WalkRank      int    `json:"walkRank,omitempty"`
-	CandidateRank int    `json:"candidateRank,omitempty"`
-	ReturnedRank  int    `json:"returnedRank,omitempty"`
-	Deduplicated  bool   `json:"deduplicated,omitempty"`
-	DroppedReason string `json:"droppedReason,omitempty"`
+	ID                 string `json:"id"`
+	Indexed            bool   `json:"indexed"`
+	LexicalRank        int    `json:"lexicalRank,omitempty"`
+	PromotionRank      int    `json:"promotionRank,omitempty"`
+	PromotionExclusion string `json:"promotionExclusion,omitempty"`
+	TraversalExclusion string `json:"traversalExclusion,omitempty"`
+	Seeded             bool   `json:"seeded,omitempty"`
+	Traversed          bool   `json:"traversed,omitempty"`
+	Depth              int    `json:"depth,omitempty"`
+	WalkRank           int    `json:"walkRank,omitempty"`
+	CandidateRank      int    `json:"candidateRank,omitempty"`
+	ReturnedRank       int    `json:"returnedRank,omitempty"`
+	Deduplicated       bool   `json:"deduplicated,omitempty"`
+	DroppedReason      string `json:"droppedReason,omitempty"`
 }
 
 type normalizedRetrieveOptions struct {
@@ -249,7 +253,7 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 	terms := retrievalTerms(question, normalized.Relations)
 	ranked := idx.rankWithAnchors(strings.Join(terms, " "), question)
 	if len(ranked) == 0 && len(forcedSeedIDs) == 0 {
-		traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, nil, nil, traversalResult{})
+		traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, nil, nil, traversalResult{}, normalized.CandidateShortlist)
 		finalizeRetrievalTraces(traces, 0)
 		return Retrieval{
 			Version: 1,
@@ -285,7 +289,8 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 
 	adjacency := idx.newQueryAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, normalized)
-	traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, ranked, seedSet, walk)
+	traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, ranked, seedSet, walk, normalized.CandidateShortlist)
+	idx.diagnoseTraversalExclusions(traces, seedIDs, seedSet, scores, adjacency, normalized, walk)
 	walk = idx.promoteLexicalCandidates(walk, ranked, normalized.CandidateShortlist)
 	for seedID, edge := range seedEvidence {
 		if seedSet[seedID] {
@@ -295,7 +300,7 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, adjacency.degree, walk, traces), nil
 }
 
-func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet map[string]bool, walk traversalResult) []RetrievalTrace {
+func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet map[string]bool, walk traversalResult, shortlist bool) []RetrievalTrace {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -314,13 +319,148 @@ func (idx *Index) newRetrievalTraces(ids []string, ranked []rankedNode, seedSet 
 		}
 		traces = append(traces, trace)
 	}
+	promotionRank := 0
 	for rank, candidate := range ranked {
-		id := idx.docs[candidate.index].node.ID
-		if position, ok := positions[id]; ok {
-			traces[position].LexicalRank = rank + 1
+		node := idx.docs[candidate.index].node
+		id := node.ID
+		position, traced := positions[id]
+		eligible := candidate.anchored
+		if shortlist {
+			eligible = eligibleShortlistCandidate(node)
+		}
+		if !eligible {
+			if traced {
+				traces[position].LexicalRank = rank + 1
+				traces[position].PromotionExclusion = "shortlist_ineligible"
+				if !shortlist {
+					traces[position].PromotionExclusion = "not_anchored"
+				}
+			}
+			continue
+		}
+		promotionRank++
+		if !traced {
+			continue
+		}
+		traces[position].LexicalRank = rank + 1
+		traces[position].PromotionRank = promotionRank
+		if promotionRank > maximumLexicalCandidates {
+			traces[position].PromotionExclusion = "lexical_cutoff"
+		}
+	}
+	for position := range traces {
+		if traces[position].Indexed && traces[position].LexicalRank == 0 {
+			traces[position].PromotionExclusion = "not_ranked"
 		}
 	}
 	return traces
+}
+
+// diagnoseTraversalExclusions explains why traced nodes were not reached by
+// graph expansion. It runs only for explicit diagnostics and never changes the
+// traversal result used for ranking or packing.
+func (idx *Index) diagnoseTraversalExclusions(traces []RetrievalTrace, seedIDs []string, seedSet map[string]bool, scores map[string]int, adjacency *queryAdjacency, options normalizedRetrieveOptions, walk traversalResult) {
+	if len(traces) == 0 {
+		return
+	}
+	var unfiltered *queryAdjacency
+	for position := range traces {
+		trace := &traces[position]
+		if !trace.Indexed || trace.Traversed {
+			continue
+		}
+		reached, limited := traceReachable(seedIDs, seedSet, trace.ID, adjacency, options.MaxDepth, walk.hubThreshold, true)
+		if reached {
+			if walk.exploredLimit {
+				trace.TraversalExclusion = "exploration_limit"
+			} else {
+				trace.TraversalExclusion = "branch_limit"
+			}
+			continue
+		}
+		if limited {
+			trace.TraversalExclusion = "diagnostic_limit"
+			continue
+		}
+		reached, limited = traceReachable(seedIDs, seedSet, trace.ID, adjacency, options.MaxDepth, -1, false)
+		if reached {
+			trace.TraversalExclusion = "hub_suppressed"
+			continue
+		}
+		if limited {
+			trace.TraversalExclusion = "diagnostic_limit"
+			continue
+		}
+		reached, limited = traceReachable(seedIDs, seedSet, trace.ID, adjacency, 8, -1, false)
+		if reached {
+			trace.TraversalExclusion = "depth_limit"
+			continue
+		}
+		if limited {
+			trace.TraversalExclusion = "diagnostic_limit"
+			continue
+		}
+		if options.filterEdges {
+			if unfiltered == nil {
+				allOptions := options
+				allOptions.filterEdges = false
+				allOptions.relationSet = nil
+				unfiltered = idx.newQueryAdjacency(allOptions, scores)
+			}
+			reached, limited = traceReachable(seedIDs, seedSet, trace.ID, unfiltered, 8, -1, false)
+			if reached {
+				trace.TraversalExclusion = "relation_filter"
+				continue
+			}
+			if limited {
+				trace.TraversalExclusion = "diagnostic_limit"
+				continue
+			}
+		}
+		trace.TraversalExclusion = "disconnected"
+	}
+}
+
+func traceReachable(seeds []string, seedSet map[string]bool, target string, adjacency *queryAdjacency, maxDepth, hubThreshold int, respectHubs bool) (bool, bool) {
+	type item struct {
+		id    string
+		depth int
+	}
+	queue := make([]item, 0, len(seeds))
+	seen := make(map[string]bool, min(traceReachabilityLimit, len(seeds)*16))
+	for _, seed := range seeds {
+		if seed == target {
+			return true, false
+		}
+		if !seen[seed] {
+			seen[seed] = true
+			queue = append(queue, item{id: seed})
+		}
+	}
+	for head := 0; head < len(queue); head++ {
+		current := queue[head]
+		if current.depth >= maxDepth {
+			continue
+		}
+		if respectHubs && !seedSet[current.id] && hubThreshold >= 0 && adjacency.degreeOf(current.id) >= hubThreshold {
+			continue
+		}
+		for _, edge := range adjacency.neighborsOf(current.id) {
+			next := adjacency.nodeID(edge)
+			if seen[next] {
+				continue
+			}
+			if next == target {
+				return true, false
+			}
+			if len(seen) >= traceReachabilityLimit {
+				return false, true
+			}
+			seen[next] = true
+			queue = append(queue, item{id: next, depth: current.depth + 1})
+		}
+	}
+	return false, false
 }
 
 // promoteLexicalCandidates exposes ranked matches without turning every match

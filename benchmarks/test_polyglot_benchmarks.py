@@ -370,12 +370,16 @@ class CFamilyTests(unittest.TestCase):
         funnel = run_c_family.retrieval_funnel(["gold"], [{
             "id": "gold", "indexed": True, "lexicalRank": 12,
             "walkRank": 8, "candidateRank": 8, "droppedReason": "token_budget",
+            "promotionExclusion": "lexical_cutoff",
+            "traversalExclusion": "depth_limit",
         }])
         self.assertTrue(funnel["indexed"])
         self.assertTrue(funnel["ranked"])
         self.assertTrue(funnel["candidate"])
         self.assertFalse(funnel["returned"])
         self.assertEqual(funnel["droppedReasons"], ["token_budget"])
+        self.assertEqual(funnel["promotionExclusions"], ["lexical_cutoff"])
+        self.assertEqual(funnel["traversalExclusions"], ["depth_limit"])
         self.assertEqual(
             run_c_family.retrieval_funnel([], [])["droppedReasons"], ["not_indexed"]
         )

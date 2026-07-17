@@ -859,6 +859,93 @@ func TestRetrieveTraceReportsNodeFunnelWithoutChangingResults(t *testing.T) {
 	}
 }
 
+func TestRetrieveTraceDiagnosesTraversalExclusions(t *testing.T) {
+	tests := []struct {
+		name      string
+		graph     graph.Graph
+		options   RetrieveOptions
+		target    string
+		exclusion string
+	}{
+		{
+			name: "relation filter",
+			graph: graph.Graph{
+				Nodes: []graph.Node{
+					{ID: "root", Kind: graph.NodeFunction, Name: "TraceRoot"},
+					{ID: "other", Kind: graph.NodeFunction, Name: "Other"},
+					{ID: "target", Kind: graph.NodeFunction, Name: "FilteredTarget"},
+				},
+				Edges: []graph.Edge{
+					testQueryEdge(graph.EdgeCalls, "root", "other"),
+					testQueryEdge(graph.EdgeImports, "root", "target"),
+				},
+			},
+			options: RetrieveOptions{Relations: []graph.EdgeKind{graph.EdgeCalls}, MaxDepth: 1, HubDegreeThreshold: -1},
+			target:  "target", exclusion: "relation_filter",
+		},
+		{
+			name: "depth limit",
+			graph: graph.Graph{
+				Nodes: []graph.Node{
+					{ID: "root", Kind: graph.NodeFunction, Name: "TraceRoot"},
+					{ID: "middle", Kind: graph.NodeFunction, Name: "Middle"},
+					{ID: "target", Kind: graph.NodeFunction, Name: "DeepTarget"},
+				},
+				Edges: []graph.Edge{
+					testQueryEdge(graph.EdgeCalls, "root", "middle"),
+					testQueryEdge(graph.EdgeCalls, "middle", "target"),
+				},
+			},
+			options: RetrieveOptions{Relations: []graph.EdgeKind{graph.EdgeCalls}, MaxDepth: 1, HubDegreeThreshold: -1},
+			target:  "target", exclusion: "depth_limit",
+		},
+		{
+			name: "hub suppression",
+			graph: graph.Graph{
+				Nodes: []graph.Node{
+					{ID: "root", Kind: graph.NodeFunction, Name: "TraceRoot"},
+					{ID: "middle", Kind: graph.NodeFunction, Name: "Middle"},
+					{ID: "target", Kind: graph.NodeFunction, Name: "HubTarget"},
+				},
+				Edges: []graph.Edge{
+					testQueryEdge(graph.EdgeCalls, "root", "middle"),
+					testQueryEdge(graph.EdgeCalls, "middle", "target"),
+				},
+			},
+			options: RetrieveOptions{Relations: []graph.EdgeKind{graph.EdgeCalls}, MaxDepth: 2, HubDegreeThreshold: 1},
+			target:  "target", exclusion: "hub_suppressed",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.options.Direction = DirectionOut
+			test.options.SeedLimit = 1
+			test.options.MaxNodes = 10
+			test.options.TokenBudget = 1_000
+			test.options.TraceNodeIDs = []string{test.target}
+			got := mustRetrieve(t, NewIndex(test.graph), "TraceRoot", test.options)
+			if len(got.Stats.TraceNodes) != 1 || got.Stats.TraceNodes[0].TraversalExclusion != test.exclusion {
+				t.Fatalf("trace = %#v, want traversal exclusion %q", got.Stats.TraceNodes, test.exclusion)
+			}
+		})
+	}
+}
+
+func TestRetrievalTraceDiagnosesLexicalPromotionCutoff(t *testing.T) {
+	nodes := make([]graph.Node, maximumLexicalCandidates+1)
+	ranked := make([]rankedNode, len(nodes))
+	for position := range nodes {
+		nodes[position] = graph.Node{ID: fmt.Sprintf("node-%03d", position), Kind: graph.NodeFunction, Name: fmt.Sprintf("Node%d", position)}
+		ranked[position] = rankedNode{index: position, anchored: true}
+	}
+	idx := NewIndex(graph.Graph{Nodes: nodes})
+	target := nodes[len(nodes)-1].ID
+	traces := idx.newRetrievalTraces([]string{target}, ranked, nil, traversalResult{}, true)
+	if len(traces) != 1 || traces[0].PromotionRank != maximumLexicalCandidates+1 || traces[0].PromotionExclusion != "lexical_cutoff" {
+		t.Fatalf("trace = %#v", traces)
+	}
+}
+
 func TestPrioritizeGraphCandidatesReservesStructuralSlots(t *testing.T) {
 	nodes := make([]ContextNode, 7)
 	owners := make([]string, 7)
