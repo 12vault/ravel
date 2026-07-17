@@ -43,6 +43,12 @@ func TestInstallAndUninstallSkillForEveryPlatform(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "agents", "code-analyzer.md")); err != nil {
 					t.Fatalf("installed agents missing: %v", err)
 				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "VERSION")); err != nil {
+					t.Fatalf("installed VERSION missing: %v", err)
+				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(dst), "THIRD_PARTY_NOTICES.md")); err != nil {
+					t.Fatalf("installed notices missing: %v", err)
+				}
 				bootstrap := filepath.Join(filepath.Dir(dst), "scripts", "bootstrap.sh")
 				if info, err := os.Stat(bootstrap); err != nil || info.Mode()&0o111 == 0 {
 					t.Fatalf("installed executable bootstrap missing: %v, mode %v", err, infoMode(info))

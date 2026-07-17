@@ -247,6 +247,13 @@ func runSelfUpdate(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Updated Ravel binary: %s\n", path)
+	// Execute the replacement once so its embedded skill bundle can refresh
+	// installations created by older releases. The new binary only updates
+	// Ravel-owned artifacts that already exist.
+	refresh := exec.CommandContext(ctx, path, "version")
+	if output, refreshErr := refresh.CombinedOutput(); refreshErr != nil {
+		fmt.Fprintf(stdout, "Warning: updated binary could not refresh existing integrations: %v: %s\n", refreshErr, strings.TrimSpace(string(output)))
+	}
 	for _, platform := range strings.Split(*platforms, ",") {
 		platform = strings.TrimSpace(platform)
 		if platform == "" {
