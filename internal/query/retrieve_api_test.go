@@ -100,6 +100,55 @@ func TestRetrieveDoesNotFillMultiTermSeedSlotsWithCoveredNoise(t *testing.T) {
 	}
 }
 
+func TestRetrieveUsesInlineIdentifierAnchorAsOnlySeed(t *testing.T) {
+	g := graph.Graph{
+		Nodes: []graph.Node{
+			{ID: "root", Kind: graph.NodeFunction, Name: "runBenchmark"},
+			{ID: "noise", Kind: graph.NodeFunction, Name: "TestRunBenchmarkContextRetrievalScoring"},
+			{ID: "target", Kind: graph.NodeFunction, Name: "Retrieve"},
+		},
+		Edges: []graph.Edge{testQueryEdge(graph.EdgeCalls, "root", "target")},
+	}
+	result := mustRetrieve(t, NewIndex(g), "what does runBenchmark call for context retrieval scoring", RetrieveOptions{
+		Direction: DirectionOut, Relations: []graph.EdgeKind{graph.EdgeCalls},
+		SeedLimit: 3, MaxDepth: 1, MaxNodes: 10, HubDegreeThreshold: -1, TokenBudget: 1_000,
+	})
+	if got, want := result.Stats.SeedIDs, []string{"root"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("seed IDs = %v, want exact inline identifier anchor %v", got, want)
+	}
+	if _, ok := retrievalNode(result, "target"); !ok {
+		t.Fatalf("anchored traversal omitted target: %v", retrievalNodeIDs(result))
+	}
+}
+
+func TestRankWithAnchorsCanExcludeInlineIdentifiersWithoutDroppingStructuredImports(t *testing.T) {
+	g := graph.Graph{Nodes: []graph.Node{
+		{ID: "inline", Kind: graph.NodeFunction, Name: "runBenchmark"},
+		{ID: "imported", Kind: graph.NodeFunction, Name: "Retrieve"},
+	}}
+	idx := NewIndex(g)
+	question := "what does runBenchmark call\nimport example.Retrieve;"
+	terms := strings.Join(retrievalTerms(question, nil), " ")
+
+	withInline := idx.rankWithAnchors(terms, question, true)
+	withoutInline := idx.rankWithAnchors(terms, question, false)
+	anchored := func(ranked []rankedNode) map[string]bool {
+		result := map[string]bool{}
+		for _, candidate := range ranked {
+			if candidate.anchored {
+				result[idx.docs[candidate.index].node.ID] = true
+			}
+		}
+		return result
+	}
+	if got := anchored(withInline); !reflect.DeepEqual(got, map[string]bool{"inline": true, "imported": true}) {
+		t.Fatalf("anchors with inline identifiers = %v", got)
+	}
+	if got := anchored(withoutInline); !reflect.DeepEqual(got, map[string]bool{"imported": true}) {
+		t.Fatalf("anchors without inline identifiers = %v, want structured import only", got)
+	}
+}
+
 func TestRetrievePromotesStructuredImportsWithoutExpandingEveryCandidate(t *testing.T) {
 	nodes := make([]graph.Node, 0, 25)
 	var question strings.Builder
@@ -612,6 +661,47 @@ func TestRetrieveDistinguishesRankedShortlistSelectionFromTokenTruncation(t *tes
 	balanced := mustRetrieve(t, NewIndex(g), "ShortlistRoot", options)
 	if balanced.Stats.UnselectedNodes != 0 || !balanced.Stats.Truncated || !containsString(balanced.Stats.TruncatedReason, "token_budget") {
 		t.Fatalf("default balanced packing no longer uses legacy truncation accounting: %#v", balanced.Stats)
+	}
+}
+
+func TestRetrieveCandidateShortlistRefillsUnusedExplanationBudget(t *testing.T) {
+	nodes := make([]graph.Node, 40)
+	walk := traversalResult{
+		order:       make([]string, len(nodes)),
+		distance:    map[string]int{},
+		via:         map[string]graph.Edge{},
+		lexicalOnly: map[string]bool{},
+	}
+	scores := map[string]int{}
+	seedSet := map[string]bool{}
+	for position := range nodes {
+		id := fmt.Sprintf("node-%02d", position)
+		nodes[position] = graph.Node{ID: id, Kind: graph.NodeFunction, Name: fmt.Sprintf("Candidate%02d", position)}
+		walk.order[position] = id
+		walk.distance[id] = 0
+		walk.lexicalOnly[id] = true
+		scores[id] = len(nodes) - position
+	}
+	idx := NewIndex(graph.Graph{Nodes: nodes})
+	options := normalizedRetrieveOptions{RetrieveOptions: RetrieveOptions{
+		Traversal: TraversalBFS, Direction: DirectionBoth, MaxNodes: 100,
+		TokenBudget: 512, CandidateShortlist: true,
+	}}
+	result := idx.fitRetrieval("candidate refill", options, nil, seedSet, scores, idx.bothDegree, walk, nil)
+	reserve := lineTokens(truncationLine(RetrievalStats{
+		TruncatedReason: []string{"token_budget", "max_nodes", "exploration_limit", "branch_limit"},
+		OmittedNodes:    50_000, OmittedEdges: 999_999_999,
+	}))
+	primaryLimit := result.Stats.HeaderTokens +
+		(options.TokenBudget-reserve-result.Stats.HeaderTokens)*candidateBudgetPercent/100
+	if result.Stats.EstimatedTokens <= primaryLimit {
+		t.Fatalf("shortlist used %d tokens, want refill beyond primary limit %d", result.Stats.EstimatedTokens, primaryLimit)
+	}
+	if result.Stats.EstimatedTokens > options.TokenBudget-reserve {
+		t.Fatalf("shortlist used %d tokens beyond hard candidate limit %d", result.Stats.EstimatedTokens, options.TokenBudget-reserve)
+	}
+	if result.Stats.UnselectedNodes == 0 {
+		t.Fatalf("fixture did not leave deferred candidates: %#v", result.Stats)
 	}
 }
 

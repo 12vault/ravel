@@ -41,9 +41,9 @@ const (
 	maximumLexicalCandidates = 128
 	maximumExplanationEdges  = 8
 	candidateBudgetPercent   = 92
-	shortlistLexicalPrefix   = 12
+	shortlistLexicalPrefix   = 16
 	shortlistGraphReserve    = 8
-	shortlistAffinityRescues = 2
+	shortlistAffinityRescues = 4
 	affinityRerankWindow     = 800
 	affinityMaxDepth         = 3
 	affinityNeighborLimit    = 128
@@ -272,7 +272,7 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 		normalized.filterFrom = "affected-default"
 	}
 	terms := retrievalTerms(question, normalized.Relations)
-	ranked := idx.rankWithAnchors(strings.Join(terms, " "), question)
+	ranked := idx.rankWithAnchors(strings.Join(terms, " "), question, !normalized.CandidateShortlist)
 	if len(ranked) == 0 && len(forcedSeedIDs) == 0 {
 		traces := idx.newRetrievalTraces(normalized.TraceNodeIDs, nil, nil, traversalResult{}, normalized.CandidateShortlist)
 		finalizeRetrievalTraces(traces, 0)
@@ -1076,6 +1076,18 @@ func (idx *Index) pickSeeds(ranked []rankedNode, terms []string, limit int) []in
 	if len(ranked) == 0 {
 		return nil
 	}
+	anchored := make([]int, 0, min(limit, len(ranked)))
+	for _, candidate := range ranked {
+		if candidate.anchored && graph.SymbolKind(idx.docs[candidate.index].node.Kind) {
+			anchored = append(anchored, candidate.index)
+			if len(anchored) >= limit {
+				break
+			}
+		}
+	}
+	if len(anchored) > 0 {
+		return anchored
+	}
 	selected := []int{ranked[0].index}
 	selectedSet := map[int]bool{ranked[0].index: true}
 	covered := map[string]bool{}
@@ -1581,7 +1593,7 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 	// shortlist are internal discovery alternatives, not token-truncated output.
 	// Count them explicitly so consumers can distinguish ranking selection from
 	// an admitted candidate that could not fit the hard envelope.
-	candidatePercent := 82
+	candidatePercent := 65
 	if options.CandidateShortlist {
 		candidatePercent = candidateBudgetPercent
 	}
@@ -1664,11 +1676,21 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		result.Stats.ExplanationTokens += cost
 	}
 	if options.CandidateShortlist {
-		result.Stats.UnselectedNodes = len(unselected)
-		if len(result.Nodes) == 0 && len(unselected) > 0 {
+		// Explanations rarely consume their full reserve. Refill that leftover
+		// space with the next ranked candidates so shortlist mode does not return
+		// a needlessly underfilled payload. These candidates intentionally do not
+		// displace the explanations that were already admitted.
+		stillDeferred := unselected[:0]
+		for _, node := range unselected {
+			if !packCandidate(node, hardCandidateLimit) {
+				stillDeferred = append(stillDeferred, node)
+			}
+		}
+		result.Stats.UnselectedNodes = len(stillDeferred)
+		if len(result.Nodes) == 0 && len(stillDeferred) > 0 {
 			result.Stats.Truncated = true
 			result.Stats.TruncatedReason = appendReason(result.Stats.TruncatedReason, "token_budget")
-			result.Stats.OmittedNodes += len(unselected)
+			result.Stats.OmittedNodes += len(stillDeferred)
 			result.Stats.UnselectedNodes = 0
 		}
 	} else {

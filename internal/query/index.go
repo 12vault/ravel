@@ -90,8 +90,9 @@ type rankedNode struct {
 }
 
 type structuredQueryAnchors struct {
-	names map[string]bool
-	paths []string
+	names       map[string]bool
+	inlineNames map[string]bool
+	paths       []string
 }
 
 // NewIndex constructs a deterministic, in-memory retrieval index.
@@ -208,10 +209,10 @@ func (idx *Index) FindBest(query string) (graph.Node, bool) {
 }
 
 func (idx *Index) rank(text string) []rankedNode {
-	return idx.rankWithAnchors(text, text)
+	return idx.rankWithAnchors(text, text, true)
 }
 
-func (idx *Index) rankWithAnchors(text, anchorText string) []rankedNode {
+func (idx *Index) rankWithAnchors(text, anchorText string, includeInlineIdentifiers bool) []rankedNode {
 	terms := queryTerms(text)
 	if len(terms) == 0 {
 		return nil
@@ -220,6 +221,11 @@ func (idx *Index) rankWithAnchors(text, anchorText string) []rankedNode {
 	phrase := strings.Join(terms, " ")
 	rawTerms := searchTokens(anchorText)
 	anchors := extractStructuredQueryAnchors(anchorText)
+	if !includeInlineIdentifiers {
+		for name := range anchors.inlineNames {
+			delete(anchors.names, name)
+		}
+	}
 	ranked := make([]rankedNode, 0, len(candidates))
 	for _, docIndex := range candidates {
 		doc := &idx.docs[docIndex]
@@ -402,12 +408,13 @@ func containsNormalizedPhrase(value, phrase string) bool {
 }
 
 func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
-	result := structuredQueryAnchors{names: map[string]bool{}}
+	result := structuredQueryAnchors{names: map[string]bool{}, inlineNames: map[string]bool{}}
 	paths := map[string]bool{}
 	addName := func(value string) {
 		value = strings.TrimSpace(strings.Trim(value, "(){}[]"))
 		if normalized := normalizeSearchText(value); normalized != "" {
 			result.names[normalized] = true
+			delete(result.inlineNames, normalized)
 		}
 	}
 	addPath := func(value string) {
@@ -418,6 +425,16 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 		}
 		paths[normalized] = true
 		result.paths = append(result.paths, normalized)
+	}
+	addInlineName := func(value string) {
+		value = strings.TrimSpace(strings.Trim(value, "(){}[]"))
+		if normalized := normalizeSearchText(value); normalized != "" {
+			if result.names[normalized] {
+				return
+			}
+			result.names[normalized] = true
+			result.inlineNames[normalized] = true
+		}
 	}
 	addDotted := func(value string, static bool) {
 		value = strings.TrimSpace(strings.TrimSuffix(value, ";"))
@@ -459,6 +476,17 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 	pythonParenthesized := false
 	for _, rawLine := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(strings.TrimSuffix(rawLine, "\r"))
+		if !pythonContinuation &&
+			!strings.HasPrefix(line, "import ") &&
+			!strings.HasPrefix(line, "from ") {
+			for _, token := range strings.FieldsFunc(line, func(r rune) bool {
+				return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_' && r != '$'
+			}) {
+				if mixedCaseIdentifier(token) {
+					addInlineName(token)
+				}
+			}
+		}
 		if pythonContinuation {
 			addImportedNames(line)
 			if pythonParenthesized {
@@ -487,6 +515,20 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 	}
 	sort.Strings(result.paths)
 	return result
+}
+
+func mixedCaseIdentifier(value string) bool {
+	previousLowerOrDigit := false
+	for _, r := range value {
+		if r == '_' || r == '$' {
+			return true
+		}
+		if unicode.IsUpper(r) && previousLowerOrDigit {
+			return true
+		}
+		previousLowerOrDigit = unicode.IsLower(r) || unicode.IsDigit(r)
+	}
+	return false
 }
 
 func bm25FieldTF(count int, length, average, weight float64) float64 {
