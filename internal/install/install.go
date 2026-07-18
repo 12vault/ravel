@@ -396,7 +396,7 @@ func removeOwnedSection(path string) error {
 	if content == "" {
 		return os.Remove(path)
 	}
-	return os.WriteFile(path, []byte(content+"\n"), 0o644)
+	return os.WriteFile(path, []byte(content+"\n"), 0o644) // #nosec G703 -- path is a platform integration file under the caller-selected project root.
 }
 
 func installCodexHook(path, executable string) error {
@@ -488,7 +488,7 @@ func writeFileIfChanged(path string, data []byte, mode os.FileMode) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.WriteFile(path, data, mode)
+	return os.WriteFile(path, data, mode) // #nosec G703 -- installer destinations are derived from caller-selected project or home roots.
 }
 
 func objectAt(parent map[string]any, key string) map[string]any {

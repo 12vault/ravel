@@ -304,7 +304,7 @@ func (a *Analyzer) parseWithWorkers(ctx context.Context, files []scan.File, jobs
 				// The parser timeout is wall-clock based. Scale it by the worker
 				// count so CPU sharing does not reduce each file's effective budget,
 				// including large files that parse exclusively.
-				timeoutMicros := uint64(parseTimeoutMicros) * uint64(workers)
+				timeoutMicros := uint64(parseTimeoutMicros) * uint64(workers) // #nosec G115 -- workers is clamped to a positive job count above.
 				if file.Size <= concurrentParseMaxFileSize {
 					parseGate.RLock()
 				} else {

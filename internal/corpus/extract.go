@@ -131,6 +131,7 @@ func extractOne(ctx context.Context, language, input, output string, runner Runn
 		if err != nil {
 			return "", err
 		}
+		// #nosec G703 -- output is outDir joined with outputName, which cannot contain path separators.
 		return "builtin", os.WriteFile(output, data, 0o644)
 	default:
 		return "", fmt.Errorf("unsupported corpus language %q", language)

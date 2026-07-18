@@ -83,7 +83,7 @@ func installOne(path, section string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(content), 0o755)
+	return os.WriteFile(path, []byte(content), 0o755) // #nosec G703 -- path is the discovered Git hooks path this command explicitly manages.
 }
 
 func uninstallOne(path string) error {
@@ -108,7 +108,7 @@ func uninstallOne(path string) error {
 	if content == "" || content == "#!/bin/sh" || content == "#!/bin/bash" {
 		return os.Remove(path)
 	}
-	return os.WriteFile(path, []byte(content+"\n"), 0o755)
+	return os.WriteFile(path, []byte(content+"\n"), 0o755) // #nosec G703 -- path is the discovered Git hooks path this command explicitly manages.
 }
 
 func replaceSection(content, section string) (string, error) {
@@ -172,6 +172,7 @@ func findHooksDir(start string) (string, error) {
 				if !filepath.IsAbs(gitDir) {
 					gitDir = filepath.Join(dir, gitDir)
 				}
+				// #nosec G703 -- gitDir comes from Git's .git metadata; following commondir is required for managed worktrees.
 				if common, commonErr := os.ReadFile(filepath.Join(gitDir, "commondir")); commonErr == nil {
 					commonDir := strings.TrimSpace(string(common))
 					if !filepath.IsAbs(commonDir) {
