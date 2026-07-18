@@ -99,18 +99,21 @@ type parsedFile struct {
 }
 
 type definition struct {
-	id        string
-	name      string
-	qualified string
-	kind      graph.NodeKind
-	path      string
-	language  string
-	startByte uint32
-	endByte   uint32
-	startLine int
-	endLine   int
-	column    int
-	partial   bool
+	id         string
+	name       string
+	qualified  string
+	role       string
+	signature  string
+	parserMode string
+	kind       graph.NodeKind
+	path       string
+	language   string
+	startByte  uint32
+	endByte    uint32
+	startLine  int
+	endLine    int
+	column     int
+	partial    bool
 }
 
 type reference struct {
@@ -252,6 +255,7 @@ func analysisFromOutcomes(outcomes []parseOutcome) *lang.AnalysisResult {
 		}
 	}
 	emitDefinitions(parsed, result)
+	emitDeclarationImplementations(parsed, result)
 	emitReferences(parsed, result)
 	emitHeritage(parsed, result)
 	emitImports(parsed, result)
@@ -420,8 +424,21 @@ func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry, ti
 	}
 	defer tree.Release()
 
+	// Capture grammar-specific declarations before the generic tag and span
+	// helpers. Some embedded C grammars lazily materialize compatibility tree
+	// state while those helpers run; reading the original syntax nodes first
+	// preserves macro-wrapped prototypes such as GIT_EXTERN(type) name(...).
+	supplementalDefinitions := extractSupplementalDefinitions(tree, file.Path, entry.Name, data)
+	rootHasError := tree.RootNode().HasError()
+	if rootHasError && entry.TokenSourceFactory != nil && cFamilyHeaderPath(file.Path) && (entry.Name == "c" || entry.Name == "cpp") {
+		fallback := extractCFamilyGrammarFallback(ctx, grammar, file.Path, entry.Name, data, timeoutMicros)
+		if cFamilyCallableDefinitionCount(fallback) > cFamilyCallableDefinitionCount(supplementalDefinitions) {
+			supplementalDefinitions = fallback
+		}
+	}
+
 	var diagnostics []graph.Diagnostic
-	if tree.RootNode().HasError() {
+	if rootHasError {
 		diagnostics = append(diagnostics, graph.Diagnostic{Path: file.Path, Level: "warning", Message: "Tree-sitter recovered from syntax errors; extracted relationships remain syntax-backed"})
 	}
 
@@ -449,7 +466,7 @@ func parseFile(ctx context.Context, file scan.File, entry grammars.LangEntry, ti
 	for _, span := range gotreesitter.ExtractDefinitionSpans(tree) {
 		pf.definitions = append(pf.definitions, definitionFromSpan(file.Path, entry.Name, span, data))
 	}
-	pf.definitions = append(pf.definitions, extractSupplementalDefinitions(tree, file.Path, entry.Name, data)...)
+	pf.definitions = append(pf.definitions, supplementalDefinitions...)
 	for _, call := range gotreesitter.ExtractCalls(tree) {
 		pf.references = append(pf.references, referenceFromCall(file.Path, entry.Name, call, data))
 	}
@@ -630,6 +647,18 @@ func emitDefinitions(files []parsedFile, result *lang.AnalysisResult) {
 			}
 			meta := extractedMeta(def.path, def.startLine, def.language)
 			meta["tree_sitter"] = "true"
+			if def.role != "" {
+				meta["symbol_role"] = def.role
+			}
+			if def.signature != "" {
+				meta["signature"] = def.signature
+			}
+			if def.parserMode != "" {
+				meta["parser_mode"] = def.parserMode
+			}
+			if def.qualified != "" && def.qualified != def.name {
+				meta["qualified_name"] = def.qualified
+			}
 			if def.partial {
 				meta["parse_complete"] = "false"
 				meta["partial"] = "true"
@@ -645,6 +674,63 @@ func emitDefinitions(files []parsedFile, result *lang.AnalysisResult) {
 			result.Edges = append(result.Edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(def.path), To: def.id, Meta: meta})
 		}
 	}
+}
+
+// emitDeclarationImplementations connects syntax-backed C-family prototypes
+// to a definition only when the extracted qualified name and parameter shape
+// identify one implementation. The declaration remains a first-class node so
+// header-oriented queries can return its exact path and line.
+func emitDeclarationImplementations(files []parsedFile, result *lang.AnalysisResult) {
+	qualified := map[string][]definition{}
+	simple := map[string][]definition{}
+	for _, file := range files {
+		for _, def := range file.definitions {
+			if def.role != cFamilyImplementationRole || def.signature == "" {
+				continue
+			}
+			qualified[cFamilyDefinitionKey(def, true)] = append(qualified[cFamilyDefinitionKey(def, true)], def)
+			simple[cFamilyDefinitionKey(def, false)] = append(simple[cFamilyDefinitionKey(def, false)], def)
+		}
+	}
+	for _, file := range files {
+		for _, declaration := range file.definitions {
+			if declaration.role != cFamilyDeclarationRole || declaration.signature == "" {
+				continue
+			}
+			candidates := qualified[cFamilyDefinitionKey(declaration, true)]
+			rationale := "C-family declaration and implementation have a unique extracted qualified name and parameter signature"
+			if len(candidates) != 1 {
+				candidates = simple[cFamilyDefinitionKey(declaration, false)]
+				rationale = "C-family declaration and implementation have a unique extracted name and parameter signature"
+			}
+			if len(candidates) != 1 {
+				continue
+			}
+			implementation := candidates[0]
+			meta := extractedMeta(declaration.path, declaration.startLine, declaration.language)
+			meta["tree_sitter"] = "true"
+			meta["confidence"] = "inferred"
+			meta["resolved"] = "true"
+			meta["rationale"] = rationale
+			meta["relationship"] = "declaration_to_implementation"
+			meta["signature"] = declaration.signature
+			meta["implementation_evidence"] = implementation.path
+			if implementation.startLine > 0 {
+				meta["implementation_evidence"] += fmt.Sprintf(":%d", implementation.startLine)
+			}
+			result.Edges = append(result.Edges, graph.Edge{
+				Kind: graph.EdgeImplements, From: declaration.id, To: implementation.id, Meta: meta,
+			})
+		}
+	}
+}
+
+func cFamilyDefinitionKey(def definition, includeQualified bool) string {
+	name := normalizeName(def.name)
+	if includeQualified && def.qualified != "" {
+		name = normalizeQualifiedName(def.qualified)
+	}
+	return def.language + "\x00" + name + "\x00" + def.signature
 }
 
 func emitReferences(files []parsedFile, result *lang.AnalysisResult) {
@@ -932,6 +1018,7 @@ func dedupeDefinitions(defs []definition) []definition {
 		key := fmt.Sprintf("%d\x00%s", def.startByte, normalizeName(def.name))
 		if existing, ok := seen[key]; ok {
 			if (!def.partial && existing.partial) ||
+				(def.partial == existing.partial && definitionRoleRank(def.role) > definitionRoleRank(existing.role)) ||
 				(def.partial == existing.partial && definitionRank(def.kind) > definitionRank(existing.kind)) ||
 				(def.partial == existing.partial && definitionRank(def.kind) == definitionRank(existing.kind) && def.endByte > existing.endByte) {
 				seen[key] = def
@@ -962,7 +1049,11 @@ func dedupeDefinitions(defs []definition) []definition {
 // source-order ordinal only within the same qualified name.
 func stabilizeDefinitionIDs(defs []definition) {
 	for i := range defs {
-		defs[i].qualified = defs[i].name
+		if defs[i].qualified == "" {
+			defs[i].qualified = defs[i].name
+		} else {
+			defs[i].qualified = normalizeQualifiedName(defs[i].qualified)
+		}
 		var container *definition
 		for j := range defs {
 			if i == j || !containerKind(defs[j].kind) {
@@ -975,7 +1066,9 @@ func stabilizeDefinitionIDs(defs []definition) {
 			}
 		}
 		if container != nil {
-			defs[i].qualified = container.name + "." + defs[i].name
+			if defs[i].qualified == defs[i].name {
+				defs[i].qualified = container.name + "." + defs[i].name
+			}
 			if defs[i].kind == graph.NodeFunction {
 				defs[i].kind = graph.NodeMethod
 			}
@@ -1097,6 +1190,19 @@ func definitionRank(kind graph.NodeKind) int {
 	default:
 		return 1
 	}
+}
+
+func definitionRoleRank(role string) int {
+	if role != "" {
+		return 1
+	}
+	return 0
+}
+
+func normalizeQualifiedName(name string) string {
+	name = strings.Join(strings.Fields(cleanName(name)), "")
+	name = strings.ReplaceAll(name, "::", ".")
+	return strings.Trim(name, ".")
 }
 
 func symbolID(language, path string, kind graph.NodeKind, qualified string, ordinal int) string {

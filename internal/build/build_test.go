@@ -85,6 +85,50 @@ func TestRunSkipsUnsupportedAndZeroContributionFiles(t *testing.T) {
 	}
 }
 
+func TestRunRetainsIncompleteGoFilesAsPartialTopology(t *testing.T) {
+	root := t.TempDir()
+	for name, source := range map[string]string{
+		"missing-package.go": "func Broken() {\n",
+		"partial-package.go": "package sample\nfunc Recovered() {\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := Run(context.Background(), root, config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Skipped) != 0 {
+		t.Fatalf("incomplete Go files were skipped: %#v", result.Skipped)
+	}
+	for _, path := range []string{"missing-package.go", "partial-package.go"} {
+		var file graph.Node
+		for _, node := range result.Graph.Nodes {
+			if node.ID == graph.FileID(path) {
+				file = node
+				break
+			}
+		}
+		if file.ID == "" || file.Meta["partial"] != "true" || file.Meta["parse_complete"] != "false" {
+			t.Fatalf("partial file %q = %#v", path, file)
+		}
+	}
+	recovered := false
+	for _, node := range result.Graph.Nodes {
+		if node.Name == "Recovered" && node.Kind == graph.NodeFunction {
+			recovered = true
+			if node.Meta["partial"] != "true" || node.Meta["parse_complete"] != "false" {
+				t.Fatalf("recovered declaration lacks partial provenance: %#v", node)
+			}
+		}
+	}
+	if !recovered {
+		t.Fatalf("missing recovered declaration: %#v", result.Graph.Nodes)
+	}
+}
+
 func TestRunBuildsAndCanDisablePolyglotGraph(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "service.py")

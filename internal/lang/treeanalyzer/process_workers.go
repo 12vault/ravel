@@ -63,18 +63,21 @@ type processParsedFile struct {
 }
 
 type processDefinition struct {
-	ID        string         `json:"id"`
-	Name      string         `json:"name"`
-	Qualified string         `json:"qualified"`
-	Kind      graph.NodeKind `json:"kind"`
-	Path      string         `json:"path"`
-	Language  string         `json:"language"`
-	StartByte uint32         `json:"startByte"`
-	EndByte   uint32         `json:"endByte"`
-	StartLine int            `json:"startLine"`
-	EndLine   int            `json:"endLine"`
-	Column    int            `json:"column"`
-	Partial   bool           `json:"partial,omitempty"`
+	ID         string         `json:"id"`
+	Name       string         `json:"name"`
+	Qualified  string         `json:"qualified"`
+	Role       string         `json:"role,omitempty"`
+	Signature  string         `json:"signature,omitempty"`
+	ParserMode string         `json:"parserMode,omitempty"`
+	Kind       graph.NodeKind `json:"kind"`
+	Path       string         `json:"path"`
+	Language   string         `json:"language"`
+	StartByte  uint32         `json:"startByte"`
+	EndByte    uint32         `json:"endByte"`
+	StartLine  int            `json:"startLine"`
+	EndLine    int            `json:"endLine"`
+	Column     int            `json:"column"`
+	Partial    bool           `json:"partial,omitempty"`
 }
 
 type processReference struct {
@@ -393,7 +396,7 @@ func parsedFileToProcessParsed(file parsedFile) processParsedFile {
 	}
 	for i, item := range file.definitions {
 		wire.Definitions[i] = processDefinition{
-			ID: item.id, Name: item.name, Qualified: item.qualified, Kind: item.kind,
+			ID: item.id, Name: item.name, Qualified: item.qualified, Role: item.role, Signature: item.signature, ParserMode: item.parserMode, Kind: item.kind,
 			Path: item.path, Language: item.language, StartByte: item.startByte,
 			EndByte: item.endByte, StartLine: item.startLine, EndLine: item.endLine, Column: item.column,
 			Partial: item.partial,
@@ -417,7 +420,7 @@ func processParsedToParsedFile(wire processParsedFile) parsedFile {
 	}
 	for i, item := range wire.Definitions {
 		file.definitions[i] = definition{
-			id: item.ID, name: item.Name, qualified: item.Qualified, kind: item.Kind,
+			id: item.ID, name: item.Name, qualified: item.Qualified, role: item.Role, signature: item.Signature, parserMode: item.ParserMode, kind: item.Kind,
 			path: item.Path, language: item.Language, startByte: item.StartByte,
 			endByte: item.EndByte, startLine: item.StartLine, endLine: item.EndLine, column: item.Column,
 			partial: item.Partial,

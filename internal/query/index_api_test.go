@@ -1,7 +1,9 @@
 package query
 
 import (
+	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/12vault/ravel/internal/graph"
@@ -228,6 +230,30 @@ func TestIndexDoesNotTreatFileExtensionAsPackageQualification(t *testing.T) {
 	}
 }
 
+func TestExtractStructuredQueryAnchorsSupportsECMAScriptImports(t *testing.T) {
+	anchors := extractStructuredQueryAnchors(`
+import DefaultClient, {
+  type CacheEntry,
+  saveRequestMock as saveMock,
+} from "./api/cache-client";
+import * as logTools from './log';
+const { parseValue: parse, formatValue } = require("./format");
+	`)
+	for _, name := range []string{
+		"default client", "cache entry", "save request mock", "save mock",
+		"log tools", "parse value", "parse", "format value",
+	} {
+		if !anchors.names[name] || anchors.inlineNames[name] {
+			t.Fatalf("structured names = %#v, want non-inline anchor %q", anchors.names, name)
+		}
+	}
+	for _, path := range []string{"api cache client", "log", "format"} {
+		if !slices.Contains(anchors.paths, path) {
+			t.Fatalf("structured paths = %#v, want %q", anchors.paths, path)
+		}
+	}
+}
+
 func TestIndexSearchIsDeterministicAcrossInputOrder(t *testing.T) {
 	nodes := []graph.Node{
 		{ID: "node://c", Kind: graph.NodeConcept, Name: "SharedName"},
@@ -242,6 +268,41 @@ func TestIndexSearchIsDeterministicAcrossInputOrder(t *testing.T) {
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("run %d Search() IDs = %v, want deterministic %v", run, got, want)
 		}
+	}
+}
+
+func TestParallelIndexBuildMatchesSequentialState(t *testing.T) {
+	nodes := make([]graph.Node, 800)
+	edges := make([]graph.Edge, 0, len(nodes)-1)
+	for i := range nodes {
+		nodes[i] = graph.Node{
+			ID: fmt.Sprintf("function://service/Handler%d", i), Kind: graph.NodeFunction,
+			Name: fmt.Sprintf("HandleGraphRequest%d", i), Path: "internal/service/handler.go",
+			Meta: map[string]string{"summary": fmt.Sprintf("graph request handler %d", i)},
+		}
+		if i > 0 {
+			edges = append(edges, graph.Edge{Kind: graph.EdgeCalls, From: nodes[i-1].ID, To: nodes[i].ID})
+		}
+	}
+	value := graph.Graph{Nodes: nodes, Edges: edges}
+	sequential := newIndex(value, 1)
+	parallel := newIndex(value, 4)
+
+	for name, pair := range map[string][2]any{
+		"documents":          {sequential.docs, parallel.docs},
+		"document frequency": {sequential.documentFrequency, parallel.documentFrequency},
+		"trigram postings":   {sequential.trigramPostings, parallel.trigramPostings},
+		"average length":     {sequential.averageLength, parallel.averageLength},
+		"outgoing edges":     {sequential.outgoing, parallel.outgoing},
+		"incoming edges":     {sequential.incoming, parallel.incoming},
+		"degrees":            {sequential.bothDegree, parallel.bothDegree},
+	} {
+		if !reflect.DeepEqual(pair[0], pair[1]) {
+			t.Fatalf("parallel %s differs from sequential build", name)
+		}
+	}
+	if got, want := parallel.Search("graph request handler 731", 25), sequential.Search("graph request handler 731", 25); !reflect.DeepEqual(got, want) {
+		t.Fatalf("parallel search differs from sequential\ngot:  %#v\nwant: %#v", got, want)
 	}
 }
 

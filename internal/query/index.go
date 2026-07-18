@@ -2,6 +2,8 @@ package query
 
 import (
 	"math"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +28,17 @@ const (
 	structuredPathBonus  = 20_000.0
 	naturalLanguageTerms = 6
 	naturalExactScale    = 0.25
+	indexBuildThreshold  = 512
+	maxIndexBuildWorkers = 4
+)
+
+var (
+	ecmaScriptImportPattern = regexp.MustCompile(
+		`(?ms)^[\t ]*import[\t ]+(?:type[\t ]+)?((?:[$A-Za-z_][$A-Za-z0-9_]*[\t ]*,[\t ]*)?(?:\{.*?\}|\*[\t ]+as[\t ]+[$A-Za-z_][$A-Za-z0-9_]*)|[$A-Za-z_][$A-Za-z0-9_]*)[\t ]+from[\t ]*["']([^"'\r\n]+)["']`,
+	)
+	commonJSRequirePattern = regexp.MustCompile(
+		`(?ms)^[\t ]*(?:const|let|var)[\t ]+(\{.*?\}|[$A-Za-z_][$A-Za-z0-9_]*)[\t ]*=[\t ]*require[\t ]*\([\t ]*["']([^"'\r\n]+)["'][\t ]*\)`,
+	)
 )
 
 // Index is an immutable, reusable query index over a graph. It keeps retrieval
@@ -95,35 +108,42 @@ type structuredQueryAnchors struct {
 	paths       []string
 }
 
+type indexBuildPartial struct {
+	documentFrequency map[string]int
+	trigramPostings   map[string][]int
+	totalLength       fieldLengths
+}
+
 // NewIndex constructs a deterministic, in-memory retrieval index.
 func NewIndex(g graph.Graph) *Index {
+	workers := 1
+	if len(g.Nodes) >= indexBuildThreshold {
+		workers = min(maxIndexBuildWorkers, runtime.GOMAXPROCS(0))
+	}
+	return newIndex(g, workers)
+}
+
+func newIndex(g graph.Graph, workers int) *Index {
 	g = cloneGraph(g)
 	idx := &Index{
 		graph:             g,
-		byID:              make(map[string]int, len(g.Nodes)),
-		communityByID:     make(map[string]string, len(g.Nodes)),
 		documentFrequency: map[string]int{},
 		trigramPostings:   map[string][]int{},
-		edgeKinds:         map[graph.EdgeKind]bool{},
 		idfCache:          map[string]float64{},
 	}
-	for _, node := range g.Nodes {
-		doc := indexNode(node)
-		idx.byID[node.ID] = len(idx.docs)
-		if node.Meta != nil {
-			idx.communityByID[node.ID] = node.Meta["community"]
+	documents, partials := buildIndexDocuments(g.Nodes, workers)
+	idx.docs = documents
+	for _, partial := range partials {
+		idx.averageLength.name += partial.totalLength.name
+		idx.averageLength.path += partial.totalLength.path
+		idx.averageLength.packageName += partial.totalLength.packageName
+		idx.averageLength.id += partial.totalLength.id
+		idx.averageLength.meta += partial.totalLength.meta
+		for term, frequency := range partial.documentFrequency {
+			idx.documentFrequency[term] += frequency
 		}
-		idx.docs = append(idx.docs, doc)
-		idx.averageLength.name += doc.lengths.name
-		idx.averageLength.path += doc.lengths.path
-		idx.averageLength.packageName += doc.lengths.packageName
-		idx.averageLength.id += doc.lengths.id
-		idx.averageLength.meta += doc.lengths.meta
-		for term := range doc.allTerms {
-			idx.documentFrequency[term]++
-		}
-		for trigram := range trigrams(doc.searchText) {
-			idx.trigramPostings[trigram] = append(idx.trigramPostings[trigram], len(idx.docs)-1)
+		for trigram, postings := range partial.trigramPostings {
+			idx.trigramPostings[trigram] = append(idx.trigramPostings[trigram], postings...)
 		}
 	}
 	if count := float64(len(idx.docs)); count > 0 {
@@ -133,12 +153,71 @@ func NewIndex(g graph.Graph) *Index {
 		idx.averageLength.id /= count
 		idx.averageLength.meta /= count
 	}
+	idx.initializeGraphState()
+	return idx
+}
+
+func buildIndexDocuments(nodes []graph.Node, workers int) ([]indexedNode, []indexBuildPartial) {
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+	workers = max(1, min(workers, len(nodes)))
+	documents := make([]indexedNode, len(nodes))
+	partials := make([]indexBuildPartial, workers)
+	chunkSize := (len(nodes) + workers - 1) / workers
+	var wait sync.WaitGroup
+	wait.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		start := worker * chunkSize
+		end := min(start+chunkSize, len(nodes))
+		go func(worker, start, end int) {
+			defer wait.Done()
+			partial := &partials[worker]
+			partial.documentFrequency = map[string]int{}
+			partial.trigramPostings = map[string][]int{}
+			for i := start; i < end; i++ {
+				document := indexNode(nodes[i])
+				documents[i] = document
+				partial.totalLength.name += document.lengths.name
+				partial.totalLength.path += document.lengths.path
+				partial.totalLength.packageName += document.lengths.packageName
+				partial.totalLength.id += document.lengths.id
+				partial.totalLength.meta += document.lengths.meta
+				for term := range document.allTerms {
+					partial.documentFrequency[term]++
+				}
+				for trigram := range trigrams(document.searchText) {
+					partial.trigramPostings[trigram] = append(partial.trigramPostings[trigram], i)
+				}
+			}
+		}(worker, start, end)
+	}
+	wait.Wait()
+	return documents, partials
+}
+
+// initializeGraphState rebuilds the cheap graph-shaped portion of an index.
+// Persisted indexes reuse the expensive lexical documents and postings while
+// reconstructing adjacency from the authoritative graph snapshot.
+func (idx *Index) initializeGraphState() {
+	idx.byID = make(map[string]int, len(idx.graph.Nodes))
+	idx.communityByID = make(map[string]string, len(idx.graph.Nodes))
+	for i, node := range idx.graph.Nodes {
+		idx.byID[node.ID] = i
+		if node.Meta != nil {
+			idx.communityByID[node.ID] = node.Meta["community"]
+		}
+		if i < len(idx.docs) {
+			idx.docs[i].node = node
+		}
+	}
+	idx.edgeKinds = map[graph.EdgeKind]bool{}
 	idx.outgoing = make([][]adjacentEdge, len(idx.docs))
 	idx.incoming = make([][]adjacentEdge, len(idx.docs))
 	idx.outDegree = make([]int, len(idx.docs))
 	idx.inDegree = make([]int, len(idx.docs))
 	idx.bothDegree = make([]int, len(idx.docs))
-	for _, edge := range g.Edges {
+	for _, edge := range idx.graph.Edges {
 		fromIndex, fromOK := idx.byID[edge.From]
 		if !fromOK {
 			continue
@@ -159,7 +238,7 @@ func NewIndex(g graph.Graph) *Index {
 		idx.outgoing[docIndex] = make([]adjacentEdge, 0, idx.outDegree[docIndex])
 		idx.incoming[docIndex] = make([]adjacentEdge, 0, idx.inDegree[docIndex])
 	}
-	for _, edge := range g.Edges {
+	for _, edge := range idx.graph.Edges {
 		fromIndex, fromOK := idx.byID[edge.From]
 		toIndex, toOK := idx.byID[edge.To]
 		if !fromOK || !toOK {
@@ -168,7 +247,11 @@ func NewIndex(g graph.Graph) *Index {
 		idx.outgoing[fromIndex] = append(idx.outgoing[fromIndex], adjacentEdge{nodeIndex: toIndex, edge: edge, outgoing: true})
 		idx.incoming[toIndex] = append(idx.incoming[toIndex], adjacentEdge{nodeIndex: fromIndex, edge: edge, outgoing: false})
 	}
-	return idx
+}
+
+// Counts reports the immutable graph size represented by the index.
+func (idx *Index) Counts() (nodes, edges int) {
+	return len(idx.graph.Nodes), len(idx.graph.Edges)
 }
 
 // Search performs ranked lexical retrieval without graph expansion.
@@ -426,6 +509,15 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 		paths[normalized] = true
 		result.paths = append(result.paths, normalized)
 	}
+	addModulePath := func(value string) {
+		value = strings.TrimSpace(strings.Trim(value, ".*"))
+		normalized := normalizeSearchText(value)
+		if normalized == "" || paths[normalized] {
+			return
+		}
+		paths[normalized] = true
+		result.paths = append(result.paths, normalized)
+	}
 	addInlineName := func(value string) {
 		value = strings.TrimSpace(strings.Trim(value, "(){}[]"))
 		if normalized := normalizeSearchText(value); normalized != "" {
@@ -471,6 +563,14 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 			}
 		}
 	}
+	for _, match := range ecmaScriptImportPattern.FindAllStringSubmatch(text, -1) {
+		addECMAScriptImportNames(match[1], addName)
+		addModulePath(match[2])
+	}
+	for _, match := range commonJSRequirePattern.FindAllStringSubmatch(text, -1) {
+		addCommonJSBindingNames(match[1], addName)
+		addModulePath(match[2])
+	}
 
 	pythonContinuation := false
 	pythonParenthesized := false
@@ -515,6 +615,60 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 	}
 	sort.Strings(result.paths)
 	return result
+}
+
+func structuredQueryAnchorCount(text string, includeInlineIdentifiers bool) int {
+	anchors := extractStructuredQueryAnchors(text)
+	if !includeInlineIdentifiers {
+		for name := range anchors.inlineNames {
+			delete(anchors.names, name)
+		}
+	}
+	return len(anchors.names) + len(anchors.paths)
+}
+
+func addECMAScriptImportNames(clause string, addName func(string)) {
+	clause = strings.TrimSpace(clause)
+	if comma := strings.Index(clause, ","); comma >= 0 && !strings.HasPrefix(clause, "{") {
+		addName(clause[:comma])
+		clause = strings.TrimSpace(clause[comma+1:])
+	}
+	if strings.HasPrefix(clause, "*") {
+		if alias := strings.Index(clause, " as "); alias >= 0 {
+			addName(clause[alias+4:])
+		}
+		return
+	}
+	if !strings.HasPrefix(clause, "{") {
+		addName(clause)
+		return
+	}
+	for _, imported := range strings.Split(strings.Trim(clause, "{}"), ",") {
+		imported = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(imported), "type "))
+		if imported == "" {
+			continue
+		}
+		if alias := strings.Index(imported, " as "); alias >= 0 {
+			addName(imported[:alias])
+			addName(imported[alias+4:])
+		} else {
+			addName(imported)
+		}
+	}
+}
+
+func addCommonJSBindingNames(binding string, addName func(string)) {
+	binding = strings.TrimSpace(binding)
+	if !strings.HasPrefix(binding, "{") {
+		addName(binding)
+		return
+	}
+	for _, imported := range strings.Split(strings.Trim(binding, "{}"), ",") {
+		parts := strings.SplitN(imported, ":", 2)
+		for _, part := range parts {
+			addName(part)
+		}
+	}
 }
 
 func mixedCaseIdentifier(value string) bool {

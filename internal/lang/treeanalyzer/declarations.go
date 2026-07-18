@@ -14,6 +14,8 @@ const (
 	declarationChunkLines         = 256
 	declarationChunkOverlapLines  = 32
 	declarationChunkTimeoutMicros = 500_000
+	cFamilyDeclarationRole        = "declaration"
+	cFamilyImplementationRole     = "implementation"
 )
 
 // supplementalDeclarationKinds closes grammar-specific gaps left by generic
@@ -152,12 +154,14 @@ func extractSupplementalDefinitions(tree *gotreesitter.Tree, path, language stri
 		if kind, nameNode, name := supplementalDeclaration(node, grammar, language, source); kind != "" && name != "" {
 			line, column := byteLineColumn(source, nameNode.StartByte())
 			endLine, _ := byteLineColumn(source, node.EndByte())
-			definitions = append(definitions, definition{
+			def := definition{
 				name: cleanName(name), kind: kind, path: path, language: language,
 				startByte: node.StartByte(), endByte: node.EndByte(),
 				startLine: line, endLine: endLine, column: column,
 				partial: node.Type(grammar) == "ERROR",
-			})
+			}
+			def.role, def.qualified, def.signature = cFamilyDeclarationDetails(node, grammar, language, source)
+			definitions = append(definitions, def)
 		}
 		for index := 0; index < node.NamedChildCount(); index++ {
 			walk(node.NamedChild(index))
@@ -165,6 +169,64 @@ func extractSupplementalDefinitions(tree *gotreesitter.Tree, path, language stri
 	}
 	walk(tree.RootNode())
 	return definitions
+}
+
+// extractCFamilyGrammarFallback reparses only an errored C/C++ file without
+// its optional token-source adapter. Macro-heavy public headers can otherwise
+// collapse many prototypes into one oversized pseudo-definition. Every fact
+// returned here still comes from a node in the same pinned Tree-sitter grammar.
+func extractCFamilyGrammarFallback(ctx context.Context, grammar *gotreesitter.Language, path, language string, source []byte, timeoutMicros uint64) []definition {
+	if grammar == nil || len(source) == 0 || (language != "c" && language != "cpp") {
+		return nil
+	}
+	parser := gotreesitter.NewParser(grammar)
+	parser.SetTimeoutMicros(timeoutMicros)
+	var cancelled uint32
+	parser.SetCancellationFlag(&cancelled)
+	stop := context.AfterFunc(ctx, func() { atomic.StoreUint32(&cancelled, 1) })
+	tree, err := parser.ParseStrict(source)
+	stop()
+	if err != nil || tree == nil || tree.RootNode() == nil {
+		if tree != nil {
+			tree.Release()
+		}
+		return nil
+	}
+	defer tree.Release()
+	definitions := extractSupplementalDefinitions(tree, path, language, source)
+	filtered := definitions[:0]
+	for _, def := range definitions {
+		// The fallback can expose the uppercase wrapper as a pseudo-function
+		// alongside the real prototype. Keep the syntax-backed callable, not
+		// macro helpers such as GIT_EXTERN or GIT_CALLBACK.
+		if (def.kind == graph.NodeFunction || def.kind == graph.NodeMethod) && cFamilyMacroLikeName(def.name) {
+			continue
+		}
+		def.parserMode = "grammar_fallback"
+		filtered = append(filtered, def)
+	}
+	return filtered
+}
+
+func cFamilyCallableDefinitionCount(definitions []definition) int {
+	count := 0
+	for _, def := range definitions {
+		if (def.role == cFamilyDeclarationRole || def.role == cFamilyImplementationRole) &&
+			(def.kind == graph.NodeFunction || def.kind == graph.NodeMethod) {
+			count++
+		}
+	}
+	return count
+}
+
+func cFamilyHeaderPath(path string) bool {
+	path = strings.ToLower(strings.TrimSpace(path))
+	for _, suffix := range []string{".h", ".hh", ".hpp", ".hxx"} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractChunkedDeclarations reparses bounded overlapping line windows after a
@@ -236,6 +298,11 @@ func extractChunkedDeclarations(ctx context.Context, entry grammars.LangEntry, p
 
 func supplementalDeclaration(node *gotreesitter.Node, grammar *gotreesitter.Language, language string, source []byte) (graph.NodeKind, *gotreesitter.Node, string) {
 	nodeType := node.Type(grammar)
+	if language == "c" || language == "cpp" || language == "objc" {
+		if kind, nameNode, name := cFamilyFunctionDeclaration(node, grammar, source); kind != "" {
+			return kind, nameNode, name
+		}
+	}
 	if (language == "javascript" || language == "typescript" || language == "tsx") && nodeType == "variable_declarator" {
 		return javascriptVariableDeclaration(node, grammar, source)
 	}
@@ -275,6 +342,200 @@ func supplementalDeclaration(node *gotreesitter.Node, grammar *gotreesitter.Lang
 		return hclDeclaration(node, grammar, source)
 	}
 	return "", nil, ""
+}
+
+func cFamilyFunctionDeclaration(node *gotreesitter.Node, grammar *gotreesitter.Language, source []byte) (graph.NodeKind, *gotreesitter.Node, string) {
+	switch node.Type(grammar) {
+	case "function_definition", "declaration", "field_declaration":
+	default:
+		return "", nil, ""
+	}
+	declarator := cFamilyFunctionDeclarator(node, grammar)
+	if declarator == nil || cFamilyFunctionPointer(declarator, grammar, source) {
+		return "", nil, ""
+	}
+	nameNode := cFamilyDeclaratorNameNode(declarator, grammar)
+	if nameNode == nil {
+		return "", nil, ""
+	}
+	return graph.NodeFunction, nameNode, nameNode.Text(source)
+}
+
+func cFamilyDeclarationDetails(node *gotreesitter.Node, grammar *gotreesitter.Language, language string, source []byte) (string, string, string) {
+	if language != "c" && language != "cpp" && language != "objc" {
+		return "", "", ""
+	}
+	role := ""
+	switch node.Type(grammar) {
+	case "function_definition":
+		role = cFamilyImplementationRole
+	case "declaration", "field_declaration":
+		role = cFamilyDeclarationRole
+	default:
+		return "", "", ""
+	}
+	declarator := cFamilyFunctionDeclarator(node, grammar)
+	if declarator == nil || cFamilyFunctionPointer(declarator, grammar, source) {
+		return "", "", ""
+	}
+	nameNode := cFamilyDeclaratorNameNode(declarator, grammar)
+	if nameNode == nil {
+		return "", "", ""
+	}
+	qualified := nameNode.Text(source)
+	if root := declarator.ChildByFieldName("declarator", grammar); root != nil {
+		scopedTypes := map[string]bool{
+			"qualified_identifier": true, "scoped_identifier": true,
+		}
+		scoped := root
+		if !scopedTypes[root.Type(grammar)] {
+			scoped = firstDescendantByTypes(root, grammar, scopedTypes)
+		}
+		if scoped != nil {
+			qualified = scoped.Text(source)
+		}
+	}
+	return role, qualified, cFamilyFunctionSignature(declarator, grammar, source)
+}
+func cFamilyMacroLikeName(name string) bool {
+	name = strings.TrimSpace(name)
+	if !strings.ContainsRune(name, '_') || name != strings.ToUpper(name) {
+		return false
+	}
+	for _, character := range name {
+		if character >= 'A' && character <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+func cFamilyFunctionDeclarator(node *gotreesitter.Node, grammar *gotreesitter.Language) *gotreesitter.Node {
+	var find func(*gotreesitter.Node, bool) *gotreesitter.Node
+	find = func(current *gotreesitter.Node, blocked bool) *gotreesitter.Node {
+		if current == nil {
+			return nil
+		}
+		switch current.Type(grammar) {
+		case "macro_type_specifier", "type_descriptor", "parameter_declaration", "optional_parameter_declaration":
+			blocked = true
+		case "function_declarator":
+			if !blocked {
+				return current
+			}
+		}
+		for index := 0; index < current.NamedChildCount(); index++ {
+			if found := find(current.NamedChild(index), blocked); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	return find(node, false)
+}
+
+func firstDescendantByType(node *gotreesitter.Node, grammar *gotreesitter.Language, wanted string) *gotreesitter.Node {
+	if node == nil {
+		return nil
+	}
+	if node.Type(grammar) == wanted {
+		return node
+	}
+	for index := 0; index < node.NamedChildCount(); index++ {
+		if found := firstDescendantByType(node.NamedChild(index), grammar, wanted); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func cFamilyDeclaratorNameNode(declarator *gotreesitter.Node, grammar *gotreesitter.Language) *gotreesitter.Node {
+	root := declarator.ChildByFieldName("declarator", grammar)
+	if root == nil {
+		root = declarator
+	}
+	for current := root; current != nil; {
+		if declarationNameNodeTypes[current.Type(grammar)] || current.Type(grammar) == "operator_name" || current.Type(grammar) == "destructor_name" {
+			return current
+		}
+		if child := current.ChildByFieldName("name", grammar); child != nil {
+			current = child
+			continue
+		}
+		if child := current.ChildByFieldName("declarator", grammar); child != nil {
+			current = child
+			continue
+		}
+		break
+	}
+	types := make(map[string]bool, len(declarationNameNodeTypes)+2)
+	for name := range declarationNameNodeTypes {
+		types[name] = true
+	}
+	types["operator_name"] = true
+	types["destructor_name"] = true
+	return lastDescendantByTypes(root, grammar, types)
+}
+
+func cFamilyFunctionPointer(declarator *gotreesitter.Node, grammar *gotreesitter.Language, source []byte) bool {
+	root := declarator.ChildByFieldName("declarator", grammar)
+	if root == nil {
+		return false
+	}
+	text := strings.Join(strings.Fields(root.Text(source)), "")
+	return strings.Contains(text, "(*") || strings.Contains(text, "(&")
+}
+
+func cFamilyFunctionSignature(declarator *gotreesitter.Node, grammar *gotreesitter.Language, source []byte) string {
+	parameters := declarator.ChildByFieldName("parameters", grammar)
+	if parameters == nil {
+		parameters = firstDescendantByType(declarator, grammar, "parameter_list")
+	}
+	if parameters == nil {
+		return ""
+	}
+	parts := make([]string, 0, parameters.NamedChildCount())
+	for index := 0; index < parameters.NamedChildCount(); index++ {
+		parameter := parameters.NamedChild(index)
+		if parameter == nil || parameter.Type(grammar) == "comment" {
+			continue
+		}
+		text := parameter.Text(source)
+		if nameRoot := parameter.ChildByFieldName("declarator", grammar); nameRoot != nil {
+			if nameNode := cFamilyDeclaratorNameNode(nameRoot, grammar); nameNode != nil &&
+				nameNode.StartByte() >= parameter.StartByte() && nameNode.EndByte() <= parameter.EndByte() {
+				start := int(nameNode.StartByte() - parameter.StartByte())
+				end := int(nameNode.EndByte() - parameter.StartByte())
+				if start >= 0 && end >= start && end <= len(text) {
+					text = text[:start] + text[end:]
+				}
+			}
+		}
+		if equals := strings.IndexByte(text, '='); equals >= 0 {
+			text = text[:equals]
+		}
+		if normalized := normalizeCFamilySignatureText(text); normalized != "" {
+			parts = append(parts, normalized)
+		}
+	}
+	if len(parts) == 1 && parts[0] == "void" {
+		parts = nil
+	}
+	suffix := ""
+	if parameters.EndByte() <= declarator.EndByte() {
+		start, end := int(parameters.EndByte()), int(declarator.EndByte())
+		if start >= 0 && end >= start && end <= len(source) {
+			suffix = normalizeCFamilySignatureText(string(source[start:end]))
+			for _, marker := range []string{"override", "final", "=0", "=default", "=delete"} {
+				suffix = strings.ReplaceAll(suffix, marker, "")
+			}
+		}
+	}
+	return "(" + strings.Join(parts, ",") + ")" + suffix
+}
+
+func normalizeCFamilySignatureText(text string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(text)), "")
 }
 
 // Some valid TypeScript forms such as

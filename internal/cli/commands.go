@@ -1233,11 +1233,11 @@ func runQuery(args []string, stdout io.Writer) error {
 	if fs.NArg() == 0 {
 		return errors.New("query requires search text")
 	}
-	g, err := store.LoadGraph(*outDir)
+	index, err := loadQueryIndex(*outDir)
 	if err != nil {
 		return err
 	}
-	results := query.Search(g, strings.Join(fs.Args(), " "), *limit)
+	results := index.Search(strings.Join(fs.Args(), " "), *limit)
 	return query.WriteSearch(stdout, results, *jsonOut)
 }
 
@@ -1273,7 +1273,7 @@ func runContext(args []string, stdout io.Writer) error {
 	if *configFlag != configPath {
 		return errors.New("internal config flag parsing mismatch")
 	}
-	g, err := store.LoadGraph(*outDir)
+	index, err := loadQueryIndex(*outDir)
 	if err != nil {
 		return err
 	}
@@ -1283,7 +1283,7 @@ func runContext(args []string, stdout io.Writer) error {
 			edgeKinds = append(edgeKinds, graph.EdgeKind(value))
 		}
 	}
-	result, err := query.NewIndex(g).Retrieve(strings.Join(fs.Args(), " "), query.RetrieveOptions{
+	result, err := index.Retrieve(strings.Join(fs.Args(), " "), query.RetrieveOptions{
 		Traversal: query.Traversal(strings.ToLower(*traversal)), Direction: query.Direction(strings.ToLower(*direction)),
 		Relations: edgeKinds, DisableRelationInference: !*inferRelations, SeedLimit: *seedLimit,
 		MaxDepth: *maxDepth, MaxNodes: *maxNodes, BranchFanout: *branchFanout, HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
@@ -1313,7 +1313,7 @@ func runAffected(args []string, stdout io.Writer) error {
 	if fs.NArg() == 0 {
 		return errors.New("affected requires a file, symbol, or node id")
 	}
-	g, err := store.LoadGraph(*outDir)
+	index, err := loadQueryIndex(*outDir)
 	if err != nil {
 		return err
 	}
@@ -1323,7 +1323,7 @@ func runAffected(args []string, stdout io.Writer) error {
 			edgeKinds = append(edgeKinds, graph.EdgeKind(value))
 		}
 	}
-	result, err := query.NewIndex(g).Affected(strings.Join(fs.Args(), " "), query.RetrieveOptions{
+	result, err := index.Affected(strings.Join(fs.Args(), " "), query.RetrieveOptions{
 		Relations: edgeKinds, MaxDepth: *maxDepth, MaxNodes: *maxNodes, BranchFanout: *branchFanout,
 		HubDegreeThreshold: *hubThreshold, TokenBudget: *tokenBudget,
 	})
@@ -1343,11 +1343,11 @@ func runExplain(args []string, stdout io.Writer) error {
 	if fs.NArg() == 0 {
 		return errors.New("explain requires a file, symbol, or node id")
 	}
-	g, err := store.LoadGraph(*outDir)
+	index, err := loadQueryIndex(*outDir)
 	if err != nil {
 		return err
 	}
-	ex, err := query.NewIndex(g).ExplainResolved(strings.Join(fs.Args(), " "))
+	ex, err := index.ExplainResolved(strings.Join(fs.Args(), " "))
 	if err != nil {
 		return err
 	}
@@ -1364,11 +1364,11 @@ func runPath(args []string, stdout io.Writer) error {
 	if fs.NArg() != 2 {
 		return errors.New("path requires exactly two targets")
 	}
-	g, err := store.LoadGraph(*outDir)
+	index, err := loadQueryIndex(*outDir)
 	if err != nil {
 		return err
 	}
-	result, ok, err := query.NewIndex(g).ShortestPathResult(fs.Arg(0), fs.Arg(1))
+	result, ok, err := index.ShortestPathResult(fs.Arg(0), fs.Arg(1))
 	if err != nil {
 		return err
 	}

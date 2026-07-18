@@ -45,6 +45,13 @@ const (
 	shortlistGraphReserve    = 8
 	shortlistSameFileRescues = 1
 	shortlistSameFileSlot    = 1
+	shortlistBudgetBase      = 700
+	shortlistBudgetPerAnchor = 30
+	shortlistBudgetMinimum   = 800
+	shortlistBudgetMaximum   = 1_400
+	shortlistBudgetUncertain = 1_200
+	shortlistBudgetProse     = 2_000
+	shortlistIdentityCopies  = 2
 	sameFileMinimumAnchors   = 8
 	shortlistAffinityRescues = 4
 	sameFileCandidateWindow  = maximumLexicalCandidates
@@ -126,6 +133,7 @@ type RetrievalStats struct {
 	RelationFilters         []graph.EdgeKind `json:"relationFilters,omitempty"`
 	RelationFilterFrom      string           `json:"relationFilterFrom,omitempty"`
 	TokenBudget             int              `json:"tokenBudget"`
+	OutputTokenBudget       int              `json:"outputTokenBudget,omitempty"`
 	EstimatedTokens         int              `json:"estimatedTokens"`
 	HubThreshold            int              `json:"hubThreshold,omitempty"`
 	BranchFanout            int              `json:"branchFanout,omitempty"`
@@ -146,6 +154,8 @@ type RetrievalStats struct {
 	CommunityBoost          bool             `json:"communityBoost,omitempty"`
 	SameFileRescues         []SameFileRescue `json:"sameFileRescues,omitempty"`
 	AffinityRescues         []AffinityRescue `json:"affinityRescues,omitempty"`
+	StructuredCandidates    int              `json:"structuredCandidates,omitempty"`
+	StructuredQueryAnchors  int              `json:"structuredQueryAnchors,omitempty"`
 	TraceNodes              []RetrievalTrace `json:"traceNodes,omitempty"`
 }
 
@@ -203,19 +213,21 @@ type normalizedRetrieveOptions struct {
 }
 
 type traversalResult struct {
-	order             []string
-	distance          map[string]int
-	via               map[string]graph.Edge
-	hubThreshold      int
-	branchFanout      int
-	hubsSuppressed    int
-	branchesPruned    int
-	exploredLimit     bool
-	lexicalCandidates int
-	lexicalOnly       map[string]bool
-	sameFileRescued   map[string]bool
-	sameFileRescues   []SameFileRescue
-	affinityRescues   []AffinityRescue
+	order                  []string
+	distance               map[string]int
+	via                    map[string]graph.Edge
+	hubThreshold           int
+	branchFanout           int
+	hubsSuppressed         int
+	branchesPruned         int
+	exploredLimit          bool
+	lexicalCandidates      int
+	lexicalOnly            map[string]bool
+	sameFileRescued        map[string]bool
+	sameFileRescues        []SameFileRescue
+	affinityRescues        []AffinityRescue
+	structuredCandidates   int
+	structuredQueryAnchors int
 }
 
 // Retrieve is the graph-level compatibility wrapper around Index.Retrieve.
@@ -331,6 +343,8 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 	adjacency := idx.newQueryAdjacency(normalized, scores)
 	walk := idx.traverse(seedIDs, seedSet, adjacency, normalized)
 	if normalized.CandidateShortlist {
+		walk.structuredCandidates = idx.countStructuredCandidates(ranked)
+		walk.structuredQueryAnchors = structuredQueryAnchorCount(question, false)
 		walk.sameFileRescues = idx.selectSameFileCandidates(
 			ranked, seedIDs, walk.order, shortlistLexicalPrefix, shortlistSameFileRescues,
 		)
@@ -349,6 +363,40 @@ func (idx *Index) retrieve(text string, options RetrieveOptions, forcedSeedIDs [
 		}
 	}
 	return idx.fitRetrieval(question, normalized, seedIDs, seedSet, scores, adjacency.degree, walk, traces), nil
+}
+
+func (idx *Index) countStructuredCandidates(ranked []rankedNode) int {
+	names := map[string]bool{}
+	for _, candidate := range ranked {
+		if !candidate.anchored {
+			continue
+		}
+		node := idx.docs[candidate.index].node
+		if !eligibleShortlistCandidate(node) {
+			continue
+		}
+		name := idx.docs[candidate.index].nameText
+		if name != "" {
+			names[name] = true
+		}
+	}
+	return len(names)
+}
+
+func adaptiveShortlistTokenBudget(hardLimit, structuredCandidates, structuredQueryAnchors int) int {
+	if hardLimit <= shortlistBudgetMinimum {
+		return hardLimit
+	}
+	target := shortlistBudgetUncertain
+	if structuredQueryAnchors == 0 {
+		target = shortlistBudgetProse
+	} else if structuredCandidates > 1 {
+		target = max(shortlistBudgetMinimum, min(
+			shortlistBudgetMaximum,
+			shortlistBudgetBase+structuredCandidates*shortlistBudgetPerAnchor,
+		))
+	}
+	return min(hardLimit, target)
 }
 
 // selectSameFileCandidates spends a bounded part of the existing structural
@@ -818,7 +866,10 @@ func (idx *Index) promoteLexicalCandidates(walk traversalResult, ranked []ranked
 }
 
 func eligibleShortlistCandidate(node graph.Node) bool {
-	if node.Kind == graph.NodeImport {
+	// Ranked candidate mode is for source-bearing files and declarations.
+	// Directory nodes are useful traversal bridges, but returning several
+	// matching directory prefixes crowds out the definitions they contain.
+	if node.Kind == graph.NodeImport || node.Kind == graph.NodeDir {
 		return false
 	}
 	return node.Meta == nil || node.Meta["resolved"] != "false"
@@ -1657,7 +1708,16 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		AffinityRescues: append([]AffinityRescue(nil), walk.affinityRescues...),
 		HubThreshold:    walk.hubThreshold, BranchFanout: walk.branchFanout, HubsSuppressed: walk.hubsSuppressed,
 		BranchesPruned: walk.branchesPruned, ExploredNodes: len(walk.order), LexicalCandidates: walk.lexicalCandidates,
-		TraceNodes: traces,
+		StructuredCandidates:   walk.structuredCandidates,
+		StructuredQueryAnchors: walk.structuredQueryAnchors,
+		TraceNodes:             traces,
+	}
+	outputTokenBudget := options.TokenBudget
+	if options.CandidateShortlist {
+		outputTokenBudget = adaptiveShortlistTokenBudget(
+			options.TokenBudget, walk.structuredCandidates, walk.structuredQueryAnchors,
+		)
+		stats.OutputTokenBudget = outputTokenBudget
 	}
 	result := Retrieval{Version: 1, Query: safeTextBytes(question, 256), Stats: stats}
 	if len(walk.order) == 0 {
@@ -1715,6 +1775,9 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		uniqueOwners = append(uniqueOwners, nodeID)
 	}
 	if options.CandidateShortlist {
+		unique, uniqueOwners = diversifyShortlistCandidates(
+			unique, uniqueOwners, shortlistIdentityCopies,
+		)
 		unique, uniqueOwners = prioritizeGraphCandidates(
 			unique, uniqueOwners, walk.lexicalOnly, walk.sameFileRescued,
 			shortlistLexicalPrefix, shortlistGraphReserve, shortlistSameFileSlot,
@@ -1744,10 +1807,10 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 		candidatePercent = candidateBudgetPercent
 	}
 	primaryLimit := budgetUsed
-	if available := options.TokenBudget - reserve - budgetUsed; available > 0 {
+	if available := outputTokenBudget - reserve - budgetUsed; available > 0 {
 		primaryLimit += available * candidatePercent / 100
 	}
-	hardCandidateLimit := options.TokenBudget - reserve
+	hardCandidateLimit := outputTokenBudget - reserve
 	included := map[string]bool{}
 	unselected := make([]ContextNode, 0)
 	packCandidate := func(node ContextNode, limit int) bool {
@@ -1814,7 +1877,7 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 			continue
 		}
 		cost := lineTokens(edgeLine(edge))
-		if budgetUsed+cost+reserve > options.TokenBudget {
+		if budgetUsed+cost+reserve > outputTokenBudget {
 			if !omittedExplanationEdges[edge.ID] {
 				omittedExplanationEdges[edge.ID] = true
 				result.Stats.ExplanationEdgesOmitted++
@@ -1881,6 +1944,43 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 	}
 	finalizeRetrievalTraces(result.Stats.TraceNodes, maxCandidates)
 	return result
+}
+
+// diversifyShortlistCandidates keeps a bounded number of same-kind,
+// same-name alternatives near the front, then defers further copies without
+// discarding them. This preserves overloads and competing definitions while
+// preventing repeated file or symbol labels from consuming the whole compact
+// shortlist before another relevant candidate appears.
+func diversifyShortlistCandidates(nodes []ContextNode, owners []string, copies int) ([]ContextNode, []string) {
+	if copies <= 0 || len(nodes) < 2 || len(nodes) != len(owners) {
+		return nodes, owners
+	}
+	counts := map[string]int{}
+	selected := make([]bool, len(nodes))
+	orderedNodes := make([]ContextNode, 0, len(nodes))
+	orderedOwners := make([]string, 0, len(owners))
+	for position, node := range nodes {
+		key := string(node.Kind) + "\x00" + normalizeSearchText(strings.TrimSuffix(node.Name, "()"))
+		limit := copies
+		if node.Kind == graph.NodeFile {
+			limit = 1
+		}
+		if counts[key] >= limit {
+			continue
+		}
+		counts[key]++
+		selected[position] = true
+		orderedNodes = append(orderedNodes, node)
+		orderedOwners = append(orderedOwners, owners[position])
+	}
+	for position, node := range nodes {
+		if selected[position] {
+			continue
+		}
+		orderedNodes = append(orderedNodes, node)
+		orderedOwners = append(orderedOwners, owners[position])
+	}
+	return orderedNodes, orderedOwners
 }
 
 func prioritizeGraphCandidates(nodes []ContextNode, owners []string, lexicalOnly, sameFileRescued map[string]bool, prefix, reserve, sameFileSlot int) ([]ContextNode, []string) {
@@ -2168,6 +2268,9 @@ func retrievalHeader(question string, stats RetrievalStats) string {
 		"direction=" + string(stats.Direction),
 		"depth=" + strconv.Itoa(stats.Depth),
 		"budget=" + strconv.Itoa(stats.TokenBudget),
+	}
+	if stats.OutputTokenBudget > 0 && stats.OutputTokenBudget != stats.TokenBudget {
+		parts = append(parts, "output_budget="+strconv.Itoa(stats.OutputTokenBudget))
 	}
 	if stats.DirectionPreference != "" {
 		parts = append(parts, "preference="+string(stats.DirectionPreference))

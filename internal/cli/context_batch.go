@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,12 +25,13 @@ type contextBatchRequest struct {
 }
 
 type contextBatchReady struct {
-	Type         string  `json:"type"`
-	Version      int     `json:"version"`
-	GraphLoadMS  float64 `json:"graphLoadMs"`
-	IndexBuildMS float64 `json:"indexBuildMs"`
-	GraphNodes   int     `json:"graphNodes"`
-	GraphEdges   int     `json:"graphEdges"`
+	Type          string  `json:"type"`
+	Version       int     `json:"version"`
+	GraphLoadMS   float64 `json:"graphLoadMs"`
+	IndexBuildMS  float64 `json:"indexBuildMs"`
+	IndexCacheHit bool    `json:"indexCacheHit,omitempty"`
+	GraphNodes    int     `json:"graphNodes"`
+	GraphEdges    int     `json:"graphEdges"`
 }
 
 type contextBatchResponse struct {
@@ -43,7 +45,6 @@ type contextBatchResponse struct {
 
 // runContextBatch serves a fixed graph snapshot over JSONL. It exists for
 // benchmark suites and other finite callers that need to reuse one query index.
-// Ordinary `ravel context` intentionally keeps its existing one-shot path.
 func runContextBatch(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
 	configPath := flagValue(args, "config", ".reporavel.yaml")
 	cfg, err := loadCommandConfig(args, configPath)
@@ -91,20 +92,24 @@ func runContextBatch(ctx context.Context, args []string, stdin io.Reader, stdout
 	}
 
 	loadStarted := time.Now()
-	g, err := store.LoadGraph(*outDir)
+	graphData, err := store.LoadGraphData(*outDir)
 	if err != nil {
 		return err
 	}
 	graphLoadMS := durationMS(time.Since(loadStarted))
 	indexStarted := time.Now()
-	index := query.NewIndex(g)
+	index, cacheHit, err := query.LoadOrBuildIndex(graphData, filepath.Join(*outDir, ".state", "cache"))
+	if err != nil {
+		return err
+	}
 	indexBuildMS := durationMS(time.Since(indexStarted))
+	graphNodes, graphEdges := index.Counts()
 
 	encoder := json.NewEncoder(stdout)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(contextBatchReady{
 		Type: "ready", Version: 1, GraphLoadMS: graphLoadMS, IndexBuildMS: indexBuildMS,
-		GraphNodes: len(g.Nodes), GraphEdges: len(g.Edges),
+		IndexCacheHit: cacheHit, GraphNodes: graphNodes, GraphEdges: graphEdges,
 	}); err != nil {
 		return err
 	}
