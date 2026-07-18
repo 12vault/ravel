@@ -279,13 +279,15 @@ func TestPartialDefinitionsSurviveWorkerRoundTripAndAreMarked(t *testing.T) {
 	original := parsedFile{
 		file: scan.File{Path: "App.swift"}, language: "swift",
 		definitions: []definition{{
-			id: "swift-run", name: "run", kind: graph.NodeFunction,
+			id: "swift-run", name: "run", role: cFamilyDeclarationRole, signature: "(int)", parserMode: "grammar_fallback", kind: graph.NodeFunction,
 			path: "App.swift", language: "swift", startLine: 7, endLine: 9, partial: true,
 		}},
 		references: []reference{{name: "run", receiver: "service", kind: graph.EdgeCalls, path: "App.swift", language: "swift"}},
 	}
 	roundTrip := processParsedToParsedFile(parsedFileToProcessParsed(original))
-	if len(roundTrip.definitions) != 1 || !roundTrip.definitions[0].partial {
+	if len(roundTrip.definitions) != 1 || !roundTrip.definitions[0].partial ||
+		roundTrip.definitions[0].role != cFamilyDeclarationRole || roundTrip.definitions[0].signature != "(int)" ||
+		roundTrip.definitions[0].parserMode != "grammar_fallback" {
 		t.Fatalf("partial definition lost in worker round trip: %#v", roundTrip.definitions)
 	}
 	if len(roundTrip.references) != 1 || roundTrip.references[0].receiver != "service" {
@@ -293,7 +295,8 @@ func TestPartialDefinitionsSurviveWorkerRoundTripAndAreMarked(t *testing.T) {
 	}
 	result := &lang.AnalysisResult{}
 	emitDefinitions([]parsedFile{roundTrip}, result)
-	if len(result.Nodes) != 1 || result.Nodes[0].Meta["partial"] != "true" || result.Nodes[0].Meta["parse_complete"] != "false" {
+	if len(result.Nodes) != 1 || result.Nodes[0].Meta["partial"] != "true" || result.Nodes[0].Meta["parse_complete"] != "false" ||
+		result.Nodes[0].Meta["parser_mode"] != "grammar_fallback" {
 		t.Fatalf("partial definition lacks incomplete-parse metadata: %#v", result.Nodes)
 	}
 }
@@ -666,6 +669,87 @@ func TestAdvertisedLanguagesExtractNamedDeclarations(t *testing.T) {
 				t.Fatalf("%q declaration count = %d, want 1: nodes=%#v", test.want, got, result.Nodes)
 			}
 		})
+	}
+}
+
+func TestCExtractsHeaderPrototypeAndLinksDefinition(t *testing.T) {
+	result := analyzeSources(t, "c", map[string]string{
+		"include/git_open.h": `
+typedef int (*git_callback)(int value);
+int git_open(const char *path, int flags);
+`,
+		"src/git_open.c": `
+#include "../include/git_open.h"
+int git_open(const char *filename, int options) { return filename != 0 ? options : -1; }
+`,
+	})
+	declaration := nodeNamedAtPath(result.Nodes, "git_open", "include/git_open.h")
+	implementation := nodeNamedAtPath(result.Nodes, "git_open", "src/git_open.c")
+	if declaration == nil || implementation == nil {
+		t.Fatalf("missing C declaration or implementation: nodes=%#v diagnostics=%#v", result.Nodes, result.Diagnostics)
+	}
+	if declaration.Meta["symbol_role"] != cFamilyDeclarationRole || implementation.Meta["symbol_role"] != cFamilyImplementationRole {
+		t.Fatalf("C symbol roles = declaration %#v implementation %#v", declaration.Meta, implementation.Meta)
+	}
+	if declaration.Meta["signature"] == "" || declaration.Meta["signature"] != implementation.Meta["signature"] {
+		t.Fatalf("C signatures = declaration %q implementation %q", declaration.Meta["signature"], implementation.Meta["signature"])
+	}
+	if !hasEdge(result.Edges, graph.EdgeImplements, declaration.ID, implementation.ID, "true") {
+		t.Fatalf("missing declaration-to-implementation edge: %#v", result.Edges)
+	}
+	if nodeNamed(result.Nodes, "git_callback") != nil {
+		t.Fatalf("function-pointer typedef was modeled as a prototype: %#v", result.Nodes)
+	}
+}
+
+func TestCExtractsMacroWrappedReturnTypePrototype(t *testing.T) {
+	result := analyzeSources(t, "c", map[string]string{
+		"include/commit.h": `
+GIT_BEGIN_DECL
+GIT_EXTERN(int) git_commit_lookup(git_commit **out, const git_oid *id);
+GIT_EXTERN(const git_oid *) git_commit_id(const git_commit *commit);
+GIT_END_DECL
+`,
+	})
+	declaration := nodeNamedAtPath(result.Nodes, "git_commit_id", "include/commit.h")
+	if declaration == nil || declaration.Meta["symbol_role"] != cFamilyDeclarationRole {
+		t.Fatalf("macro-wrapped C declaration = %#v; nodes=%#v diagnostics=%#v", declaration, result.Nodes, result.Diagnostics)
+	}
+	if nodeNamed(result.Nodes, "GIT_EXTERN") != nil {
+		t.Fatalf("return-type macro was modeled as a function: %#v", result.Nodes)
+	}
+}
+
+func TestCPPLinksQualifiedMethodPrototypeToOutOfLineDefinition(t *testing.T) {
+	result := analyzeSources(t, "cpp", map[string]string{
+		"include/widget.hpp": `
+#include <string>
+class Widget {
+public:
+    int run(const std::string& value) const;
+};
+`,
+		"src/widget.cpp": `
+#include "../include/widget.hpp"
+int Widget::run(const std::string& input) const { return static_cast<int>(input.size()); }
+`,
+	})
+	declaration := nodeNamedAtPath(result.Nodes, "run", "include/widget.hpp")
+	implementation := nodeNamedAtPath(result.Nodes, "run", "src/widget.cpp")
+	if declaration == nil || implementation == nil {
+		t.Fatalf("missing C++ declaration or implementation: nodes=%#v diagnostics=%#v", result.Nodes, result.Diagnostics)
+	}
+	if declaration.Kind != graph.NodeMethod || declaration.Meta["qualified_name"] != "Widget.run" {
+		t.Fatalf("C++ declaration = %#v, want qualified method", declaration)
+	}
+	if implementation.Meta["qualified_name"] != "Widget.run" || implementation.Meta["symbol_role"] != cFamilyImplementationRole {
+		t.Fatalf("C++ implementation = %#v, want qualified implementation", implementation)
+	}
+	if declaration.Meta["signature"] != implementation.Meta["signature"] {
+		t.Fatalf("C++ signatures = declaration %q implementation %q", declaration.Meta["signature"], implementation.Meta["signature"])
+	}
+	if !hasEdge(result.Edges, graph.EdgeImplements, declaration.ID, implementation.ID, "true") {
+		t.Fatalf("missing qualified declaration-to-implementation edge: %#v", result.Edges)
 	}
 }
 
