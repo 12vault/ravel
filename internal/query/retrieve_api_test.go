@@ -650,6 +650,30 @@ func TestRetrievePrioritizesEvidenceConnectingTopCandidates(t *testing.T) {
 	}
 }
 
+func TestPrioritizeExplanationEdgesPreservesUsefulChainOrder(t *testing.T) {
+	edges := []ContextEdge{
+		{ID: "wrapper-new", From: "search", To: "index"},
+		{ID: "wrapper-search", From: "search", To: "method"},
+		{ID: "incidental-test", From: "test", To: "method"},
+	}
+	prioritizeExplanationEdges(edges, map[string]int{"search": 1, "test": 2, "index": 3, "method": 4}, DirectionOut)
+	if got, want := []string{edges[0].ID, edges[1].ID, edges[2].ID}, []string{"wrapper-new", "wrapper-search", "incidental-test"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("edge order = %v, want useful wrapper chain preserved as %v", got, want)
+	}
+}
+
+func TestPrioritizeExplanationEdgesBalancesTopCandidateDirections(t *testing.T) {
+	edges := []ContextEdge{
+		{ID: "caller", From: "caller", To: "target"},
+		{ID: "extra-caller", From: "extra-caller", To: "target"},
+		{ID: "callee", From: "target", To: "callee"},
+	}
+	prioritizeExplanationEdges(edges, map[string]int{"target": 1, "caller": 2, "extra-caller": 3, "callee": 4}, "")
+	if got, want := []string{edges[0].ID, edges[1].ID, edges[2].ID}, []string{"caller", "callee", "extra-caller"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("edge order = %v, want top candidate's first incoming and outgoing evidence as %v", got, want)
+	}
+}
+
 func TestRetrieveDistinguishesRankedShortlistSelectionFromTokenTruncation(t *testing.T) {
 	nodes := []graph.Node{{ID: "root", Kind: graph.NodeFunction, Name: "ShortlistRoot"}}
 	edges := make([]graph.Edge, 0, 20)

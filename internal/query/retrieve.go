@@ -1802,7 +1802,7 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 	for position, node := range result.Nodes {
 		returnedRanks[node.ID] = position + 1
 	}
-	prioritizeExplanationEdges(explanations, returnedRanks)
+	prioritizeExplanationEdges(explanations, returnedRanks, options.directionPreference)
 	includedEdges = map[string]bool{}
 	omittedExplanationEdges := map[string]bool{}
 	for _, edge := range explanations {
@@ -2009,29 +2009,61 @@ func (idx *Index) edgesWithin(nodes map[string]bool, relationSet map[graph.EdgeK
 	return result
 }
 
-// prioritizeExplanationEdges keeps relationships between the strongest
-// returned candidates ahead of traversal breadcrumbs to lower-ranked nodes.
-// This makes a tight payload explain why its top candidates belong together.
-func prioritizeExplanationEdges(edges []ContextEdge, ranks map[string]int) {
-	rank := func(id string) int {
-		if value, ok := ranks[id]; ok {
-			return value
-		}
-		return len(ranks) + 1
+// prioritizeExplanationEdges promotes only the evidence most likely to explain
+// the top result: its direct relationship with the runner-up, plus two edges in
+// an explicitly requested direction or one incoming and outgoing edge for a
+// mixed question. The remainder retains discovery order so a high-ranked but
+// incidental node cannot displace a useful call chain from a tight payload.
+func prioritizeExplanationEdges(edges []ContextEdge, ranks map[string]int, directionPreference Direction) {
+	if len(edges) < 2 || len(ranks) == 0 {
+		return
 	}
-	sort.Slice(edges, func(i, j int) bool {
-		leftFrom, leftTo := rank(edges[i].From), rank(edges[i].To)
-		rightFrom, rightTo := rank(edges[j].From), rank(edges[j].To)
-		if leftMax, rightMax := max(leftFrom, leftTo), max(rightFrom, rightTo); leftMax != rightMax {
-			return leftMax < rightMax
+
+	var top, runnerUp string
+	for id, rank := range ranks {
+		switch rank {
+		case 1:
+			top = id
+		case 2:
+			runnerUp = id
 		}
-		if leftSum, rightSum := leftFrom+leftTo, rightFrom+rightTo; leftSum != rightSum {
-			return leftSum < rightSum
+	}
+	if top == "" {
+		return
+	}
+
+	preferred := map[string]bool{}
+	markFirst := func(limit int, matches func(ContextEdge) bool) {
+		for _, edge := range edges {
+			if len(preferred) >= limit {
+				return
+			}
+			if matches(edge) {
+				preferred[edge.ID] = true
+			}
 		}
-		if relationPriority(edges[i].Kind) != relationPriority(edges[j].Kind) {
-			return relationPriority(edges[i].Kind) < relationPriority(edges[j].Kind)
+	}
+	switch directionPreference {
+	case DirectionIn:
+		markFirst(2, func(edge ContextEdge) bool { return edge.To == top })
+	case DirectionOut:
+		markFirst(2, func(edge ContextEdge) bool { return edge.From == top })
+	default:
+		markFirst(1, func(edge ContextEdge) bool { return edge.To == top })
+		markFirst(2, func(edge ContextEdge) bool { return edge.From == top })
+	}
+
+	priority := func(edge ContextEdge) int {
+		if runnerUp != "" && ((edge.From == top && edge.To == runnerUp) || (edge.From == runnerUp && edge.To == top)) {
+			return 0
 		}
-		return edges[i].ID < edges[j].ID
+		if preferred[edge.ID] {
+			return 1
+		}
+		return 2
+	}
+	sort.SliceStable(edges, func(i, j int) bool {
+		return priority(edges[i]) < priority(edges[j])
 	})
 }
 
