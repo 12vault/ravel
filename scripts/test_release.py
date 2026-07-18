@@ -34,6 +34,13 @@ for path in paths:
         print(f"{path}: {actual} != {version}", file=sys.stderr)
         raise SystemExit(1)
 
+codex_hooks = json.loads((root / ".codex/hooks.json").read_text())
+for entry in codex_hooks.get("hooks", {}).get("PreToolUse", []):
+    for hook in entry.get("hooks", []):
+        command = hook.get("command", "")
+        if "assistant-hook" in command and command != "ravel assistant-hook":
+            raise SystemExit(".codex/hooks.json must use the portable 'ravel assistant-hook' command")
+
 source = root / "skills/ravel"
 targets = [root / "plugins/ravel/skills/ravel", root / ".agents/plugins/plugins/ravel/skills/ravel"]
 skill_text = (source / "skill.md").read_text()

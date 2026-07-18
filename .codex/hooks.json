@@ -4,7 +4,7 @@
       {
         "hooks": [
           {
-            "command": "'/Users/12ya/.local/bin/ravel' assistant-hook",
+            "command": "ravel assistant-hook",
             "type": "command"
           }
         ],
