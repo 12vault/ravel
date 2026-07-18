@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -146,6 +147,21 @@ func TestRankWithAnchorsCanExcludeInlineIdentifiersWithoutDroppingStructuredImpo
 	}
 	if got := anchored(withoutInline); !reflect.DeepEqual(got, map[string]bool{"imported": true}) {
 		t.Fatalf("anchors without inline identifiers = %v, want structured import only", got)
+	}
+}
+
+func TestRetrieveCandidateShortlistRanksECMAScriptImportsAheadOfProseMatches(t *testing.T) {
+	g := graph.Graph{Nodes: []graph.Node{
+		{ID: "function://needed", Kind: graph.NodeFunction, Name: "NeededClient", Path: "src/needed-client.ts"},
+		{ID: "function://prose", Kind: graph.NodeFunction, Name: "CompleteMissingLine", Path: "src/completion.ts"},
+	}}
+	result := mustRetrieve(t, NewIndex(g), `Which definition is needed to complete the missing line?
+import { NeededClient } from "./needed-client";
+// Complete the missing line below.`, RetrieveOptions{
+		SeedLimit: 1, MaxNodes: 10, TokenBudget: 1_000, CandidateShortlist: true,
+	})
+	if len(result.Nodes) == 0 || result.Nodes[0].ID != "function://needed" {
+		t.Fatalf("shortlist nodes = %#v, want ECMAScript import first", result.Nodes)
 	}
 }
 
@@ -754,6 +770,31 @@ func TestRetrieveCandidateShortlistRefillsUnusedExplanationBudget(t *testing.T) 
 	}
 }
 
+func TestAdaptiveShortlistTokenBudgetScalesWithStructuredAmbiguity(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		hardLimit              int
+		structuredCandidates   int
+		structuredQueryAnchors int
+		want                   int
+	}{
+		{name: "small hard limit", hardLimit: 512, structuredCandidates: 10, structuredQueryAnchors: 10, want: 512},
+		{name: "prose query", hardLimit: 2_000, structuredCandidates: 0, structuredQueryAnchors: 0, want: 2_000},
+		{name: "unmatched code anchors", hardLimit: 2_000, structuredCandidates: 0, structuredQueryAnchors: 5, want: 1_200},
+		{name: "one sparse candidate", hardLimit: 2_000, structuredCandidates: 1, structuredQueryAnchors: 5, want: 1_200},
+		{name: "two corroborated candidates", hardLimit: 2_000, structuredCandidates: 2, structuredQueryAnchors: 5, want: 800},
+		{name: "moderate ambiguity", hardLimit: 2_000, structuredCandidates: 10, structuredQueryAnchors: 10, want: 1_000},
+		{name: "bounded high ambiguity", hardLimit: 2_000, structuredCandidates: 100, structuredQueryAnchors: 100, want: 1_400},
+		{name: "configured cap wins", hardLimit: 900, structuredCandidates: 20, structuredQueryAnchors: 20, want: 900},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := adaptiveShortlistTokenBudget(tc.hardLimit, tc.structuredCandidates, tc.structuredQueryAnchors); got != tc.want {
+				t.Fatalf("adaptiveShortlistTokenBudget(%d, %d, %d) = %d, want %d", tc.hardLimit, tc.structuredCandidates, tc.structuredQueryAnchors, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRetrieveCandidateShortlistKeepsTopLexicalMatchThatIsNotASeed(t *testing.T) {
 	g := graph.Graph{Nodes: []graph.Node{
 		{ID: "seed", Kind: graph.NodeFunction, Name: "AssembleProviderInstanceRegistryLayerFixedSettingsWatcherControl"},
@@ -782,6 +823,7 @@ func TestEligibleShortlistCandidateExcludesImportAndUnresolvedNoise(t *testing.T
 	}{
 		{name: "declaration", node: graph.Node{Kind: graph.NodeFunction}, want: true},
 		{name: "import", node: graph.Node{Kind: graph.NodeImport}, want: false},
+		{name: "directory", node: graph.Node{Kind: graph.NodeDir}, want: false},
 		{name: "unresolved call", node: graph.Node{Kind: graph.NodeFunction, Meta: map[string]string{"resolved": "false"}}, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1233,6 +1275,22 @@ func TestPrioritizeGraphCandidatesReservesStructuralSlots(t *testing.T) {
 		if node.ID != gotOwners[position] {
 			t.Fatalf("node/owner mismatch at %d: %#v != %q", position, node, gotOwners[position])
 		}
+	}
+}
+
+func TestDiversifyShortlistCandidatesDefersRepeatedLabels(t *testing.T) {
+	nodes := []ContextNode{
+		{Kind: graph.NodeFile, Name: "index.ts"},
+		{Kind: graph.NodeFile, Name: "index.ts"},
+		{Kind: graph.NodeFile, Name: "index.ts"},
+		{Kind: graph.NodeFunction, Name: "resolve"},
+		{Kind: graph.NodeFile, Name: "client.ts"},
+	}
+	owners := []string{"index-a", "index-b", "index-c", "resolve", "client"}
+	_, got := diversifyShortlistCandidates(nodes, owners, 2)
+	want := []string{"index-a", "resolve", "client", "index-b", "index-c"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("diversified owners = %v, want %v", got, want)
 	}
 }
 
