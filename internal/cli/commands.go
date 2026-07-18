@@ -41,7 +41,7 @@ import (
 	"github.com/12vault/ravel/internal/workspace"
 )
 
-var Version = "v0.2.7"
+var Version = "v0.2.8"
 
 var checkForUpdate = selfupdate.Check
 
