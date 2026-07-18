@@ -25,7 +25,7 @@ import (
 const InternalWorkerCommand = "__tree-analyzer-worker"
 
 const (
-	processWorkerProtocolVersion = 2
+	processWorkerProtocolVersion = 3
 	// Match Graphify's cutoff: below this, process startup costs more than the
 	// small amount of parsing it can parallelize.
 	minProcessWorkerFiles = 20
@@ -79,6 +79,7 @@ type processDefinition struct {
 
 type processReference struct {
 	Name      string         `json:"name"`
+	Receiver  string         `json:"receiver,omitempty"`
 	Kind      graph.EdgeKind `json:"kind"`
 	Path      string         `json:"path"`
 	Language  string         `json:"language"`
@@ -400,7 +401,7 @@ func parsedFileToProcessParsed(file parsedFile) processParsedFile {
 	}
 	for i, item := range file.references {
 		wire.References[i] = processReference{
-			Name: item.name, Kind: item.kind, Path: item.path, Language: item.language,
+			Name: item.name, Receiver: item.receiver, Kind: item.kind, Path: item.path, Language: item.language,
 			StartByte: item.startByte, EndByte: item.endByte, StartLine: item.startLine, Column: item.column,
 		}
 	}
@@ -424,7 +425,7 @@ func processParsedToParsedFile(wire processParsedFile) parsedFile {
 	}
 	for i, item := range wire.References {
 		file.references[i] = reference{
-			name: item.Name, kind: item.Kind, path: item.Path, language: item.Language,
+			name: item.Name, receiver: item.Receiver, kind: item.Kind, path: item.Path, language: item.Language,
 			startByte: item.StartByte, endByte: item.EndByte, startLine: item.StartLine, column: item.Column,
 		}
 	}

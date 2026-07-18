@@ -115,6 +115,7 @@ type definition struct {
 
 type reference struct {
 	name      string
+	receiver  string
 	kind      graph.EdgeKind
 	path      string
 	language  string
@@ -616,7 +617,7 @@ func referenceFromTag(path, language string, tag gotreesitter.Tag) reference {
 func referenceFromCall(path, language string, call gotreesitter.CallRef, source []byte) reference {
 	line, column := byteLineColumn(source, call.NameStartByte)
 	return reference{
-		name: cleanName(call.Name), kind: graph.EdgeCalls, path: path, language: language,
+		name: cleanName(call.Name), receiver: strings.TrimSpace(call.Receiver), kind: graph.EdgeCalls, path: path, language: language,
 		startByte: call.StartByte, endByte: call.EndByte, startLine: line, column: column,
 	}
 }
@@ -666,9 +667,14 @@ func emitReferences(files []parsedFile, result *lang.AnalysisResult) {
 				candidates = imported[ref.path][key]
 				rationale = "reference name uniquely matches a Tree-sitter definition in a directly imported file"
 			}
-			if len(candidates) == 0 {
+			unsafeGlobalCallFallback := ref.kind == graph.EdgeCalls && ref.receiver != "" &&
+				(ref.language == "javascript" || ref.language == "typescript" || ref.language == "tsx")
+			if len(candidates) == 0 && !unsafeGlobalCallFallback {
 				candidates = all[key]
 				rationale = "reference name uniquely matches a Tree-sitter definition in the analyzed language"
+			}
+			if len(candidates) == 0 && unsafeGlobalCallFallback {
+				rationale = "qualified JavaScript call has no same-file or directly imported match; global bare-name matching would be unsafe"
 			}
 			meta := extractedMeta(ref.path, ref.startLine, ref.language)
 			meta["tree_sitter"] = "true"
@@ -680,6 +686,9 @@ func emitReferences(files []parsedFile, result *lang.AnalysisResult) {
 				meta["rationale"] = rationale
 			} else {
 				meta["resolved"] = "false"
+				if unsafeGlobalCallFallback {
+					meta["rationale"] = rationale
+				}
 				kind := graph.NodeType
 				scheme := "tree-unresolved-reference"
 				if ref.kind == graph.EdgeCalls {

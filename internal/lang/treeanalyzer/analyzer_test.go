@@ -282,10 +282,14 @@ func TestPartialDefinitionsSurviveWorkerRoundTripAndAreMarked(t *testing.T) {
 			id: "swift-run", name: "run", kind: graph.NodeFunction,
 			path: "App.swift", language: "swift", startLine: 7, endLine: 9, partial: true,
 		}},
+		references: []reference{{name: "run", receiver: "service", kind: graph.EdgeCalls, path: "App.swift", language: "swift"}},
 	}
 	roundTrip := processParsedToParsedFile(parsedFileToProcessParsed(original))
 	if len(roundTrip.definitions) != 1 || !roundTrip.definitions[0].partial {
 		t.Fatalf("partial definition lost in worker round trip: %#v", roundTrip.definitions)
+	}
+	if len(roundTrip.references) != 1 || roundTrip.references[0].receiver != "service" {
+		t.Fatalf("call receiver lost in worker round trip: %#v", roundTrip.references)
 	}
 	result := &lang.AnalysisResult{}
 	emitDefinitions([]parsedFile{roundTrip}, result)
@@ -430,6 +434,35 @@ func TestJavaScriptAndRustExtractLanguageNeutralSymbols(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQualifiedCallDoesNotUseGlobalBareNameFallback(t *testing.T) {
+	result := analyzeSources(t, "javascript", map[string]string{
+		"src/app.js":   "var mixin = require('merge-descriptors');\nvar qs = require('qs');\nfunction createApplication() { mixin(app, proto); return qs.parse('x'); }\n",
+		"src/other.js": "var parse = function parse() { return {}; };\n",
+	})
+	createApplication := nodeNamedAtPath(result.Nodes, "createApplication", "src/app.js")
+	mixin := nodeNamedAtPath(result.Nodes, "mixin", "src/app.js")
+	if createApplication == nil || mixin == nil {
+		t.Fatalf("missing JavaScript definitions: nodes=%#v diagnostics=%#v", result.Nodes, result.Diagnostics)
+	}
+	if !hasEdge(result.Edges, graph.EdgeCalls, createApplication.ID, mixin.ID, "true") {
+		t.Fatalf("direct mixin call did not resolve: %#v", result.Edges)
+	}
+	for _, edge := range result.Edges {
+		if edge.Kind != graph.EdgeCalls || edge.From != createApplication.ID {
+			continue
+		}
+		target := nodeByID(result.Nodes, edge.To)
+		if target == nil || target.Name != "parse" {
+			continue
+		}
+		if edge.Meta["resolved"] != "false" || !strings.Contains(edge.Meta["rationale"], "global bare-name matching") {
+			t.Fatalf("qualified qs.parse call was resolved by bare name: edge=%#v target=%#v", edge, target)
+		}
+		return
+	}
+	t.Fatalf("missing qualified qs.parse call: %#v", result.Edges)
 }
 
 func TestDedupeReferencesDeterministicallyOrdersSameStart(t *testing.T) {

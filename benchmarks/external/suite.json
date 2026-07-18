@@ -18,7 +18,7 @@
       "url": "https://github.com/expressjs/express.git",
       "revision": "ae6dd37680e3a00618d6c8a3e522f0ee4eeba1a4",
       "dataset": "benchmarks/external/express.jsonl",
-      "datasetRevision": "external-express-v1"
+      "datasetRevision": "external-express-v2"
     },
     {
       "name": "click",
