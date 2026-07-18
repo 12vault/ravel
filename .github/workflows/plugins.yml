@@ -60,8 +60,13 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
-      - name: Run bundled launcher
-        shell: ${{ matrix.shell }}
+      - name: Run bundled launcher (Unix)
+        if: matrix.shell == 'bash'
+        shell: bash
+        run: ${{ matrix.command }}
+      - name: Run bundled launcher (Windows)
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
         run: ${{ matrix.command }}
 
   macos-security:
