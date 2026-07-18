@@ -625,6 +625,31 @@ func TestRetrieveBudgetPrioritizesDiscoveredCandidateOverLargeExplanationEdge(t 
 	}
 }
 
+func TestRetrievePrioritizesEvidenceConnectingTopCandidates(t *testing.T) {
+	nodes := []graph.Node{
+		{ID: "caller", Kind: graph.NodeFunction, Name: "DirectCaller"},
+		{ID: "callee", Kind: graph.NodeFunction, Name: "DirectCallee"},
+	}
+	edges := []graph.Edge{testQueryEdge(graph.EdgeCalls, "caller", "callee")}
+	for index := 0; index < maximumExplanationEdges; index++ {
+		id := fmt.Sprintf("noise-%02d", index)
+		nodes = append(nodes, graph.Node{ID: id, Kind: graph.NodeFunction, Name: fmt.Sprintf("NoiseCandidate%02d", index)})
+		edges = append(edges, testQueryEdge(graph.EdgeCalls, "caller", id))
+	}
+
+	result := mustRetrieve(t, NewIndex(graph.Graph{Nodes: nodes, Edges: edges}), "DirectCaller DirectCallee", RetrieveOptions{
+		Direction: DirectionOut, DisableRelationInference: true, SeedLimit: 2,
+		MaxDepth: 1, MaxNodes: 20, BranchFanout: 20, HubDegreeThreshold: -1, TokenBudget: 100_000,
+	})
+	direct := graph.EdgeID(graph.EdgeCalls, "caller", "callee")
+	if !retrievalHasEdge(result, direct) {
+		t.Fatalf("top candidates lost their direct evidence edge: nodes=%v edges=%#v", retrievalNodeIDs(result), result.Edges)
+	}
+	if len(result.Edges) != maximumExplanationEdges || result.Stats.ExplanationEdgesOmitted != 1 {
+		t.Fatalf("explanation cap stats = %#v, edges = %#v", result.Stats, result.Edges)
+	}
+}
+
 func TestRetrieveDistinguishesRankedShortlistSelectionFromTokenTruncation(t *testing.T) {
 	nodes := []graph.Node{{ID: "root", Kind: graph.NodeFunction, Name: "ShortlistRoot"}}
 	edges := make([]graph.Edge, 0, 20)

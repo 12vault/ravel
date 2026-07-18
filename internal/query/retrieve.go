@@ -1798,6 +1798,11 @@ func (idx *Index) fitRetrieval(question string, options normalizedRetrieveOption
 			explanations = append(explanations, edge)
 		}
 	}
+	returnedRanks := make(map[string]int, len(result.Nodes))
+	for position, node := range result.Nodes {
+		returnedRanks[node.ID] = position + 1
+	}
+	prioritizeExplanationEdges(explanations, returnedRanks)
 	includedEdges = map[string]bool{}
 	omittedExplanationEdges := map[string]bool{}
 	for _, edge := range explanations {
@@ -2002,6 +2007,32 @@ func (idx *Index) edgesWithin(nodes map[string]bool, relationSet map[graph.EdgeK
 		return result[i].ID < result[j].ID
 	})
 	return result
+}
+
+// prioritizeExplanationEdges keeps relationships between the strongest
+// returned candidates ahead of traversal breadcrumbs to lower-ranked nodes.
+// This makes a tight payload explain why its top candidates belong together.
+func prioritizeExplanationEdges(edges []ContextEdge, ranks map[string]int) {
+	rank := func(id string) int {
+		if value, ok := ranks[id]; ok {
+			return value
+		}
+		return len(ranks) + 1
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		leftFrom, leftTo := rank(edges[i].From), rank(edges[i].To)
+		rightFrom, rightTo := rank(edges[j].From), rank(edges[j].To)
+		if leftMax, rightMax := max(leftFrom, leftTo), max(rightFrom, rightTo); leftMax != rightMax {
+			return leftMax < rightMax
+		}
+		if leftSum, rightSum := leftFrom+leftTo, rightFrom+rightTo; leftSum != rightSum {
+			return leftSum < rightSum
+		}
+		if relationPriority(edges[i].Kind) != relationPriority(edges[j].Kind) {
+			return relationPriority(edges[i].Kind) < relationPriority(edges[j].Kind)
+		}
+		return edges[i].ID < edges[j].ID
+	})
 }
 
 func contextNode(node graph.Node, score, depth, degree int, seed bool) ContextNode {
