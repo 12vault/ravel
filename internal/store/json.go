@@ -229,15 +229,26 @@ func syncDirectory(path string) error {
 }
 
 func LoadGraph(outDir string) (graph.Graph, error) {
-	data, err := readState(outDir, "graph.json")
+	data, err := LoadGraphData(outDir)
 	if err != nil {
-		return graph.Graph{}, fmt.Errorf("load graph: %w", err)
+		return graph.Graph{}, err
 	}
 	var g graph.Graph
 	if err := json.Unmarshal(data, &g); err != nil {
 		return graph.Graph{}, err
 	}
 	return g, nil
+}
+
+// LoadGraphData returns the exact persisted graph bytes selected by LoadGraph.
+// Query indexes hash these bytes so a cache can be validated without first
+// decoding and normalizing the graph again.
+func LoadGraphData(outDir string) ([]byte, error) {
+	data, err := readState(outDir, "graph.json")
+	if err != nil {
+		return nil, fmt.Errorf("load graph: %w", err)
+	}
+	return data, nil
 }
 
 func LoadScan(outDir string) (scan.Result, error) {

@@ -207,6 +207,54 @@ func TestExecuteContextReturnsConnectedBudgetedGraph(t *testing.T) {
 	}
 }
 
+func TestExecuteQueryPersistsAndReusesGraphHashIndex(t *testing.T) {
+	out := t.TempDir()
+	value := graph.Graph{
+		Version: "test",
+		Nodes: []graph.Node{{
+			ID: "function://beta", Kind: graph.NodeFunction, Name: "Beta", Path: "beta.go",
+		}},
+	}
+	if err := store.WriteJSON(filepath.Join(out, "graph.json"), value); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"query", "--out", out, "Beta"}
+	if err := Execute(context.Background(), args, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "function://beta") {
+		t.Fatalf("query output = %q", stdout.String())
+	}
+	cacheDir := filepath.Join(out, ".state", "cache")
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "query-index-v1-") {
+		t.Fatalf("query cache entries = %#v", entries)
+	}
+	cachePath := filepath.Join(cacheDir, entries[0].Name())
+	sentinel := time.Unix(1_000, 0)
+	if err := os.Chtimes(cachePath, sentinel, sentinel); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if err := Execute(context.Background(), args, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(cachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(sentinel) {
+		t.Fatalf("warm query rewrote immutable cache: modtime=%v want=%v", info.ModTime(), sentinel)
+	}
+}
+
 func TestExecuteContextRejectsMissingExplicitConfig(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.yaml")
 	var stdout, stderr bytes.Buffer

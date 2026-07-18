@@ -100,19 +100,12 @@ func NewIndex(g graph.Graph) *Index {
 	g = cloneGraph(g)
 	idx := &Index{
 		graph:             g,
-		byID:              make(map[string]int, len(g.Nodes)),
-		communityByID:     make(map[string]string, len(g.Nodes)),
 		documentFrequency: map[string]int{},
 		trigramPostings:   map[string][]int{},
-		edgeKinds:         map[graph.EdgeKind]bool{},
 		idfCache:          map[string]float64{},
 	}
 	for _, node := range g.Nodes {
 		doc := indexNode(node)
-		idx.byID[node.ID] = len(idx.docs)
-		if node.Meta != nil {
-			idx.communityByID[node.ID] = node.Meta["community"]
-		}
 		idx.docs = append(idx.docs, doc)
 		idx.averageLength.name += doc.lengths.name
 		idx.averageLength.path += doc.lengths.path
@@ -133,12 +126,32 @@ func NewIndex(g graph.Graph) *Index {
 		idx.averageLength.id /= count
 		idx.averageLength.meta /= count
 	}
+	idx.initializeGraphState()
+	return idx
+}
+
+// initializeGraphState rebuilds the cheap graph-shaped portion of an index.
+// Persisted indexes reuse the expensive lexical documents and postings while
+// reconstructing adjacency from the authoritative graph snapshot.
+func (idx *Index) initializeGraphState() {
+	idx.byID = make(map[string]int, len(idx.graph.Nodes))
+	idx.communityByID = make(map[string]string, len(idx.graph.Nodes))
+	for i, node := range idx.graph.Nodes {
+		idx.byID[node.ID] = i
+		if node.Meta != nil {
+			idx.communityByID[node.ID] = node.Meta["community"]
+		}
+		if i < len(idx.docs) {
+			idx.docs[i].node = node
+		}
+	}
+	idx.edgeKinds = map[graph.EdgeKind]bool{}
 	idx.outgoing = make([][]adjacentEdge, len(idx.docs))
 	idx.incoming = make([][]adjacentEdge, len(idx.docs))
 	idx.outDegree = make([]int, len(idx.docs))
 	idx.inDegree = make([]int, len(idx.docs))
 	idx.bothDegree = make([]int, len(idx.docs))
-	for _, edge := range g.Edges {
+	for _, edge := range idx.graph.Edges {
 		fromIndex, fromOK := idx.byID[edge.From]
 		if !fromOK {
 			continue
@@ -159,7 +172,7 @@ func NewIndex(g graph.Graph) *Index {
 		idx.outgoing[docIndex] = make([]adjacentEdge, 0, idx.outDegree[docIndex])
 		idx.incoming[docIndex] = make([]adjacentEdge, 0, idx.inDegree[docIndex])
 	}
-	for _, edge := range g.Edges {
+	for _, edge := range idx.graph.Edges {
 		fromIndex, fromOK := idx.byID[edge.From]
 		toIndex, toOK := idx.byID[edge.To]
 		if !fromOK || !toOK {
@@ -168,7 +181,11 @@ func NewIndex(g graph.Graph) *Index {
 		idx.outgoing[fromIndex] = append(idx.outgoing[fromIndex], adjacentEdge{nodeIndex: toIndex, edge: edge, outgoing: true})
 		idx.incoming[toIndex] = append(idx.incoming[toIndex], adjacentEdge{nodeIndex: fromIndex, edge: edge, outgoing: false})
 	}
-	return idx
+}
+
+// Counts reports the immutable graph size represented by the index.
+func (idx *Index) Counts() (nodes, edges int) {
+	return len(idx.graph.Nodes), len(idx.graph.Edges)
 }
 
 // Search performs ranked lexical retrieval without graph expansion.

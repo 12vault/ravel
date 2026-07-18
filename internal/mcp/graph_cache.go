@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/12vault/ravel/internal/graph"
 	"github.com/12vault/ravel/internal/query"
 )
 
@@ -64,11 +62,11 @@ func (c *graphCache) snapshot() (*graphSnapshot, error) {
 		c.current = &graphSnapshot{index: c.current.index, fingerprint: fingerprint}
 		return c.current, nil
 	}
-	var g graph.Graph
-	if err := json.Unmarshal(data, &g); err != nil {
-		return nil, fmt.Errorf("decode graph state %s: %w", fingerprint.path, err)
+	index, _, err := query.LoadOrBuildIndex(data, filepath.Join(c.outDir, ".state", "cache"))
+	if err != nil {
+		return nil, fmt.Errorf("load query index for graph state %s: %w", fingerprint.path, err)
 	}
-	c.current = &graphSnapshot{index: query.NewIndex(g), fingerprint: fingerprint}
+	c.current = &graphSnapshot{index: index, fingerprint: fingerprint}
 	return c.current, nil
 }
 

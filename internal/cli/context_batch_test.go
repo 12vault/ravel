@@ -62,6 +62,18 @@ func TestContextBatchMatchesOneShotContext(t *testing.T) {
 			t.Fatalf("batch retrieval differs from one-shot\nbatch: %#v\none-shot: %#v", *response.Retrieval, expected)
 		}
 	}
+
+	var warm bytes.Buffer
+	if err := ExecuteIO(context.Background(), args, strings.NewReader(""), &warm, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var warmReady contextBatchReady
+	if err := json.NewDecoder(&warm).Decode(&warmReady); err != nil {
+		t.Fatal(err)
+	}
+	if !warmReady.IndexCacheHit || warmReady.GraphNodes != ready.GraphNodes || warmReady.GraphEdges != ready.GraphEdges {
+		t.Fatalf("warm ready = %#v, want cached index with stable counts", warmReady)
+	}
 }
 
 func TestContextBatchKeepsFixedSnapshotAndContinuesAfterBadRow(t *testing.T) {
