@@ -2,6 +2,7 @@ package query
 
 import (
 	"math"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,8 @@ const (
 	structuredPathBonus  = 20_000.0
 	naturalLanguageTerms = 6
 	naturalExactScale    = 0.25
+	indexBuildThreshold  = 512
+	maxIndexBuildWorkers = 4
 )
 
 // Index is an immutable, reusable query index over a graph. It keeps retrieval
@@ -95,8 +98,22 @@ type structuredQueryAnchors struct {
 	paths       []string
 }
 
+type indexBuildPartial struct {
+	documentFrequency map[string]int
+	trigramPostings   map[string][]int
+	totalLength       fieldLengths
+}
+
 // NewIndex constructs a deterministic, in-memory retrieval index.
 func NewIndex(g graph.Graph) *Index {
+	workers := 1
+	if len(g.Nodes) >= indexBuildThreshold {
+		workers = min(maxIndexBuildWorkers, runtime.GOMAXPROCS(0))
+	}
+	return newIndex(g, workers)
+}
+
+func newIndex(g graph.Graph, workers int) *Index {
 	g = cloneGraph(g)
 	idx := &Index{
 		graph:             g,
@@ -104,19 +121,19 @@ func NewIndex(g graph.Graph) *Index {
 		trigramPostings:   map[string][]int{},
 		idfCache:          map[string]float64{},
 	}
-	for _, node := range g.Nodes {
-		doc := indexNode(node)
-		idx.docs = append(idx.docs, doc)
-		idx.averageLength.name += doc.lengths.name
-		idx.averageLength.path += doc.lengths.path
-		idx.averageLength.packageName += doc.lengths.packageName
-		idx.averageLength.id += doc.lengths.id
-		idx.averageLength.meta += doc.lengths.meta
-		for term := range doc.allTerms {
-			idx.documentFrequency[term]++
+	documents, partials := buildIndexDocuments(g.Nodes, workers)
+	idx.docs = documents
+	for _, partial := range partials {
+		idx.averageLength.name += partial.totalLength.name
+		idx.averageLength.path += partial.totalLength.path
+		idx.averageLength.packageName += partial.totalLength.packageName
+		idx.averageLength.id += partial.totalLength.id
+		idx.averageLength.meta += partial.totalLength.meta
+		for term, frequency := range partial.documentFrequency {
+			idx.documentFrequency[term] += frequency
 		}
-		for trigram := range trigrams(doc.searchText) {
-			idx.trigramPostings[trigram] = append(idx.trigramPostings[trigram], len(idx.docs)-1)
+		for trigram, postings := range partial.trigramPostings {
+			idx.trigramPostings[trigram] = append(idx.trigramPostings[trigram], postings...)
 		}
 	}
 	if count := float64(len(idx.docs)); count > 0 {
@@ -128,6 +145,45 @@ func NewIndex(g graph.Graph) *Index {
 	}
 	idx.initializeGraphState()
 	return idx
+}
+
+func buildIndexDocuments(nodes []graph.Node, workers int) ([]indexedNode, []indexBuildPartial) {
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+	workers = max(1, min(workers, len(nodes)))
+	documents := make([]indexedNode, len(nodes))
+	partials := make([]indexBuildPartial, workers)
+	chunkSize := (len(nodes) + workers - 1) / workers
+	var wait sync.WaitGroup
+	wait.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		start := worker * chunkSize
+		end := min(start+chunkSize, len(nodes))
+		go func(worker, start, end int) {
+			defer wait.Done()
+			partial := &partials[worker]
+			partial.documentFrequency = map[string]int{}
+			partial.trigramPostings = map[string][]int{}
+			for i := start; i < end; i++ {
+				document := indexNode(nodes[i])
+				documents[i] = document
+				partial.totalLength.name += document.lengths.name
+				partial.totalLength.path += document.lengths.path
+				partial.totalLength.packageName += document.lengths.packageName
+				partial.totalLength.id += document.lengths.id
+				partial.totalLength.meta += document.lengths.meta
+				for term := range document.allTerms {
+					partial.documentFrequency[term]++
+				}
+				for trigram := range trigrams(document.searchText) {
+					partial.trigramPostings[trigram] = append(partial.trigramPostings[trigram], i)
+				}
+			}
+		}(worker, start, end)
+	}
+	wait.Wait()
+	return documents, partials
 }
 
 // initializeGraphState rebuilds the cheap graph-shaped portion of an index.
