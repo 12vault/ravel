@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/12vault/ravel/internal/graph"
@@ -226,6 +227,30 @@ func TestIndexDoesNotTreatFileExtensionAsPackageQualification(t *testing.T) {
 	results := NewIndex(graph.Graph{Nodes: nodes}).Search("what does go analyzer Analyze call for module import resolution", 2)
 	if len(results) == 0 || results[0].Node.ID != "method://internal/lang/goanalyzer.Analyzer.Analyze" {
 		t.Fatalf("ranked results = %#v", results)
+	}
+}
+
+func TestExtractStructuredQueryAnchorsSupportsECMAScriptImports(t *testing.T) {
+	anchors := extractStructuredQueryAnchors(`
+import DefaultClient, {
+  type CacheEntry,
+  saveRequestMock as saveMock,
+} from "./api/cache-client";
+import * as logTools from './log';
+const { parseValue: parse, formatValue } = require("./format");
+	`)
+	for _, name := range []string{
+		"default client", "cache entry", "save request mock", "save mock",
+		"log tools", "parse value", "parse", "format value",
+	} {
+		if !anchors.names[name] || anchors.inlineNames[name] {
+			t.Fatalf("structured names = %#v, want non-inline anchor %q", anchors.names, name)
+		}
+	}
+	for _, path := range []string{"api cache client", "log", "format"} {
+		if !slices.Contains(anchors.paths, path) {
+			t.Fatalf("structured paths = %#v, want %q", anchors.paths, path)
+		}
 	}
 }
 

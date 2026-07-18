@@ -2,6 +2,7 @@ package query
 
 import (
 	"math"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -29,6 +30,15 @@ const (
 	naturalExactScale    = 0.25
 	indexBuildThreshold  = 512
 	maxIndexBuildWorkers = 4
+)
+
+var (
+	ecmaScriptImportPattern = regexp.MustCompile(
+		`(?ms)^[\t ]*import[\t ]+(?:type[\t ]+)?((?:[$A-Za-z_][$A-Za-z0-9_]*[\t ]*,[\t ]*)?(?:\{.*?\}|\*[\t ]+as[\t ]+[$A-Za-z_][$A-Za-z0-9_]*)|[$A-Za-z_][$A-Za-z0-9_]*)[\t ]+from[\t ]*["']([^"'\r\n]+)["']`,
+	)
+	commonJSRequirePattern = regexp.MustCompile(
+		`(?ms)^[\t ]*(?:const|let|var)[\t ]+(\{.*?\}|[$A-Za-z_][$A-Za-z0-9_]*)[\t ]*=[\t ]*require[\t ]*\([\t ]*["']([^"'\r\n]+)["'][\t ]*\)`,
+	)
 )
 
 // Index is an immutable, reusable query index over a graph. It keeps retrieval
@@ -499,6 +509,15 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 		paths[normalized] = true
 		result.paths = append(result.paths, normalized)
 	}
+	addModulePath := func(value string) {
+		value = strings.TrimSpace(strings.Trim(value, ".*"))
+		normalized := normalizeSearchText(value)
+		if normalized == "" || paths[normalized] {
+			return
+		}
+		paths[normalized] = true
+		result.paths = append(result.paths, normalized)
+	}
 	addInlineName := func(value string) {
 		value = strings.TrimSpace(strings.Trim(value, "(){}[]"))
 		if normalized := normalizeSearchText(value); normalized != "" {
@@ -544,6 +563,14 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 			}
 		}
 	}
+	for _, match := range ecmaScriptImportPattern.FindAllStringSubmatch(text, -1) {
+		addECMAScriptImportNames(match[1], addName)
+		addModulePath(match[2])
+	}
+	for _, match := range commonJSRequirePattern.FindAllStringSubmatch(text, -1) {
+		addCommonJSBindingNames(match[1], addName)
+		addModulePath(match[2])
+	}
 
 	pythonContinuation := false
 	pythonParenthesized := false
@@ -588,6 +615,60 @@ func extractStructuredQueryAnchors(text string) structuredQueryAnchors {
 	}
 	sort.Strings(result.paths)
 	return result
+}
+
+func structuredQueryAnchorCount(text string, includeInlineIdentifiers bool) int {
+	anchors := extractStructuredQueryAnchors(text)
+	if !includeInlineIdentifiers {
+		for name := range anchors.inlineNames {
+			delete(anchors.names, name)
+		}
+	}
+	return len(anchors.names) + len(anchors.paths)
+}
+
+func addECMAScriptImportNames(clause string, addName func(string)) {
+	clause = strings.TrimSpace(clause)
+	if comma := strings.Index(clause, ","); comma >= 0 && !strings.HasPrefix(clause, "{") {
+		addName(clause[:comma])
+		clause = strings.TrimSpace(clause[comma+1:])
+	}
+	if strings.HasPrefix(clause, "*") {
+		if alias := strings.Index(clause, " as "); alias >= 0 {
+			addName(clause[alias+4:])
+		}
+		return
+	}
+	if !strings.HasPrefix(clause, "{") {
+		addName(clause)
+		return
+	}
+	for _, imported := range strings.Split(strings.Trim(clause, "{}"), ",") {
+		imported = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(imported), "type "))
+		if imported == "" {
+			continue
+		}
+		if alias := strings.Index(imported, " as "); alias >= 0 {
+			addName(imported[:alias])
+			addName(imported[alias+4:])
+		} else {
+			addName(imported)
+		}
+	}
+}
+
+func addCommonJSBindingNames(binding string, addName func(string)) {
+	binding = strings.TrimSpace(binding)
+	if !strings.HasPrefix(binding, "{") {
+		addName(binding)
+		return
+	}
+	for _, imported := range strings.Split(strings.Trim(binding, "{}"), ",") {
+		parts := strings.SplitN(imported, ":", 2)
+		for _, part := range parts {
+			addName(part)
+		}
+	}
 }
 
 func mixedCaseIdentifier(value string) bool {
