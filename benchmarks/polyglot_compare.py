@@ -142,6 +142,7 @@ def ravel_result_from_value(
         "queryMs": query_ms,
         "profile": profile,
         "estimatedTokens": int(stats.get("estimatedTokens") or 0),
+        "outputTokenBudget": int(stats.get("outputTokenBudget") or 0),
         "headerTokens": int(stats.get("headerTokens") or 0),
         "candidateTokens": int(stats.get("candidateTokens") or 0),
         "explanationTokens": int(stats.get("explanationTokens") or 0),
@@ -154,6 +155,8 @@ def ravel_result_from_value(
         "explanationEdgesOmitted": int(stats.get("explanationEdgesOmitted") or 0),
         "sameFileRescues": list(stats.get("sameFileRescues") or []),
         "affinityRescues": list(stats.get("affinityRescues") or []),
+        "structuredCandidates": int(stats.get("structuredCandidates") or 0),
+        "structuredQueryAnchors": int(stats.get("structuredQueryAnchors") or 0),
         "traceNodes": list(stats.get("traceNodes") or []),
         "items": items,
     }
