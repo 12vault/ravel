@@ -51,13 +51,31 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 		default:
 		}
 		parsed, err := parser.ParseFile(fset, file.AbsPath, nil, parser.ParseComments)
-		if err != nil {
+		partial := err != nil
+		if partial {
+			result.Nodes = append(result.Nodes, partialFileNode(file.Path))
+		}
+		if parsed == nil || parsed.Name == nil || parsed.Name.Name == "" || parsed.Name.Name == "_" {
+			message := "Go parser did not recover a usable package clause"
+			if err != nil {
+				message = err.Error()
+			}
 			result.Diagnostics = append(result.Diagnostics, graph.Diagnostic{
 				Path:    file.Path,
 				Level:   "error",
-				Message: err.Error(),
+				Message: message,
 			})
 			continue
+		}
+		if partial {
+			result.Diagnostics = append(result.Diagnostics, graph.Diagnostic{
+				Path:  file.Path,
+				Level: "warning",
+				Message: fmt.Sprintf(
+					"Go parse incomplete; recovered %d top-level declaration(s) without cross-file semantics: %v",
+					recoverableDeclarationCount(parsed), err,
+				),
+			})
 		}
 		dir := graph.ParentDir(file.Path)
 		key := packageStateKey(dir, parsed.Name.Name)
@@ -75,7 +93,7 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 			}
 			packages[key] = state
 		}
-		state.files[file.Path] = &fileState{file: file, parsed: parsed}
+		state.files[file.Path] = &fileState{file: file, parsed: parsed, partial: partial}
 		if state.name == "" {
 			state.name = parsed.Name.Name
 		}
@@ -88,81 +106,113 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 		if files := sortedFiles(state.files); len(files) > 0 {
 			packageEvidence = sourceEvidence(files[0].file.Path, fset.Position(files[0].parsed.Name.Pos()).Line)
 		}
+		packageMeta := map[string]string{
+			"confidence": "extracted",
+			"evidence":   packageEvidence,
+			"language":   "go",
+		}
+		if state.hasPartialFiles() {
+			markPartialMeta(packageMeta)
+		}
 		result.Nodes = append(result.Nodes, graph.Node{
 			ID:      pkgID,
 			Kind:    graph.NodePackage,
 			Name:    state.name,
 			Path:    state.dir,
 			Package: statePackageQualifier(state),
-			Meta: map[string]string{
-				"confidence": "extracted",
-				"evidence":   packageEvidence,
-				"language":   "go",
-			},
+			Meta:    packageMeta,
 		})
 
 		for _, fs := range sortedFiles(state.files) {
 			packageLine := fset.Position(fs.parsed.Name.Pos()).Line
+			containsMeta := extractedMeta(fs.file.Path, packageLine)
+			if fs.partial {
+				markPartialMeta(containsMeta)
+			}
 			result.Edges = append(result.Edges, graph.Edge{
 				Kind: graph.EdgeContains,
 				From: pkgID,
 				To:   graph.FileID(fs.file.Path),
-				Meta: extractedMeta(fs.file.Path, packageLine),
+				Meta: containsMeta,
 			})
-			for _, spec := range fs.parsed.Imports {
-				importPath := strings.Trim(spec.Path.Value, `"`)
-				importLine := fset.Position(spec.Pos()).Line
-				importNode := graph.Node{
-					ID:   graph.ImportID(importPath),
-					Kind: graph.NodeImport,
-					Name: importPath,
-					Meta: map[string]string{
-						"confidence": "extracted",
-						"evidence":   sourceEvidence(fs.file.Path, importLine),
-						"language":   "go",
-					},
+			if !fs.partial {
+				for _, spec := range fs.parsed.Imports {
+					importPath := strings.Trim(spec.Path.Value, `"`)
+					importLine := fset.Position(spec.Pos()).Line
+					importNode := graph.Node{
+						ID:   graph.ImportID(importPath),
+						Kind: graph.NodeImport,
+						Name: importPath,
+						Meta: map[string]string{
+							"confidence": "extracted",
+							"evidence":   sourceEvidence(fs.file.Path, importLine),
+							"language":   "go",
+						},
+					}
+					if spec.Name != nil {
+						importNode.Meta["alias"] = spec.Name.Name
+					}
+					result.Nodes = append(result.Nodes, importNode)
+					result.Edges = append(result.Edges, graph.Edge{
+						Kind: graph.EdgeImports,
+						From: graph.FileID(fs.file.Path),
+						To:   graph.ImportID(importPath),
+						Meta: extractedMeta(fs.file.Path, importLine),
+					})
 				}
-				if spec.Name != nil {
-					importNode.Meta["alias"] = spec.Name.Name
-				}
-				result.Nodes = append(result.Nodes, importNode)
-				result.Edges = append(result.Edges, graph.Edge{
-					Kind: graph.EdgeImports,
-					From: graph.FileID(fs.file.Path),
-					To:   graph.ImportID(importPath),
-					Meta: extractedMeta(fs.file.Path, importLine),
-				})
 			}
 			for _, decl := range fs.parsed.Decls {
 				switch d := decl.(type) {
 				case *ast.FuncDecl:
+					if !recoverableFuncDecl(d) {
+						continue
+					}
 					node := functionNode(fset, state, fs.file.Path, d)
-					if d.Recv == nil {
-						state.functions[d.Name.Name] = node.ID
-						state.functionResults[d.Name.Name] = singleResultType(d.Type.Results)
+					if fs.partial {
+						markPartialMeta(node.Meta)
 					} else {
-						state.methods[d.Name.Name] = append(state.methods[d.Name.Name], methodTarget{
-							base: receiverBase(d.Recv.List[0].Type),
-							id:   node.ID,
-						})
+						if d.Recv == nil {
+							state.functions[d.Name.Name] = node.ID
+							state.functionResults[d.Name.Name] = singleResultType(d.Type.Results)
+						} else {
+							state.methods[d.Name.Name] = append(state.methods[d.Name.Name], methodTarget{
+								base: receiverBase(d.Recv.List[0].Type),
+								id:   node.ID,
+							})
+						}
 					}
 					result.Nodes = append(result.Nodes, node)
+					definesMeta := extractedMeta(fs.file.Path, node.StartLine)
+					if fs.partial {
+						markPartialMeta(definesMeta)
+					}
 					result.Edges = append(result.Edges, graph.Edge{
 						Kind: graph.EdgeDefines,
 						From: graph.FileID(fs.file.Path),
 						To:   node.ID,
-						Meta: extractedMeta(fs.file.Path, node.StartLine),
+						Meta: definesMeta,
 					})
 				case *ast.GenDecl:
 					nodes, edges := typeAndValueNodes(fset, state, fs.file.Path, d)
-					for _, spec := range d.Specs {
-						switch spec := spec.(type) {
-						case *ast.TypeSpec:
-							state.definedTypes[spec.Name.Name] = true
-						case *ast.ValueSpec:
-							for _, name := range spec.Names {
-								if name.Name != "_" {
-									state.declaredValues[name.Name] = true
+					if fs.partial {
+						for i := range nodes {
+							markPartialMeta(nodes[i].Meta)
+						}
+						for i := range edges {
+							markPartialMeta(edges[i].Meta)
+						}
+					} else {
+						for _, spec := range d.Specs {
+							switch spec := spec.(type) {
+							case *ast.TypeSpec:
+								if spec.Name != nil && spec.Name.Name != "_" {
+									state.definedTypes[spec.Name.Name] = true
+								}
+							case *ast.ValueSpec:
+								for _, name := range spec.Names {
+									if name != nil && name.Name != "_" {
+										state.declaredValues[name.Name] = true
+									}
 								}
 							}
 						}
@@ -181,6 +231,9 @@ func (a Analyzer) Analyze(ctx context.Context, root string, files []scan.File) (
 	if a.CallGraph {
 		for _, state := range sortedPackages(packages) {
 			for _, fs := range sortedFiles(state.files) {
+				if fs.partial {
+					continue
+				}
 				importAliases := importsByAlias(fset, fs.file.Path, fs.parsed)
 				knownTypeExpressions := qualifiedTypeExpressions(fs.parsed)
 				for _, decl := range fs.parsed.Decls {
@@ -288,8 +341,84 @@ type methodTarget struct {
 }
 
 type fileState struct {
-	file   scan.File
-	parsed *ast.File
+	file    scan.File
+	parsed  *ast.File
+	partial bool
+}
+
+func (s *packageState) hasPartialFiles() bool {
+	for _, file := range s.files {
+		if file.partial {
+			return true
+		}
+	}
+	return false
+}
+
+func recoverableDeclarationCount(file *ast.File) int {
+	if file == nil {
+		return 0
+	}
+	count := 0
+	for _, declaration := range file.Decls {
+		switch declaration := declaration.(type) {
+		case *ast.FuncDecl:
+			if recoverableFuncDecl(declaration) {
+				count++
+			}
+		case *ast.GenDecl:
+			for _, rawSpec := range declaration.Specs {
+				switch spec := rawSpec.(type) {
+				case *ast.TypeSpec:
+					if recoverableIdentifier(spec.Name) {
+						count++
+					}
+				case *ast.ValueSpec:
+					for _, name := range spec.Names {
+						if recoverableIdentifier(name) {
+							count++
+						}
+					}
+				}
+			}
+		}
+	}
+	return count
+}
+
+func recoverableFuncDecl(fn *ast.FuncDecl) bool {
+	if fn == nil || !recoverableIdentifier(fn.Name) {
+		return false
+	}
+	return fn.Recv == nil || (len(fn.Recv.List) > 0 && fn.Recv.List[0] != nil && fn.Recv.List[0].Type != nil)
+}
+
+func recoverableIdentifier(identifier *ast.Ident) bool {
+	return identifier != nil && identifier.Name != "" && identifier.Name != "_"
+}
+
+func markPartialMeta(meta map[string]string) {
+	if meta == nil {
+		return
+	}
+	meta["parse_complete"] = "false"
+	meta["partial"] = "true"
+}
+
+func partialFileNode(path string) graph.Node {
+	meta := map[string]string{
+		"confidence": "extracted",
+		"evidence":   path,
+		"language":   "go",
+	}
+	markPartialMeta(meta)
+	return graph.Node{
+		ID:   graph.FileID(path),
+		Kind: graph.NodeFile,
+		Name: filepath.Base(path),
+		Path: path,
+		Meta: meta,
+	}
 }
 
 type callSite struct {
@@ -563,7 +692,15 @@ func (c *semanticsChecker) check(state *packageState) *packageSemantics {
 
 	parsed := make([]*ast.File, 0, len(state.files))
 	for _, file := range sortedFiles(state.files) {
+		if file.partial {
+			continue
+		}
 		parsed = append(parsed, file.parsed)
+	}
+	if len(parsed) == 0 {
+		checked.err = fmt.Errorf("package %q has no completely parsed files", state.importPath)
+		delete(c.checking, state)
+		return checked
 	}
 	config := types.Config{
 		Importer: semanticsImporter{checker: c},
@@ -614,6 +751,9 @@ func semanticEdges(fset *token.FileSet, packages map[string]*packageState, seman
 			continue
 		}
 		for _, file := range sortedFiles(state.files) {
+			if file.partial {
+				continue
+			}
 			for _, declaration := range file.parsed.Decls {
 				switch declaration := declaration.(type) {
 				case *ast.FuncDecl:
@@ -645,6 +785,9 @@ func semanticTargets(fset *token.FileSet, packages map[string]*packageState, sem
 			continue
 		}
 		for _, file := range sortedFiles(state.files) {
+			if file.partial {
+				continue
+			}
 			for _, declaration := range file.parsed.Decls {
 				switch declaration := declaration.(type) {
 				case *ast.FuncDecl:
@@ -940,6 +1083,9 @@ func typeAndValueNodes(fset *token.FileSet, state *packageState, path string, de
 	for _, spec := range decl.Specs {
 		switch s := spec.(type) {
 		case *ast.TypeSpec:
+			if !recoverableIdentifier(s.Name) {
+				continue
+			}
 			kind := graph.NodeType
 			switch s.Type.(type) {
 			case *ast.StructType:
@@ -966,7 +1112,7 @@ func typeAndValueNodes(fset *token.FileSet, state *packageState, path string, de
 			edges = append(edges, graph.Edge{Kind: graph.EdgeDefines, From: graph.FileID(path), To: node.ID, Meta: extractedMeta(path, startLine)})
 		case *ast.ValueSpec:
 			for _, name := range s.Names {
-				if name.Name == "_" {
+				if !recoverableIdentifier(name) {
 					continue
 				}
 				startLine := fset.Position(name.Pos()).Line

@@ -522,7 +522,102 @@ func Convert(value int64) time.Duration {
 	}
 }
 
+func TestPartialGoFileRecoversDeclarationsWithoutCrossFileSemantics(t *testing.T) {
+	result, _ := analyzeGoSourcesAllowDiagnostics(t, map[string]string{
+		"pkg/complete.go": `package sample
+
+func Complete() { Recovered() }
+`,
+		"pkg/partial.go": `package sample
+
+import "fmt"
+
+type RecoveredType struct{}
+
+func Recovered() {
+	fmt.Println("partial")
+	Complete()
+`,
+	})
+
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Level != "warning" ||
+		!strings.Contains(result.Diagnostics[0].Message, "without cross-file semantics") {
+		t.Fatalf("partial parse diagnostics = %#v", result.Diagnostics)
+	}
+
+	recoveredIDs := map[string]bool{
+		graph.FunctionID("pkg", "Recovered"): true,
+		graph.TypeID("pkg", "RecoveredType"): true,
+	}
+	for id := range recoveredIDs {
+		node, ok := nodeByID(result, id)
+		if !ok {
+			t.Fatalf("missing recovered declaration %q; nodes = %#v", id, result.Nodes)
+		}
+		if node.Meta["partial"] != "true" || node.Meta["parse_complete"] != "false" {
+			t.Fatalf("recovered declaration metadata = %#v", node.Meta)
+		}
+	}
+	complete, ok := nodeByID(result, graph.FunctionID("pkg", "Complete"))
+	if !ok || complete.Meta["partial"] != "" || complete.Meta["parse_complete"] != "" {
+		t.Fatalf("complete declaration was marked partial: %#v", complete)
+	}
+	packageNode, ok := nodeByID(result, graph.PackageID("pkg"))
+	if !ok || packageNode.Meta["partial"] != "true" || packageNode.Meta["parse_complete"] != "false" {
+		t.Fatalf("package with a partial file lacks provenance: %#v", packageNode)
+	}
+
+	partialFileID := graph.FileID("pkg/partial.go")
+	partialFile, ok := nodeByID(result, partialFileID)
+	if !ok || partialFile.Meta["partial"] != "true" || partialFile.Meta["parse_complete"] != "false" {
+		t.Fatalf("partial file lacks parse provenance: %#v", partialFile)
+	}
+	containsPartialFile := false
+	for _, edge := range result.Edges {
+		if edge.Kind == graph.EdgeContains && edge.To == partialFileID {
+			containsPartialFile = edge.Meta["partial"] == "true" && edge.Meta["parse_complete"] == "false"
+		}
+		if edge.From == graph.FunctionID("pkg", "Recovered") && edge.Kind != graph.EdgeDefines {
+			t.Fatalf("partial function emitted a semantic edge: %#v", edge)
+		}
+		if recoveredIDs[edge.To] && edge.Kind != graph.EdgeDefines {
+			t.Fatalf("complete code resolved across a partial declaration: %#v", edge)
+		}
+	}
+	if !containsPartialFile {
+		t.Fatalf("missing partial package-to-file relationship: %#v", result.Edges)
+	}
+	if _, ok := nodeByID(result, graph.ImportID("fmt")); ok {
+		t.Fatalf("partial import escaped declaration-only recovery: %#v", result.Nodes)
+	}
+}
+
+func TestPartialGoFileWithoutPackageClauseRemainsRejected(t *testing.T) {
+	result, _ := analyzeGoSourcesAllowDiagnostics(t, map[string]string{
+		"broken.go": "func Broken() {\n",
+	})
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Level != "error" {
+		t.Fatalf("unrecoverable parse diagnostics = %#v", result.Diagnostics)
+	}
+	file, ok := nodeByID(result, graph.FileID("broken.go"))
+	if !ok || file.Kind != graph.NodeFile || file.Meta["partial"] != "true" || file.Meta["parse_complete"] != "false" {
+		t.Fatalf("unrecoverable file lacks safe structural recovery: %#v", result.Nodes)
+	}
+	if len(result.Nodes) != 1 || len(result.Edges) != 0 {
+		t.Fatalf("unrecoverable file emitted non-structural facts: nodes=%#v edges=%#v", result.Nodes, result.Edges)
+	}
+}
+
 func analyzeGoSources(t *testing.T, sources map[string]string) (*lang.AnalysisResult, []scan.File) {
+	t.Helper()
+	result, files := analyzeGoSourcesAllowDiagnostics(t, sources)
+	if len(result.Diagnostics) > 0 {
+		t.Fatalf("Analyze() diagnostics = %#v", result.Diagnostics)
+	}
+	return result, files
+}
+
+func analyzeGoSourcesAllowDiagnostics(t *testing.T, sources map[string]string) (*lang.AnalysisResult, []scan.File) {
 	t.Helper()
 	root := t.TempDir()
 	paths := make([]string, 0, len(sources))
@@ -541,7 +636,11 @@ func analyzeGoSources(t *testing.T, sources map[string]string) (*lang.AnalysisRe
 		}
 		files = append(files, scan.File{Path: path, AbsPath: absolute, Language: "go"})
 	}
-	return analyzeGoFiles(t, files), files
+	result, err := New(true).Analyze(context.Background(), root, files)
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	return result, files
 }
 
 func analyzeGoFiles(t *testing.T, files []scan.File) *lang.AnalysisResult {
